@@ -1,0 +1,381 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  /* One glass material family. Live glass (SVG backdrop filter) and the CSS
+     frost share these, so a frosted card and a refracting hero read as the
+     same substance at different thicknesses. */
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --glass-shadow: 0 22px 44px -22px rgba(0, 0, 0, 0.8), 0 2px 8px -2px rgba(0, 0, 0, 0.4);
+  /* Mostly opaque on purpose: text on a card has to stay readable whatever the
+     aurora behind it is doing. The rim and blur still read as glass. */
+  --glass-frost-bg: linear-gradient(160deg, rgba(22, 18, 38, 0.82), rgba(11, 10, 18, 0.88));
+  --glass-rim: linear-gradient(160deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.05) 28%, rgba(255, 255, 255, 0.03) 72%, rgba(168, 85, 247, 0.24));
+  --glass-ease: cubic-bezier(0.34, 1.36, 0.42, 1);
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+    background-color: #0A0A0F;
+    color: white;
+    font-family: 'Chakra Petch', Inter, system-ui, -apple-system, sans-serif;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background-color: rgba(168, 85, 247, 0.32);
+    color: white;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  /* Krypt scrollbar — thin, dark, gradient-on-hover. */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, #6366F1 0%, #A855F7 50%, #EC4899 100%);
+  }
+}
+
+@layer utilities {
+  .text-krypt-gradient {
+    background-image: linear-gradient(90deg, #6366F1 0%, #A855F7 50%, #EC4899 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .text-krypt-shimmer {
+    background-image: linear-gradient(90deg, #FFFFFF 0%, #DDD6FE 50%, #FFFFFF 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .glow-purple {
+    box-shadow: 0 0 24px rgba(168, 85, 247, 0.35);
+  }
+  .checker {
+    background-image:
+      linear-gradient(45deg, rgba(255,255,255,0.04) 25%, transparent 25%),
+      linear-gradient(-45deg, rgba(255,255,255,0.04) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.04) 75%),
+      linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.04) 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+  }
+  /* Heading shimmer: white to lilac, clipped to the glyphs. */
+  .glass-title {
+    background-image: linear-gradient(180deg, #FFFFFF 45%, #E9D5FF 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
+
+@layer components {
+  .input {
+    @apply w-full rounded-xl border border-white/10 px-3 py-2 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-krypt-purple/60;
+    /* Recessed glass: a dark well with an inner shadow, lit on focus. */
+    background-image: linear-gradient(180deg, rgba(4, 3, 10, 0.55), rgba(10, 9, 18, 0.45));
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.45), inset 0 -1px 0 rgba(255, 255, 255, 0.03);
+  }
+  .input:hover {
+    border-color: rgba(255, 255, 255, 0.16);
+  }
+  .input:focus {
+    border-color: rgba(168, 85, 247, 0.6);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.45), 0 0 0 3px rgba(168, 85, 247, 0.14), 0 0 18px -4px rgba(168, 85, 247, 0.45);
+  }
+  .label {
+    @apply mb-1 block text-[11px] font-semibold uppercase tracking-[0.14em] text-krypt-muted;
+  }
+  kbd {
+    @apply rounded border border-white/15 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-white/70;
+  }
+
+  /* The shared card (ui.tsx Card): CSS frost glass. A backdrop blur +
+     saturate, a hairline gradient rim (padding-box / border-box backgrounds,
+     so no extra element), an inner top highlight and a soft depth shadow.
+     Longhands, not the `background` shorthand, so a caller's bg-* colour
+     utility is not wiped. In this layer so border-* / shadow-* utilities a
+     page passes still win. */
+  .glass-card {
+    border: 1px solid transparent;
+    background-image: var(--glass-frost-bg), var(--glass-rim);
+    background-origin: padding-box, border-box;
+    background-clip: padding-box, border-box;
+    -webkit-backdrop-filter: blur(16px) saturate(1.45);
+    backdrop-filter: blur(16px) saturate(1.45);
+    box-shadow: var(--glass-highlight), var(--glass-shadow);
+  }
+  .glass-card-hover {
+    transition: border-color 0.2s, box-shadow 0.25s, transform 0.25s var(--glass-ease);
+  }
+  .glass-card-hover:hover {
+    border-color: rgba(255, 255, 255, 0.16);
+    box-shadow: var(--glass-highlight), var(--glass-shadow), 0 0 0 1px rgba(168, 85, 247, 0.16), 0 0 26px -6px rgba(168, 85, 247, 0.4);
+  }
+
+  /* A lighter pane for tiles that sit straight on the backdrop (platform
+     tiles): more of the aurora glows through, same rim. */
+  .glass-tile {
+    border: 1px solid transparent;
+    background-image:
+      linear-gradient(160deg, rgba(30, 24, 52, 0.62), rgba(12, 11, 20, 0.74)),
+      var(--glass-rim);
+    background-origin: padding-box, border-box;
+    background-clip: padding-box, border-box;
+    -webkit-backdrop-filter: blur(14px) saturate(1.5);
+    backdrop-filter: blur(14px) saturate(1.5);
+    box-shadow: var(--glass-highlight), 0 16px 32px -20px rgba(0, 0, 0, 0.85);
+  }
+  .glass-tile:hover {
+    border-color: rgba(255, 255, 255, 0.16);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 18px 36px -18px rgba(0, 0, 0, 0.9), 0 0 24px -8px rgba(168, 85, 247, 0.35);
+  }
+
+  /* Small frosted capsules (sidebar footer controls). */
+  .glass-chip {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.02));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    transition: border-color 0.2s, background-color 0.2s, color 0.2s, box-shadow 0.2s;
+  }
+  .glass-chip:hover {
+    border-color: rgba(255, 255, 255, 0.18);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 6px 16px -10px rgba(0, 0, 0, 0.8);
+  }
+
+  /* Buttons: frosted capsules (PrimaryButton / GhostButton). The hero
+     button on Home additionally gets live glass via GlassButton. */
+  .krypt-btn-primary {
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background-image:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0) 55%),
+      linear-gradient(90deg, #6366F1 0%, #A855F7 50%, #EC4899 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.36), inset 0 -1px 0 rgba(0, 0, 0, 0.18), 0 10px 26px -10px rgba(168, 85, 247, 0.75);
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+  }
+  .krypt-btn-primary:hover:not(:disabled) {
+    filter: brightness(1.08) saturate(1.05);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), inset 0 -1px 0 rgba(0, 0, 0, 0.18), 0 0 40px -8px rgba(168, 85, 247, 0.85);
+  }
+  .krypt-btn-ghost {
+    border-color: rgba(255, 255, 255, 0.1);
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.085), rgba(255, 255, 255, 0.025));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 8px 18px -10px rgba(0, 0, 0, 0.8);
+  }
+  .krypt-btn-ghost:hover:not(:disabled) {
+    border-color: rgba(255, 255, 255, 0.2);
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.04));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 10px 22px -10px rgba(0, 0, 0, 0.85);
+  }
+  .krypt-btn-danger {
+    border-color: rgba(244, 63, 94, 0.42);
+    background-image: linear-gradient(180deg, rgba(244, 63, 94, 0.2), rgba(244, 63, 94, 0.07));
+    box-shadow: inset 0 1px 0 rgba(255, 180, 190, 0.14), 0 8px 22px -12px rgba(244, 63, 94, 0.6);
+  }
+  .krypt-btn-danger:hover:not(:disabled) {
+    border-color: rgba(244, 63, 94, 0.7);
+    background-image: linear-gradient(180deg, rgba(244, 63, 94, 0.28), rgba(244, 63, 94, 0.1));
+    box-shadow: inset 0 1px 0 rgba(255, 180, 190, 0.2), 0 0 28px -8px rgba(244, 63, 94, 0.6);
+  }
+}
+
+/* ── The living backdrop (glass/GlassBackdrop.tsx) ──
+   Fixed, behind everything, transform-only animation. The blobs are radial
+   gradients that already fall off to transparent, so they need no
+   `filter: blur()` (a CSS blur on a moving 900px layer re-runs every frame). */
+.glass-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  contain: strict;
+  background:
+    radial-gradient(1100px 760px at 8% -12%, rgba(88, 54, 190, 0.22), transparent 62%),
+    radial-gradient(900px 700px at 104% 112%, rgba(190, 40, 130, 0.08), transparent 60%),
+    #050409;
+}
+.glass-aurora {
+  position: absolute;
+  border-radius: 50%;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+.glass-aurora-a {
+  width: 80vmax;
+  height: 80vmax;
+  left: -26vmax;
+  top: -38vmax;
+  background: radial-gradient(closest-side, rgba(99, 102, 241, 0.32), rgba(99, 102, 241, 0.11) 50%, rgba(99, 102, 241, 0) 100%);
+  animation: glass-drift-a 38s ease-in-out infinite alternate;
+}
+.glass-aurora-b {
+  width: 66vmax;
+  height: 66vmax;
+  right: -22vmax;
+  bottom: -32vmax;
+  background: radial-gradient(closest-side, rgba(236, 72, 153, 0.15), rgba(236, 72, 153, 0.05) 52%, rgba(236, 72, 153, 0) 100%);
+  animation: glass-drift-b 47s ease-in-out infinite alternate;
+}
+.glass-aurora-c {
+  width: 42vmax;
+  height: 42vmax;
+  left: 44%;
+  top: 34%;
+  background: radial-gradient(closest-side, rgba(168, 85, 247, 0.13), rgba(168, 85, 247, 0.04) 52%, rgba(168, 85, 247, 0) 100%);
+  animation: glass-drift-c 55s ease-in-out infinite alternate;
+}
+.glass-aurora-d {
+  width: 58vmax;
+  height: 58vmax;
+  left: 34%;
+  top: -34vmax;
+  background: radial-gradient(closest-side, rgba(139, 72, 240, 0.24), rgba(139, 72, 240, 0.07) 52%, rgba(139, 72, 240, 0) 100%);
+  animation: glass-drift-d 63s ease-in-out infinite alternate;
+}
+@keyframes glass-drift-a {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(16vw, 12vh, 0) scale(1.12); }
+  100% { transform: translate3d(6vw, 30vh, 0) scale(0.94); }
+}
+@keyframes glass-drift-b {
+  0% { transform: translate3d(0, 0, 0) scale(1.05); }
+  50% { transform: translate3d(-18vw, -10vh, 0) scale(0.92); }
+  100% { transform: translate3d(-6vw, -26vh, 0) scale(1.1); }
+}
+@keyframes glass-drift-c {
+  0% { transform: translate3d(0, 0, 0) scale(0.9); }
+  50% { transform: translate3d(-22vw, 8vh, 0) scale(1.2); }
+  100% { transform: translate3d(14vw, -14vh, 0) scale(1); }
+}
+@keyframes glass-drift-d {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(-14vw, 16vh, 0) scale(1.1); }
+  100% { transform: translate3d(18vw, 6vh, 0) scale(0.95); }
+}
+/* The faint grid is what makes refraction VISIBLE: a smooth gradient bent by
+   a lens looks unchanged, a straight line bent by one doesn't. */
+.glass-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 56px 56px;
+  background-position: -1px -1px;
+  /* Softened so the lines read as texture, not rules. Static layer: the blur
+     rasterises once. */
+  filter: blur(1.4px);
+  -webkit-mask-image: radial-gradient(ellipse 80% 70% at 55% 30%, #000 25%, transparent 85%);
+  mask-image: radial-gradient(ellipse 80% 70% at 55% 30%, #000 25%, transparent 85%);
+}
+.glass-grain {
+  position: absolute;
+  inset: 0;
+  opacity: 0.07;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+.glass-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 120% 95% at 50% 35%, transparent 55%, rgba(0, 0, 0, 0.72) 100%);
+}
+/* Studio (reel preview playing) and Frost quality: hold the aurora still, so
+   frosted surfaces over it don't re-blur every frame. Paused, not removed: it
+   resumes where it was. */
+.glass-backdrop-still .glass-aurora {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .glass-aurora {
+    animation: none;
+  }
+}
+
+/* ── Glass surfaces ── */
+
+/* Live glass (the library's material) brings its own rim + top highlight;
+   this adds only the soft depth shadow so it sits ON the backdrop. */
+.glass-live {
+  box-shadow: var(--glass-shadow);
+}
+
+/* The frost fallback for GlassPanel: same family, no SVG filter. A tinted
+   panel replaces the background inline, so its hairline comes from the
+   inset ring in the shadow rather than the border-box gradient. */
+.glass-frost {
+  border: 1px solid transparent;
+  background:
+    var(--glass-frost-bg) padding-box,
+    var(--glass-rim) border-box;
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  backdrop-filter: blur(16px) saturate(1.5);
+  box-shadow: var(--glass-highlight), inset 0 0 0 1px rgba(255, 255, 255, 0.06), var(--glass-shadow);
+}
+
+/* Recessed track under a segmented control's gliding lens. */
+.glass-track {
+  background: linear-gradient(180deg, rgba(4, 3, 10, 0.5), rgba(14, 12, 24, 0.42));
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+/* The selection lens floats just above the labels: a tight contact shadow and
+   a purple bloom, not the deep card shadow. */
+.glass-live.glass-lens {
+  box-shadow: 0 4px 14px -4px rgba(10, 4, 30, 0.7), 0 0 18px -6px rgba(168, 85, 247, 0.6);
+}
+/* Frost fallback for a selection lens: it sits over its label, so the usual
+   frost blur would smear the text it marks. */
+.glass-frost.glass-lens {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 0 18px -6px rgba(168, 85, 247, 0.6);
+}
+
+.glass-live.glass-btn {
+  box-shadow: 0 10px 24px -12px rgba(0, 0, 0, 0.85);
+  transition: box-shadow 0.2s, filter 0.2s;
+}
+.glass-btn:hover {
+  filter: brightness(1.12);
+}
+.glass-live.glass-btn-primary {
+  box-shadow: 0 10px 28px -10px rgba(168, 85, 247, 0.75);
+}
+.glass-live.glass-btn-primary:hover {
+  box-shadow: 0 0 40px -6px rgba(168, 85, 247, 0.85);
+}
+.glass-btn-primary > button {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0) 55%);
+}
+.glass-live.glass-btn-danger {
+  box-shadow: inset 0 0 0 1px rgba(244, 63, 94, 0.45), 0 10px 26px -12px rgba(244, 63, 94, 0.6);
+}
+.glass-live.glass-btn-active {
+  box-shadow: inset 0 0 0 1px rgba(168, 85, 247, 0.55), 0 0 22px -6px rgba(168, 85, 247, 0.7);
+}
+.glass-frost.glass-btn {
+  border-color: transparent;
+}
+
+/* GlassSwitch hides its real <input> visually; keyboard focus still needs to
+   show up somewhere, so ring the whole control. */
+.mac-glass-control:has(input:focus-visible) {
+  outline: 2px solid rgba(168, 85, 247, 0.7);
+  outline-offset: 3px;
+}

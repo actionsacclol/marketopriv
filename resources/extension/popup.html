@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { margin: 0; width: 300px; padding: 14px; background: #0a0a0f; color: #e8e8f0; font: 13px/1.45 system-ui, 'Segoe UI', sans-serif; }
+      h1 { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
+      .row { display: flex; align-items: flex-start; gap: 8px; margin: 6px 0; }
+      .dot { flex: none; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: #6b7280; }
+      .dot.ok { background: #22c55e; }
+      .dot.warn { background: #f59e0b; }
+      .muted { color: #9a9ab0; font-size: 12px; }
+      button { width: 100%; margin-top: 8px; padding: 8px 10px; border: 1px solid #2c2c3c; border-radius: 8px; background: #16161f; color: #e8e8f0; font: inherit; cursor: pointer; }
+      button:hover { border-color: #7c5cff; }
+      button.primary { border-color: #7c5cff; background: #7c5cff22; }
+      #note { margin-top: 8px; min-height: 16px; }
+    </style>
+  </head>
+  <body>
+    <h1>Krypt Marketo</h1>
+    <div class="row"><span id="hubDot" class="dot"></span><div id="hub">Checking…</div></div>
+    <div class="row"><span id="igDot" class="dot"></span><div id="ig"></div></div>
+    <div class="row"><span id="xDot" class="dot"></span><div id="x"></div></div>
+    <div class="row"><span id="ttDot" class="dot"></span><div id="tt"></div></div>
+    <div class="row"><span id="fbDot" class="dot"></span><div id="fb"></div></div>
+    <div class="row"><span id="thDot" class="dot"></span><div id="th"></div></div>
+    <div class="row"><span id="pinDot" class="dot"></span><div id="pin"></div></div>
+    <div class="row"><span id="ytDot" class="dot"></span><div id="yt"></div></div>
+    <button id="prefer" class="primary">Use this Chrome profile in Marketo</button>
+    <button id="pause">Pause AI control for 5 minutes</button>
+    <div id="note" class="muted"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

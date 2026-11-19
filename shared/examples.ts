@@ -1,0 +1,305 @@
+import type { Fields } from './types';
+import { formatById } from './formats';
+
+// The Examples page (Create > Examples): one finished video per style, shipped
+// with the app in resources/examples/<id>.mp4 (+ <id>.jpg poster), so a new
+// user sees what each style looks like without rendering anything. "Make one
+// like this" starts a reel from the same preset and fields.
+//
+// The videos are made from these definitions with scripts/make-examples.mjs.
+// Change a definition → run the script again so the video matches.
+
+export interface Example {
+  id: string;
+  name: string;
+  /** What it is good for, one line. */
+  about: string;
+  /** Short tags shown on the card. */
+  tags: string[];
+  preset: string;
+  /** Fields to set over the preset's defaults ({} = the preset's own example content). */
+  fields: Fields;
+  /** A screen recording in resources/examples used only to make the example video ("Make one like this" records the user's own). */
+  video?: string;
+}
+
+const STORY_COMMON: Fields = { voiceover: true, sfx: true, loop: false, cta_seconds: 2.2, logo: '', card_by: 'by Krypt' };
+
+export const EXAMPLES: Example[] = [
+  {
+    id: 'story-flat',
+    name: 'Story · Flat',
+    about: 'A real story in beats with animated charts and numbers. Clean, news-desk style. Our default.',
+    tags: ['story', 'data', 'crypto'],
+    preset: 'story',
+    fields: { art: 'flat', bed: 'none' },
+  },
+  {
+    id: 'story-cartoon',
+    name: 'Story · Cartoon',
+    about: 'A toon mascot acts out each line on bold colour, comic lettering. Good for tips and quick explainers.',
+    tags: ['story', 'mascot', 'tips'],
+    preset: 'story',
+    fields: {
+      ...STORY_COMMON,
+      art: 'cartoon',
+      bed: 'pulse',
+      kicker: '',
+      disclaimer: '',
+      cta: 'krypt.cc/tools',
+      beats: [
+        '3.0 | Your PC takes *forever* to start? | shock | SLOW BOOT |',
+        '3.4 | It is usually the apps that launch *with* Windows. | think | |',
+        '3.8 | Open Task Manager, then the *Startup* tab. | steps | Ctrl + Shift + Esc;Startup apps tab;Disable what you never use |',
+        '3.2 | Turn off what you don\'t use. *Restart.* | cheer | |',
+        '3.0 | Follow for one PC tip a day. | wave | |',
+      ].join('\n'),
+    },
+  },
+  {
+    id: 'story-ps2',
+    name: 'Story · PS2',
+    about: 'An early-2000s console look: low-poly world, fog, dithering, the line in a game dialogue box.',
+    tags: ['story', 'mascot', 'retro'],
+    preset: 'story',
+    fields: {
+      ...STORY_COMMON,
+      art: 'ps2',
+      bed: 'ambient',
+      kicker: '',
+      disclaimer: 'Not financial advice.',
+      cta: 'krypt.cc',
+      beats: [
+        '3.2 | *Side quest:* check a coin before you buy it. | point | NEW QUEST |',
+        '3.4 | First: who holds it? Look at the *top wallets*. | think | |',
+        '3.4 | Second: can the dev still *mint* more? | shrug | |',
+        '3.4 | Third: is the liquidity *locked*? | talk | |',
+        '3.0 | Quest complete. Not financial advice. | cheer | QUEST COMPLETE |',
+      ].join('\n'),
+    },
+  },
+  {
+    id: 'story-vote',
+    name: 'Story · Vote',
+    about: 'Part 1 of a comment vote story: the mascot hits a choice, viewers vote A or B in the comments, the winner decides part 2.',
+    tags: ['story', 'mascot', 'series'],
+    preset: 'story',
+    fields: { ...STORY_COMMON, ...(formatById('vote-story')?.fields ?? {}), cta_seconds: 0 },
+  },
+  {
+    id: 'story-3d',
+    name: 'Story · 3D',
+    about: 'A glossy toy-like 3D mascot in a soft studio. Friendly, brand-mascot feel.',
+    tags: ['story', 'mascot', '3d'],
+    preset: 'story',
+    fields: {
+      ...STORY_COMMON,
+      art: '3d',
+      bed: 'lofi',
+      kicker: '',
+      disclaimer: '',
+      cta: 'krypt.cc/tools',
+      beats: [
+        '3.0 | You download a *setup.exe*... | talk | |',
+        '3.4 | ...and it installs *three* other programs. | facepalm | |',
+        '3.6 | Next time, pick *Custom install* and read every box. | present | CUSTOM INSTALL | uncheck the extras',
+        '3.0 | Your PC will thank you. | cheer | |',
+      ].join('\n'),
+    },
+  },
+  {
+    id: 'story-wyr',
+    name: 'Would you rather',
+    about: 'Rapid A-or-B choices with a countdown on each. Built for comments.',
+    tags: ['story', 'poll', 'comments'],
+    preset: 'story',
+    fields: {
+      ...STORY_COMMON,
+      art: 'flat',
+      theme: 'dark',
+      bed: 'pulse',
+      kicker: 'WOULD YOU RATHER',
+      disclaimer: '',
+      cta: 'krypt.cc',
+      beats: [
+        '3.4 | *1 bitcoin* bought in 2015, or *$10,000* cash today? | poll | 1 BTC;$10K | comment 1 or 2 | Would you rather have one bitcoin bought in twenty fifteen, or ten thousand dollars cash today? | pause=0.3',
+        '3.4 | A PC that *never* lags, or Wi-Fi that *never* drops? | poll | NO LAG;WI-FI | | Would you rather have a PC that never lags, or wifi that never drops? | pause=0.3',
+        '3.4 | Spot every *rug* early, or every *pump* early? | poll | RUGS;PUMPS | | Would you rather spot every rug early, or every pump early? | pause=0.3',
+        '2.6 | Comment your three picks. | follow | Follow | a new one every week | Comment your three picks.',
+      ].join('\n'),
+    },
+  },
+  {
+    id: 'story-case',
+    name: 'Scam autopsy',
+    about: 'One real rug taken apart: how it worked, the collapse, the red flags.',
+    tags: ['story', 'true crime', 'crypto'],
+    preset: 'story',
+    fields: {
+      ...STORY_COMMON,
+      art: 'flat',
+      theme: 'dark',
+      bed: 'ambient',
+      kicker: 'NOV 1, 2021 · BBC · GIZMODO',
+      disclaimer: 'Not financial advice.',
+      cta: 'krypt.cc',
+      beats: [
+        '3.4 | This coin hit *$2,861*. Its buyers could *not* sell. | number | $2,861 | SQUID token, Nov 1, 2021 | This coin hit two thousand eight hundred sixty one dollars. Its buyers could not sell.',
+        '3.6 | The contract let anyone *buy*, but blocked most holders from *selling*. | steps | Buy: allowed;!Sell: blocked;Price: only up | | The contract let anyone buy, but blocked most holders from selling.',
+        '3.2 | Then the developers *cashed out*. | stamp | −99.99% | within minutes | Then the developers cashed out. The price fell to almost zero in minutes. | dark',
+        '3.0 | About *$3.3 million* reportedly went with them. | number | $3.3M | reported cash-out | About three point three million dollars reportedly went with them.',
+        '3.6 | The red flags were *public*. | steps | !A test sell fails;!Comments switched off;!A famous name it does not own | | The red flags were public. A test sell fails. Comments are switched off. And it uses a famous name it does not own.',
+        '2.6 | One rug, taken apart, every week. | follow | Follow | not financial advice | Follow for one rug, taken apart, every week.',
+      ].join('\n'),
+    },
+  },
+  {
+    id: 'story-quiz',
+    name: 'Guess what happened',
+    about: 'A real chart cut at the big moment, a guess, then the reveal.',
+    tags: ['story', 'chart', 'poll'],
+    preset: 'story',
+    fields: {
+      ...STORY_COMMON,
+      art: 'flat',
+      theme: 'light',
+      bed: 'pulse',
+      kicker: 'BTC · PRICES ROUNDED',
+      disclaimer: 'Not financial advice.',
+      cta: 'krypt.cc',
+      beats: [
+        '3.6 | Bitcoin, *December 2017*. It just hit almost *$20,000*. | chart | Jan 17:1000;Apr 17:1200;Jul 17:2500;Oct 17:6000;Dec 17:19500 | $~ | Bitcoin, December twenty seventeen. It just hit almost twenty thousand dollars.',
+        '3.4 | Where was it *one year* later? | poll | HIGHER;LOWER | guess before the reveal | Where was it one year later? Higher, or lower? Guess before the reveal. | pause=0.3',
+        '3.6 | One year later: about *$3,500*. | chart | Dec 17:19500;Mar 18:7000;Jun 18:6300;Sep 18:6600;Dec 18:3500 | $~ | One year later, about thirty five hundred dollars. | dark wipe',
+        '2.8 | Down *82%* from the top. | stamp | −82% | Dec 2017 → Dec 2018 | Down eighty two percent from the top. | dark',
+        '2.6 | Did you guess right? | follow | Follow | a new one every week | Did you guess right? Follow for the next one.',
+      ].join('\n'),
+    },
+  },
+  {
+    id: 'story-myth',
+    name: 'Myth busted',
+    about: 'A common belief, the evidence, then the verdict stamped on screen.',
+    tags: ['story', 'myth', 'tips'],
+    preset: 'story',
+    fields: {
+      ...STORY_COMMON,
+      art: 'flat',
+      theme: 'dark',
+      bed: 'lofi',
+      kicker: 'WINDOWS 10 / 11',
+      disclaimer: '',
+      cta: 'krypt.cc/tools',
+      beats: [
+        '3.0 | Myth: a *RAM cleaner* makes your PC faster. | title | RAM CLEANERS | do they speed up your PC? | Myth. A RAM cleaner makes your PC faster.',
+        '3.6 | Windows *fills* spare RAM on purpose, with things you might open next. | steps | Apps you use a lot;Recent files;Startup data | | Windows fills spare RAM on purpose, with things you might open next.',
+        '3.4 | A RAM cleaner *empties* it. So everything loads from disk *again*. | steps | Cache emptied;!Apps reload from disk;!PC feels slower | | A RAM cleaner empties it. So everything loads from disk again.',
+        '2.6 | Busted. | stamp | BUSTED | unused RAM is wasted RAM | Busted. Unused RAM is wasted RAM.',
+        '3.6 | Want it faster? Turn off apps that *start with Windows*. | steps | Ctrl + Shift + Esc;Startup apps tab;Disable what you never use | | Want it faster? Turn off apps that start with Windows.',
+        '2.4 | One myth a week. | follow | Follow | | Follow for one myth a week.',
+      ].join('\n'),
+    },
+  },
+  {
+    id: 'story-top',
+    name: 'Voiced top 3',
+    about: 'A countdown, one item per beat, every line voiced. The talking version of a list post.',
+    tags: ['story', 'list', 'tips'],
+    preset: 'story',
+    fields: {
+      ...STORY_COMMON,
+      art: 'flat',
+      theme: 'light',
+      bed: 'lofi',
+      kicker: 'WINDOWS 10 / 11',
+      disclaimer: '',
+      cta: 'krypt.cc/tools',
+      beats: [
+        '2.8 | 3 Windows shortcuts *nobody* uses. | title | 3 SHORTCUTS | you will use every day | Three Windows shortcuts nobody uses.',
+        '3.6 | *Win + V*: your clipboard history, not just the last thing you copied. | title | #3 | Win + V | Number three. Windows plus V. Your clipboard history, not just the last thing you copied.',
+        '3.4 | *Win + Shift + S*: screenshot any part of the screen. | title | #2 | Win + Shift + S | Number two. Windows, shift, S. Screenshot any part of the screen.',
+        '3.4 | *Ctrl + Shift + Esc*: Task Manager, straight away. | title | #1 | Ctrl + Shift + Esc | Number one. Control, shift, escape. Task Manager, straight away.',
+        '2.4 | One PC tip a day. | follow | Follow | | Follow for one PC tip a day.',
+      ].join('\n'),
+    },
+  },
+  {
+    id: 'story-chat',
+    name: 'Text story',
+    about: 'A phone chat types itself out. Here: a fake support DM that wants your seed phrase.',
+    tags: ['story', 'chat', 'scams'],
+    preset: 'story',
+    fields: {
+      ...STORY_COMMON,
+      art: 'flat',
+      theme: 'dark',
+      bed: 'ambient',
+      kicker: 'STORY',
+      disclaimer: '',
+      cta: 'krypt.cc',
+      beats: [
+        '3.0 | I got this DM yesterday. | chat | Hi! Your wallet was flagged for suspicious activity. | Wallet Support | I got this DM yesterday. Hi! Your wallet was flagged for suspicious activity.',
+        '3.4 |  | chat | >what? which wallet;To keep it safe, verify it with your 12-word recovery phrase. | Wallet Support | What? Which wallet? To keep it safe, verify it with your twelve word recovery phrase.',
+        '3.0 |  | chat | >no.;Then your funds will be frozen in 24 hours. | Wallet Support | No. Then your funds will be frozen in twenty four hours.',
+        '2.8 | Real support *never* asks for your seed phrase. | stamp | SCAM | block and report | Real support never asks for your seed phrase.',
+        '3.4 | How to spot it: | steps | !Asks for your seed phrase;!A deadline to rush you;!They messaged you first | | How to spot it. It asks for your seed phrase. A deadline to rush you. And they messaged you first.',
+        '2.4 | Follow before they DM you. | follow | Follow | | Follow before they DM you.',
+      ].join('\n'),
+    },
+  },
+  {
+    id: 'story-tier',
+    name: 'Tier list',
+    about: 'Ranked S to F on a tier board, one item at a time, with a reason each.',
+    tags: ['story', 'ranking', 'comments'],
+    preset: 'story',
+    fields: {
+      ...STORY_COMMON,
+      art: 'flat',
+      theme: 'dark',
+      bed: 'pulse',
+      kicker: 'TIER LIST',
+      disclaimer: '',
+      cta: 'krypt.cc',
+      beats: [
+        '3.0 | Ranking every way to store your *seed phrase*. | tier | S:Metal plate | | Ranking every way to store your seed phrase. A metal plate survives fire and flood. S tier.',
+        '3.0 | *Paper in a safe*: good, until water gets in. | tier | A:Paper in a safe | | Paper in a safe. Good, until water gets in.',
+        '3.0 | A *password manager*: one breach from everything. | tier | C:Password manager | | A password manager. One breach away from everything.',
+        '3.0 | Your *notes app*: synced to the cloud. | tier | D:Notes app | | Your notes app. Synced to the cloud.',
+        '3.0 | A *screenshot*: in your camera roll, forever. | tier | F:Screenshot | | A screenshot. In your camera roll, and every backup, forever. F tier.',
+        '2.6 | Where would you put them? | follow | Follow | comment your ranking | Where would you put them? Comment your ranking.',
+      ].join('\n'),
+    },
+  },
+  {
+    id: 'story-screen',
+    name: 'Screen tutorial',
+    about: 'A real screen recording of the app, zooming in on each step, with a voice and callouts.',
+    tags: ['story', 'screen', 'tools'],
+    preset: 'story',
+    video: 'rec-tweaker.mp4',
+    fields: {
+      ...STORY_COMMON,
+      art: 'flat',
+      theme: 'dark',
+      bed: 'lofi',
+      kicker: 'KRYPT TWEAKER · WINDOWS',
+      disclaimer: '',
+      cta: 'krypt.cc/tools/tweaker',
+      beats: [
+        '3.2 | Your whole PC on *one screen*. | screen | 0.5 | Krypt Tweaker | Your whole PC on one screen.',
+        '3.4 | CPU, memory and disk, *live*. | screen | 2 @0.42,0.28 x2.2 | live usage | CPU, memory and disk, live.',
+        '3.6 | Presets for *FPS*, *latency* and a gaming power plan. | screen | 5 @0.6,0.55 x2 | quick actions | Presets for F P S, latency, and a gaming power plan.',
+        '3.4 | It backs up your settings *first*, and every tweak can be undone. | screen | 8 @0.5,0.45 x1.3 | undo any time | It backs up your settings first, and every tweak can be undone.',
+        '2.4 | Free, for Windows. | follow | Follow | krypt.cc/tools/tweaker | It is free, for Windows. The link is on screen.',
+      ].join('\n'),
+    },
+  },
+  { id: 'list', name: 'List', about: 'A numbered countdown, one item at a time. Built for "3 apps you need" style posts.', tags: ['list', 'tools'], preset: 'list', fields: {} },
+  { id: 'versus', name: 'Versus', about: 'Two things side by side with a winner. Good for comparisons.', tags: ['compare'], preset: 'versus', fields: {} },
+  { id: 'stats', name: 'Stats', about: 'Big numbers counting up with labels: one fact, told by the numbers.', tags: ['data'], preset: 'stats', fields: {} },
+  { id: 'terminal', name: 'Terminal', about: 'A hacker-style terminal typing out a story or a tool running.', tags: ['tech', 'tools'], preset: 'terminal', fields: {} },
+  { id: 'post', name: 'Post card', about: 'A social post shown as a card, read out as it builds. For quotes and takes.', tags: ['quote'], preset: 'post', fields: {} },
+];
+
+export const exampleById = (id: string): Example | undefined => EXAMPLES.find((e) => e.id === id);
