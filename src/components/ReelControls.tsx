@@ -106,7 +106,7 @@ export function QueueCard() {
           <Plus className="h-4 w-4" /> Add
         </PrimaryButton>
       </div>
-      <p className="text-xs leading-relaxed text-krypt-muted">One per run, top first: when a run has used the instructions above, the first of these moves up. You can also tell your AI "queue three reels about …".</p>
+      <p className="text-xs leading-relaxed text-krypt-muted">One per run, top first: when a run has used the instructions above, the first of these moves up. You can also tell your AI "queue three reels about …". To clip a YouTube video, use "Clip a YouTube video" above.</p>
     </Card>
   );
 }

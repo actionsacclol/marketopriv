@@ -6,3 +6,6 @@ import './versus';
 import './terminal';
 import './clip';
 import './story';
+import './narrated';
+import './meme';
+import './stickman';

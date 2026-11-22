@@ -178,7 +178,7 @@ export function ExtensionSetup({ many, dir }: { many?: boolean; dir?: string }) 
         {check.connected && (
           <Line state={check.outdated ? 'bad' : 'ok'}>
             {check.outdated
-              ? `Chrome is running an older copy of the extension (${running.join(', ')}; this Marketo has ${want}). Go to chrome://extensions and press the round reload arrow on Krypt Marketo, or restart Chrome.`
+              ? `Chrome is running an older copy of the extension (${running.join(', ')}; this Marketo has ${want}). Go to chrome://extensions and press the round reload arrow on Krypt Marketo, or close Chrome fully and open it again. This is needed once: from 1.0 on, the extension reloads itself when Marketo updates.`
               : `Extension is up to date${want ? ` (${want})` : ''}`}
           </Line>
         )}

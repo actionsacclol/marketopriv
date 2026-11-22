@@ -104,14 +104,18 @@ export interface TierSpec {
   searchesPerReel: number;
 }
 
+// Every tier runs on Opus or bigger (the user, 2026-11-19: Sonnet's runs were weaker); Low and Medium save by doing less.
 export const USAGE_TIERS: Record<UsageTier, TierSpec> = {
-  low: { id: 'low', label: 'Low', plan: '$20 plans (Claude Pro, ChatGPT Plus): made to last the whole month', model: 'sonnet', times: ['12:00'], saver: true, platformsPerRun: 2, engageMin: 6, runMin: 20, reelsPerRun: 1, searchesPerReel: 2 },
-  medium: { id: 'medium', label: 'Medium', plan: 'a $20 plan with room to spare, or a light $100 plan', model: 'sonnet', times: ['10:00', '18:00'], saver: true, platformsPerRun: 4, engageMin: 10, runMin: 35, reelsPerRun: 2, searchesPerReel: 4 },
+  low: { id: 'low', label: 'Low', plan: '$20 plans (Claude Pro, ChatGPT Plus): made to last the whole month', model: 'opus', times: ['12:00'], saver: true, platformsPerRun: 2, engageMin: 6, runMin: 20, reelsPerRun: 1, searchesPerReel: 2 },
+  medium: { id: 'medium', label: 'Medium', plan: 'a $20 plan with room to spare, or a light $100 plan', model: 'opus', times: ['10:00', '18:00'], saver: true, platformsPerRun: 4, engageMin: 10, runMin: 35, reelsPerRun: 2, searchesPerReel: 4 },
   high: { id: 'high', label: 'High', plan: '$100 plans (Claude Max 5x)', model: 'opus', times: ['09:00', '15:00', '21:00'], saver: false, platformsPerRun: 0, engageMin: 12, runMin: 50, reelsPerRun: 0, searchesPerReel: 0 },
   max: { id: 'max', label: 'Max', plan: '$200 plans (Claude Max 20x) or an API key: full runs, what Krypt runs', model: 'fable', times: ['09:00', '13:00', '17:00', '21:00'], saver: false, platformsPerRun: 0, engageMin: 15, runMin: 60, reelsPerRun: 0, searchesPerReel: 0 },
 };
 
 /** Older installs have no tier: their runs were full runs. */
+/** The model Low and Medium had until 2026-11-19: an install still on it there is moved to the tier's model now. */
+export const OLD_TIER_MODEL: Partial<Record<UsageTier, string>> = { low: 'sonnet', medium: 'sonnet' };
+
 export const tierOf = (t: string | undefined): TierSpec => USAGE_TIERS[(USAGE_TIER_IDS as string[]).includes(t ?? '') ? (t as UsageTier) : 'max'];
 
 /** What the tier's settings are, in one line ("Sonnet · 1 run a day · 2 platforms a run · token saver"). */

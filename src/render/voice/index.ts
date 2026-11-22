@@ -1,4 +1,4 @@
-import { storyBeats, storyVoiceSig, timingFor, num } from '@shared/presets';
+import { isVoiced, storyBeats, storyVoiceSig, timingFor, num } from '@shared/presets';
 import { storySfx } from '@shared/sfx';
 import type { Fields, Reel } from '@shared/types';
 import { cleanTune, clipKey, isEleven, readVoiceCache, voiceName, type VoiceCache, type VoiceTune } from '@shared/voice';
@@ -212,7 +212,20 @@ const PACE_RUSHED = 1.12;
 /** Most lines re-voiced per reel for pace, so a bad day costs little. */
 const PACE_RETAKES = 2;
 
-async function speakEleven(key: string, say: string, tune: VoiceTune, speed: number, prev: string, next: string): Promise<{ file: string; dur: number; pace: number; note?: string }> {
+/** When each word starts (seconds into the audio) from ElevenLabs' letter timings: a word starts at its first letter after a space. */
+function wordStarts(al: { chars: string[]; starts: number[]; ends: number[] } | undefined): number[] {
+  if (!al) return [];
+  const out: number[] = [];
+  let inWord = false;
+  al.chars.forEach((c, i) => {
+    const space = /\s/.test(c);
+    if (!space && !inWord) out.push(al.starts[i] ?? 0);
+    inWord = !space;
+  });
+  return out;
+}
+
+async function speakEleven(key: string, say: string, tune: VoiceTune, speed: number, prev: string, next: string): Promise<{ file: string; dur: number; pace: number; words?: number[]; note?: string }> {
   const r = await window.marketo.eleven.tts({ voice: tune.voice.slice(3), text: spokenText(say), speed, prev, next });
   if (!r.ok || !r.data) throw new Error(r.message ?? 'ElevenLabs failed.');
   const pace = paceOf(r.data.alignment);
@@ -223,9 +236,13 @@ async function speakEleven(key: string, say: string, tune: VoiceTune, speed: num
   while (a < b && Math.abs(x[a]) < TRIM_BELOW) a++;
   while (b > a && Math.abs(x[b]) < TRIM_BELOW) b--;
   const pad = Math.round(PAD * SAMPLE_RATE);
-  x = x.slice(Math.max(0, a - pad), Math.min(x.length, b + pad));
+  const cut = Math.max(0, a - pad);
+  x = x.slice(cut, Math.min(x.length, b + pad));
   const audio = await shape(x, 1, tune.warmth, tune.clarity);
-  return { file: await saveWav(`${key}.wav`, [audio]), dur: audio.length / SAMPLE_RATE, pace, ...(r.data.note ? { note: r.data.note } : {}) };
+  const dur = audio.length / SAMPLE_RATE;
+  // Word starts moved by the trimmed silence, so captions and mouths follow the real voice.
+  const words = wordStarts(r.data.alignment).map((s) => Math.round(Math.min(dur, Math.max(0, s - cut / SAMPLE_RATE)) * 1000) / 1000);
+  return { file: await saveWav(`${key}.wav`, [audio]), dur, pace, ...(words.length ? { words } : {}), ...(r.data.note ? { note: r.data.note } : {}) };
 }
 
 let notes: string[] = [];
@@ -245,7 +262,7 @@ const pending = new Map<string, Promise<Reel>>();
  */
 export function ensureVoiceover(reel: Reel, onStatus?: (s: string) => void, opts: { final?: boolean } = {}): Promise<Reel> {
   const bedOn = BED_STYLES.includes(reel.fields.bed as BedStyle);
-  if (reel.preset !== 'story' || (reel.fields.voiceover !== true && reel.fields.sfx !== true && !bedOn)) return Promise.resolve(reel);
+  if (!isVoiced(reel.preset) || (reel.fields.voiceover !== true && reel.fields.sfx !== true && !bedOn)) return Promise.resolve(reel);
   const tag = `${reel.id}:${opts.final ? 'final' : 'draft'}`;
   const running = pending.get(tag);
   if (running) return running;
@@ -288,7 +305,7 @@ async function buyEleven(reel: Reel, old: VoiceCache, onStatus?: (s: string) => 
     onStatus?.(`ElevenLabs ${i + 1}/${want.length}: ${b.say.slice(0, 40)}`);
     try {
       const c = await speakEleven(b.elKey, b.say, tune, tune.speed, want[i - 1]?.say ?? '', want[i + 1]?.say ?? '');
-      got[b.elKey] = { file: c.file, dur: c.dur };
+      got[b.elKey] = { file: c.file, dur: c.dur, ...(c.words ? { words: c.words } : {}) };
       if (c.pace) paces.set(i, c.pace);
       bought++;
       credits += b.say.length;
@@ -314,7 +331,7 @@ async function buyEleven(reel: Reel, old: VoiceCache, onStatus?: (s: string) => 
         const c = await speakEleven(`${b.elKey}-p`, b.say, tune, speed, want[i - 1]?.say ?? '', want[i + 1]?.say ?? '');
         credits += b.say.length;
         if (c.pace && Math.abs(c.pace - usual) < Math.abs(p - usual)) {
-          got[b.elKey] = { file: c.file, dur: c.dur };
+          got[b.elKey] = { file: c.file, dur: c.dur, ...(c.words ? { words: c.words } : {}) };
           evened++;
         }
       } catch {
@@ -365,7 +382,7 @@ async function build(reel: Reel, onStatus?: (s: string) => void, final = false):
   let track = old.sig === sig && old.track && (await window.marketo.voice.find(`track-${sig}.wav`)) ? old.track : null;
   if (!track) {
     onStatus?.(BED_STYLES.includes(fields.bed as BedStyle) ? `Mixing voice, effects and ${fields.bed} music` : 'Mixing voice and effects');
-    const total = timingFor('story', fields).total;
+    const total = timingFor(reel.preset, fields).total;
     const ctx = new OfflineAudioContext(2, Math.max(1, Math.ceil(total * MIX_RATE)), MIX_RATE);
     const gain = ctx.createGain();
     gain.gain.value = num(fields, 'voice_volume', 1);

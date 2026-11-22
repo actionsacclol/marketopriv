@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Copy, FolderOpen, Loader2, Mic, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react';
-import { PRESETS, elVoiceNote, presetById, storyBeats, storyVoiceTrack, timingFor, type PresetField } from '@shared/presets';
+import { PRESETS, elVoiceNote, isVoiced, presetById, storyBeats, storyVoiceTrack, timingFor, type PresetField } from '@shared/presets';
 import { FORMATS } from '@shared/formats';
+import { bannerOf } from '@shared/campaigns';
 import type { FieldValue, Fields, Reel } from '@shared/types';
 import { Card, GhostButton, Page, PrimaryButton, StatusChip, Toggle } from '../components/ui';
 import { ReelPlayer } from '../components/ReelPlayer';
@@ -130,6 +131,7 @@ export default function Studio() {
   const reel = db.reels.find((r) => r.id === selected) ?? db.reels[0];
   const [fields, setField] = useDraft(reel);
   const preset = reel ? presetById(reel.preset) : undefined;
+  const banner = reel ? bannerOf(reel, db.campaigns) : undefined;
   const go = useApp((s) => s.go);
   const [asking, setAsking] = useState(false);
   const [caption, setCaption] = useState(reel?.caption ?? '');
@@ -153,8 +155,8 @@ export default function Studio() {
 
   // Story voice-over: regenerate shortly after the lines or voices change.
   const [voiceStatus, setVoiceStatus] = useState('');
-  const needsVoice = !!reel && reel.preset === 'story' && (fields.voiceover === true || fields.sfx === true || (!!fields.bed && fields.bed !== 'none')) && !storyVoiceTrack(fields);
-  const voiceKey = needsVoice ? JSON.stringify([fields.beats, fields.voice, fields.voice_speed, fields.voice_pitch, fields.voice_warmth, fields.voice_clarity, fields.voice_blend, fields.voice_blend_amount, fields.voice_volume, fields.voiceover, fields.sfx, fields.sfx_volume, db.settings.sayAs]) : '';
+  const needsVoice = !!reel && isVoiced(reel.preset) && (fields.voiceover === true || fields.sfx === true || (!!fields.bed && fields.bed !== 'none')) && !storyVoiceTrack(fields);
+  const voiceKey = needsVoice ? JSON.stringify([fields.beats, fields.voice, fields.voice_speed, fields.voice_pitch, fields.voice_warmth, fields.voice_clarity, fields.voice_blend, fields.voice_blend_amount, fields.voice_volume, fields.voiceover, fields.sfx, fields.sfx_volume, fields.gap, fields.bed, db.settings.sayAs]) : '';
   useEffect(() => {
     if (!voiceKey || !reel) return;
     let live = true;
@@ -172,7 +174,7 @@ export default function Studio() {
   }, [voiceKey, reel?.id]);
 
   const [seek, setSeek] = useState<{ t: number; n: number } | undefined>(undefined);
-  const isStory = reel?.preset === 'story';
+  const isStory = !!reel && isVoiced(reel.preset);
   const beats = isStory ? storyBeats(fields) : [];
   const starts = beats.map((b) => b.start);
   const elNote = fields.voiceover === true ? elVoiceNote(beats, String(fields.voice ?? '')) : '';
@@ -216,7 +218,7 @@ export default function Studio() {
                 </div>
               )}
               <div className="relative min-h-0 flex-1">
-              <ReelPlayer key={reel.id} preset={reel.preset} fields={fields} jump={seek} />
+              <ReelPlayer key={reel.id} preset={reel.preset} fields={fields} jump={seek} banner={banner} />
               {voiceStatus && (
                 <div className="absolute left-1/2 top-3 flex max-w-[90%] -translate-x-1/2 items-center gap-2 truncate rounded-full border border-white/10 bg-black/70 px-3 py-1 text-[11px] text-white/80 backdrop-blur">
                   {!voiceStatus.includes('failed') && <Loader2 className="h-3 w-3 animate-spin" />}
@@ -294,7 +296,7 @@ export default function Studio() {
                       {f.label}
                     </label>
                     {isStory && f.key === 'beats' ? (
-                      <BeatEditor value={String(fields.beats ?? f.default)} onChange={(v) => setField('beats', v)} starts={starts} onSeek={(t) => setSeek((s) => ({ t, n: (s?.n ?? 0) + 1 }))} help={f.help} />
+                      <BeatEditor preset={reel?.preset} value={String(fields.beats ?? f.default)} onChange={(v) => setField('beats', v)} starts={starts} onSeek={(t) => setSeek((s) => ({ t, n: (s?.n ?? 0) + 1 }))} help={f.help} />
                     ) : (
                       <FieldInput field={f} value={fields[f.key] ?? f.default} onChange={(v) => setField(f.key, v)} />
                     )}

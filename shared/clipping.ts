@@ -1,10 +1,11 @@
-import type { ClipListing, ClipMoment, ClipRange, ClipSettings, ClipSite, ClipSource } from './types';
+import type { ClipListing, ClipMoment, ClipOrigin, ClipRange, ClipSettings, ClipSite, ClipSource } from './types';
 
 // The clipping style: a streamer's top Twitch / Kick clips of the last day or week, cut into vertical reels with
 // captions (electron/clips.ts reads the clips pages in a hidden window; save_clip downloads one, captions it on this
 // computer and shows frames so the AI can place the facecam). The streamer is named in the post caption.
 
 export const CLIP_SITE_LABEL: Record<ClipSite, string> = { twitch: 'Twitch', kick: 'Kick' };
+export const CLIP_ORIGIN_LABEL: Record<ClipOrigin, string> = { ...CLIP_SITE_LABEL, youtube: 'YouTube' };
 export const CLIP_RANGE_LABEL: Record<ClipRange, string> = { day: 'Last day', week: 'Last week' };
 export const MAX_CLIP_SOURCES = 20;
 
@@ -52,8 +53,126 @@ export function clipsPageUrl(s: ClipSource, range: ClipRange): string {
     : `https://www.twitch.tv/${s.channel}/clips?filter=clips&range=${range === 'week' ? '7d' : '24hr'}`;
 }
 
-/** A single clip's page: kick.com/<channel>/clips/clip_<id>, twitch.tv/<channel>/clip/<slug>, clips.twitch.tv/<slug>. */
-export function parseClipUrl(url: string): { site: ClipSite; channel: string; id: string; url: string } | null {
+// ── YouTube: parts of a video, picked off its "most replayed" graph and recorded off the page ──
+export const YT_MAX_SECONDS = 90;
+
+/** A YouTube video from any of its addresses (watch, youtu.be, shorts, live, embed), with the start time it names. */
+export function parseYouTube(input: string): { id: string; start: number | null; short: boolean; url: string } | null {
+  const s = input.trim();
+  let u: URL;
+  try {
+    u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`);
+  } catch {
+    return null;
+  }
+  const host = u.hostname.toLowerCase().replace(/^(www|m|music)\./, '');
+  const parts = u.pathname.split('/').filter(Boolean);
+  let id = '';
+  let short = false;
+  if (host === 'youtu.be') id = parts[0] ?? '';
+  else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    if (parts[0] === 'watch') id = u.searchParams.get('v') ?? '';
+    else if (['shorts', 'live', 'embed', 'v'].includes(parts[0] ?? '')) {
+      id = parts[1] ?? '';
+      short = parts[0] === 'shorts';
+    }
+  } else return null;
+  if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
+  const t = (u.searchParams.get('t') ?? u.searchParams.get('start') ?? '').trim();
+  const start = !t ? null : /^\d+(\.\d+)?$/.test(t) ? Number(t) : /^\d+s$/.test(t) ? Number(t.slice(0, -1)) : hmsSeconds(t);
+  return { id, start, short, url: `https://www.youtube.com/watch?v=${id}` };
+}
+
+/** The address a saved part of a video is known by (the reel's source): the video at the part's start. */
+export const youTubeClipUrl = (id: string, start: number): string => `https://www.youtube.com/watch?v=${id}&t=${Math.max(0, Math.round(start))}s`;
+
+/** "1:02:03" / "4:05" for seconds into a video. */
+export function clock(sec: number): string {
+  const t = Math.max(0, Math.round(sec));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = String(t % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
+/** One slice of YouTube's replay graph: where it starts, how long it is (seconds) and how replayed it is (0-1). */
+export interface HeatMarker {
+  start: number;
+  dur: number;
+  v: number;
+}
+
+/** A part worth clipping: where it starts and ends, and how far its busiest slice rises above the rest around it (0-1). */
+export interface ReplayedPart {
+  start: number;
+  end: number;
+  /** The rise over the trend at its peak: what the graph's bump measures. */
+  rise: number;
+}
+
+/** Half the window (in slices) that the trend around a slice is taken over. */
+const TREND_HALF = 10;
+/** A bump has to rise at least this far over the trend (on the 0-1 graph) to count; smaller ones are noise. */
+const MIN_RISE = 0.04;
+
+/**
+ * The most replayed parts of a video, most replayed first, off its replay graph (100 slices, 0-1). Viewers drop off
+ * as a video goes on, so the graph slopes down and the start is always the highest: a part people went back for is
+ * a bump over the trend around it (the median of the slices nearby), not a high value. Each part is the run of slices
+ * around a bump that stay well over the trend, with a few seconds of lead-in (the replayed bit is usually the payoff),
+ * between `min` and `max` seconds long, never mostly the same as one already picked. The very start is left out. Measured on two real graphs (2026-11-19): a music video's chorus rose 0.07 over a trend of 0.20,
+ * the noise on flat stretches stays under 0.02.
+ */
+export function replayedParts(markers: HeatMarker[], length: number, opts: { count?: number; min?: number; max?: number; lead?: number } = {}): ReplayedPart[] {
+  const { count = 6, min = 15, max = 60, lead = 4 } = opts;
+  const m = [...markers].filter((x) => Number.isFinite(x.start) && Number.isFinite(x.v)).sort((a, b) => a.start - b.start);
+  if (m.length < 5 || length <= 0) return [];
+  const skipTo = length > 120 ? Math.max(5, length * 0.02) : length * 0.03;
+  const trend = m.map((_, i) => {
+    const near = m.slice(Math.max(0, i - TREND_HALF), i + TREND_HALF + 1).map((x) => x.v).sort((p, q) => p - q);
+    return near[Math.floor(near.length / 2)];
+  });
+  const rise = m.map((x, i) => x.v - trend[i]);
+  const counts = (i: number): boolean => m[i].start + m[i].dur > skipTo;
+  const peaks = m
+    .map((x, i) => ({ x, i }))
+    .filter(({ i }) => counts(i) && rise[i] >= MIN_RISE && rise[i] >= (rise[i - 1] ?? -1) && rise[i] >= (rise[i + 1] ?? -1))
+    .sort((p, q) => rise[q.i] - rise[p.i]);
+  const out: ReplayedPart[] = [];
+  for (const { x, i } of peaks) {
+    if (out.length >= count) break;
+    const floor = rise[i] * 0.4;
+    let lo = i;
+    let hi = i;
+    while (lo > 0 && rise[lo - 1] >= floor && counts(lo - 1)) lo--;
+    while (hi < m.length - 1 && rise[hi + 1] >= floor) hi++;
+    let start = Math.max(0, m[lo].start - lead);
+    let end = Math.min(length, m[hi].start + m[hi].dur + 2);
+    const mid = x.start + x.dur / 2;
+    if (end - start > max) {
+      start = Math.max(0, Math.min(mid - max * 0.6, length - max));
+      end = Math.min(length, start + max);
+    }
+    if (end - start < min) {
+      const grow = (min - (end - start)) / 2;
+      start = Math.max(0, start - grow);
+      end = Math.min(length, start + min);
+      start = Math.max(0, end - min);
+    }
+    const part = { start: Math.round(start), end: Math.round(end), rise: Math.round(rise[i] * 100) / 100 };
+    const clash = out.some((o) => sameMoment({ stream: 'v', ...o }, { stream: 'v', ...part }));
+    if (!clash && part.end > part.start) out.push(part);
+  }
+  return out;
+}
+
+/** A single clip's page: kick.com/<channel>/clips/clip_<id>, twitch.tv/<channel>/clip/<slug>, clips.twitch.tv/<slug>; or a part of a YouTube video (its address at the part's start, id "<video>@<start>"). */
+export function parseClipUrl(url: string): { site: ClipOrigin; channel: string; id: string; url: string } | null {
+  const yt = parseYouTube(url);
+  if (yt) {
+    const start = Math.max(0, Math.round(yt.start ?? 0));
+    return { site: 'youtube', channel: '', id: `${yt.id}@${start}`, url: youTubeClipUrl(yt.id, start) };
+  }
   let u: URL;
   try {
     u = new URL(url.trim());

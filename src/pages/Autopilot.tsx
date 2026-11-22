@@ -1,4 +1,5 @@
 import { runWhen } from '../lib/autopilotWindow';
+import { SOFT_RUNS_A_DAY } from '@shared/perf';
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Bot, Check, ChevronDown, CircleAlert, CircleCheck, Clock, FolderOpen, Play, Plug, Plus, Power, RefreshCw, X } from 'lucide-react';
 import type { AutopilotAi, AutopilotReport, AutopilotStatus, ClientInfo } from '@shared/types';
@@ -21,6 +22,34 @@ const fmtWhen = (iso?: string): string => {
   return `${today ? 'today' : d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
 };
 
+/** Goal-driven extra runs: how many a day (the user's number), and what the planner sees right now. */
+function ExtraRuns({ st, busy, onSet }: { st: AutopilotStatus; busy: boolean; onSet: (n: number) => void }) {
+  const [n, setN] = useState(String(st.extra.max));
+  useEffect(() => setN(String(st.extra.max)), [st.extra.max]);
+  const v = Math.round(Number(n));
+  const valid = n.trim() !== '' && Number.isFinite(v) && v >= 0;
+  return (
+    <div className="space-y-1.5 border-t border-white/5 pt-3">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 text-sm">Extra runs for posts still owed</span>
+        <input type="number" min={0} className="input w-20 py-1 font-mono text-xs" value={n} onChange={(e) => setN(e.target.value)} />
+        <span className="text-xs text-krypt-muted">a day</span>
+        <GhostButton small disabled={busy || !valid || v === st.extra.max} onClick={() => onSet(v)}>
+          Save
+        </GhostButton>
+      </div>
+      <p className="text-[11px] leading-relaxed text-krypt-muted">
+        Between the main runs, a short run (about 15 min) starts by itself when a platform still owes posts today and its spacing allows the next one: it posts and answers comments, nothing else. Only while the token saver is off, since each one uses more of your AI plan. 0 turns them off.
+      </p>
+      {st.on && (
+        <p className="text-[11px] text-white/70">
+          Today {st.extra.today} of {st.extra.max}. {st.extra.note}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Report({ r, open, onToggle }: { r: AutopilotReport; open: boolean; onToggle: () => void }) {
   return (
     <div className="px-4 py-3">
@@ -28,6 +57,7 @@ function Report({ r, open, onToggle }: { r: AutopilotReport; open: boolean; onTo
         <span className={cls('h-2 w-2 rounded-full', r.running ? 'animate-pulse bg-krypt-purple' : r.needs.length || r.warnings.length ? 'bg-amber-400' : r.ended ? 'bg-emerald-400' : 'bg-rose-400')} />
         <span className="font-medium">{fmtWhen(r.at)}</span>
         {r.profile && <span className="rounded-md border border-krypt-purple/30 bg-krypt-purple/10 px-1.5 py-0.5 text-[11px] text-white/80">{r.profile}</span>}
+        {r.extra && <span className="rounded-md border border-white/10 bg-white/5 px-1.5 py-0.5 text-[11px] text-krypt-muted">extra</span>}
         <span className="text-xs text-krypt-muted">{r.running ? 'running now' : !r.ended ? 'stopped before the end' : r.needs.length ? `${r.needs.length} thing${r.needs.length === 1 ? '' : 's'} need you` : 'done'}</span>
         <ChevronDown className={cls('ml-auto h-4 w-4 text-krypt-muted transition', open && 'rotate-180')} />
       </button>
@@ -195,7 +225,7 @@ export default function Autopilot() {
             )}
           </Section>
 
-          <Section title="2 · When it runs" description="Every platform's daily limits and post targets are enforced by Marketo, so more runs spread the same work out; they don't do more. 3 a day is a good default.">
+          <Section title="2 · When it runs" description="The main runs do everything: messages, engagement, posts, replies and stats, inside every platform's daily limits. 3 or 4 a day is a good default. Extra runs fill in the posts that are still owed in between.">
             <Card className="space-y-3">
               <div className="flex flex-wrap gap-2">
                 {PRESETS.map((p) => (
@@ -214,10 +244,16 @@ export default function Autopilot() {
                   </span>
                 ))}
                 <input type="time" className="input w-28 py-1 font-mono text-xs" value={newTime} onChange={(e) => setNewTime(e.target.value)} />
-                <GhostButton small disabled={!newTime || times.includes(newTime) || times.length >= 8} onClick={() => setTimes([...times, newTime])}>
+                <GhostButton small disabled={!newTime || times.includes(newTime)} onClick={() => setTimes([...times, newTime])}>
                   <Plus className="h-3.5 w-3.5" /> Add
                 </GhostButton>
               </div>
+              {times.length > SOFT_RUNS_A_DAY && (
+                <p className="text-xs text-amber-300">
+                  {times.length} runs a day is over the {SOFT_RUNS_A_DAY} Krypt suggests. Each run is a full session on every account: more of your AI plan, and more activity a day than most people show, which platforms can flag, limit or lock. Your call.
+                </p>
+              )}
+              <ExtraRuns st={st} busy={busy} onSet={(n) => void act(() => window.marketo.autopilot.setExtraRuns(n), n ? `Up to ${n} extra run${n === 1 ? '' : 's'} a day.` : 'Extra runs are off.')} />
             </Card>
           </Section>
 
@@ -248,8 +284,8 @@ export default function Autopilot() {
               {st.profiles && (
                 <p className="pt-1 text-xs text-krypt-muted">
                   {st.profiles.length
-                    ? `Each run works through ${st.profiles.length === 1 ? 'the profile' : 'these profiles, one after the other'}: ${st.profiles.join(', ')}. Pick which on the Setup page, under Profiles.`
-                    : 'No profile has Autopilot switched on, so runs have nothing to work on. Switch it on for one on the Setup page, under Profiles.'}
+                    ? `Each run works through ${st.profiles.length === 1 ? 'the profile' : 'these profiles, one after the other'}: ${st.profiles.join(', ')}. Pick which on the Multi run page.`
+                    : 'No profile has Autopilot switched on, so runs have nothing to work on. Switch it on for one on the Multi run page.'}
                 </p>
               )}
               <p className="pt-1 text-xs text-krypt-muted">

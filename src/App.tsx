@@ -1,5 +1,5 @@
 import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
-import { BarChart3, Bot, Boxes, Check, Smile, Clapperboard, Gauge, Globe, GraduationCap, Palette, Settings, ShieldCheck, TrendingUp, Volume2, VolumeX, X } from 'lucide-react';
+import { BarChart3, Bot, Boxes, Check, Smile, Clapperboard, Gauge, Globe, GraduationCap, Layers, LifeBuoy, Palette, Settings, ShieldCheck, TrendingUp, Volume2, VolumeX, X } from 'lucide-react';
 import type { Approval, IgAccount, PageId, UpdateInfo } from '@shared/types';
 import { cls } from './lib/format';
 import { initStore, useApp } from './state/store';
@@ -12,9 +12,13 @@ import { GlassLens } from './components/glass/GlassSegmented';
 import { GLASS_TINTS } from './components/glass/glassPresets';
 import { useGlideLens } from './components/glass/useGlideLens';
 import { kickGlassWatchdog, startGlassWatchdog } from './components/glass/glassQuality';
+import { startPerf } from './lib/perf';
 import Dashboard from './pages/Dashboard';
 import Studio from './pages/Studio';
 import NextRun from './pages/NextRun';
+import LongVideos from './pages/LongVideos';
+import Resources from './pages/Resources';
+import Campaigns from './pages/Campaigns';
 import Usage from './pages/Usage';
 import Examples from './pages/Examples';
 import Styles from './pages/Styles';
@@ -31,6 +35,7 @@ import Setup from './pages/Setup';
 import Chat from './pages/Chat';
 import KryptTools from './pages/KryptTools';
 import Kip from './pages/Kip';
+import MultiRun from './pages/MultiRun';
 import Voices from './pages/Voices';
 import Wizard from './pages/Wizard';
 
@@ -52,7 +57,7 @@ function MuteButton() {
 
 const NO_ACCOUNTS: IgAccount[] = [];
 
-type GroupId = 'home' | 'styles' | 'create' | 'grow' | 'train' | 'ai' | 'krypt' | 'kip';
+type GroupId = 'home' | 'styles' | 'create' | 'grow' | 'train' | 'ai' | 'krypt' | 'multi' | 'kip' | 'resources';
 
 interface NavGroup {
   id: GroupId;
@@ -67,12 +72,14 @@ interface NavGroup {
 const GROUPS: NavGroup[] = [
   { id: 'home', label: 'Home', icon: Gauge, pages: [{ id: 'dashboard', label: 'Home' }] },
   { id: 'styles', label: 'Styles', icon: Palette, pages: [{ id: 'styles', label: 'Styles' }] },
-  { id: 'create', label: 'Create', icon: Clapperboard, first: 'studio', pages: [{ id: 'next-run', label: 'Next run' }, { id: 'studio', label: 'Studio' }, { id: 'examples', label: 'Examples' }, { id: 'library', label: 'Library' }, { id: 'voices', label: 'Voices' }] },
+  { id: 'create', label: 'Create', icon: Clapperboard, first: 'studio', pages: [{ id: 'next-run', label: 'Next run' }, { id: 'studio', label: 'Studio' }, { id: 'long', label: 'Long videos' }, { id: 'examples', label: 'Examples' }, { id: 'library', label: 'Library' }, { id: 'campaigns', label: 'Campaigns' }, { id: 'voices', label: 'Voices' }] },
   { id: 'grow', label: 'Grow', icon: TrendingUp, pages: [{ id: 'accounts', label: 'Accounts' }, { id: 'warming', label: 'Warm-up' }, { id: 'results', label: 'Results' }, { id: 'research', label: 'Research' }] },
   { id: 'train', label: 'Training', icon: GraduationCap, pages: [{ id: 'train-rank', label: 'Rank' }, { id: 'train-hooks', label: 'Hooks' }, { id: 'train-topics', label: 'Topics' }, { id: 'train-notes', label: 'Notes' }] },
   { id: 'ai', label: 'AI', icon: Bot, pages: [{ id: 'autopilot', label: 'Autopilot' }, { id: 'agents', label: 'Connect' }, { id: 'chat', label: 'Chat' }, { id: 'usage', label: 'Usage' }] },
   { id: 'krypt', label: 'Krypt tools', icon: Boxes, pages: [{ id: 'krypt', label: 'Krypt tools' }] },
+  { id: 'multi', label: 'Multi run', icon: Layers, pages: [{ id: 'multi-run', label: 'Multi run' }] },
   { id: 'kip', label: 'Kip', icon: Smile, pages: [{ id: 'kip', label: 'Kip' }] },
+  { id: 'resources', label: 'Resources', icon: LifeBuoy, pages: [{ id: 'resources', label: 'Resources' }] },
 ];
 const groupOf = (p: PageId): GroupId | null => GROUPS.find((g) => g.pages.some((x) => x.id === p))?.id ?? null;
 /** The page each group last showed, so going back to a group lands where you were. */
@@ -313,6 +320,7 @@ export default function App() {
   // can't hold its frame rate with it (glass/glassQuality.ts), re-checked
   // shortly after each page change.
   useEffect(() => startGlassWatchdog(), []);
+  useEffect(() => startPerf(), []);
   useEffect(() => kickGlassWatchdog(), [page]);
   if (wizard)
     return (
@@ -340,7 +348,7 @@ export default function App() {
         <ApprovalBar />
         <div className="min-h-0 flex-1">
           <PageBoundary page={page}>
-          {!ready ? null : page === 'dashboard' ? <Dashboard /> : page === 'warming' ? <Warming /> : page === 'accounts' ? <Accounts /> : page === 'next-run' ? <NextRun /> : page === 'kip' ? <Kip /> : page === 'studio' ? <Studio /> : page === 'examples' ? <Examples /> : page === 'styles' ? <Styles /> : page === 'library' ? <Library /> : page === 'results' ? <Results /> : page === 'train-rank' ? <Training tab="rank" /> : page === 'train-hooks' ? <Training tab="hooks" /> : page === 'train-topics' ? <Training tab="topics" /> : page === 'train-notes' ? <Training tab="notes" /> : page === 'research' ? <Research /> : page === 'voices' ? <Voices /> : page === 'krypt' ? <KryptTools /> : page === 'chat' ? <Chat /> : page === 'setup' ? <Setup /> : page === 'autopilot' ? <Autopilot /> : page === 'usage' ? <Usage /> : <Agents />}
+          {!ready ? null : page === 'dashboard' ? <Dashboard /> : page === 'warming' ? <Warming /> : page === 'accounts' ? <Accounts /> : page === 'next-run' ? <NextRun /> : page === 'long' ? <LongVideos /> : page === 'resources' ? <Resources /> : page === 'campaigns' ? <Campaigns /> : page === 'kip' ? <Kip /> : page === 'multi-run' ? <MultiRun /> : page === 'studio' ? <Studio /> : page === 'examples' ? <Examples /> : page === 'styles' ? <Styles /> : page === 'library' ? <Library /> : page === 'results' ? <Results /> : page === 'train-rank' ? <Training tab="rank" /> : page === 'train-hooks' ? <Training tab="hooks" /> : page === 'train-topics' ? <Training tab="topics" /> : page === 'train-notes' ? <Training tab="notes" /> : page === 'research' ? <Research /> : page === 'voices' ? <Voices /> : page === 'krypt' ? <KryptTools /> : page === 'chat' ? <Chat /> : page === 'setup' ? <Setup /> : page === 'autopilot' ? <Autopilot /> : page === 'usage' ? <Usage /> : <Agents />}
           </PageBoundary>
         </div>
       </main>

@@ -20,7 +20,7 @@ export interface Quota {
 }
 
 export interface Phase {
-  id: 'lurk' | 'engage' | 'ramp' | 'active';
+  id: 'lurk' | 'engage' | 'ramp' | 'build' | 'active';
   name: string;
   /** First and last warm-up day of the phase (last = Infinity for active). */
   from: number;
@@ -35,24 +35,33 @@ export const PHASES: Phase[] = [
     name: 'Lurk',
     from: 1,
     to: 3,
-    quota: { minutes: 25, likes: 15, saves: 5, follows: 3, comments: 0, posts: 0, reposts: 0, messages: 0 },
+    quota: { minutes: 25, likes: 12, saves: 4, follows: 3, comments: 0, posts: 0, reposts: 0, messages: 0 },
     tasks: ['Scroll niche reels and search terms; watch most of each video', 'Like only what fits the niche', 'Add a profile photo (day 2 or 3)'],
   },
   {
     id: 'engage',
     name: 'Engage',
     from: 4,
-    to: 7,
-    quota: { minutes: 30, likes: 25, saves: 8, follows: 5, comments: 2, posts: 0, reposts: 0, messages: 5 },
+    to: 6,
+    quota: { minutes: 30, likes: 20, saves: 6, follows: 4, comments: 2, posts: 0, reposts: 0, messages: 5 },
     tasks: ['Write the bio (no link yet)', 'A couple of real comments on niche posts (user approves each)', 'Follow a few accounts the feed keeps serving'],
   },
   {
     id: 'ramp',
     name: 'Ramp',
-    from: 8,
+    from: 7,
+    to: 10,
+    quota: { minutes: 35, likes: 30, saves: 8, follows: 6, comments: 4, posts: 1, reposts: 0, messages: 10 },
+    tasks: ['The first reel goes up on day 7, then one a day at most', 'Reply to every comment on our posts', 'Keep the daily scroll going'],
+  },
+  {
+    // A slower climb to Active (user, 2026-11-22): Instagram ramps a little more gently than it used to.
+    id: 'build',
+    name: 'Build',
+    from: 11,
     to: 14,
-    quota: { minutes: 35, likes: 40, saves: 10, follows: 10, comments: 5, posts: 1, reposts: 0, messages: 15 },
-    tasks: ['First reel can go up (one a day at most)', 'Reply to every comment on our posts', 'Keep the daily scroll going'],
+    quota: { minutes: 40, likes: 45, saves: 12, follows: 10, comments: 6, posts: 1, reposts: 0, messages: 20 },
+    tasks: ['One reel a day', 'Reply to every comment on our posts', 'Engage before and after posting'],
   },
   {
     id: 'active',
@@ -60,7 +69,7 @@ export const PHASES: Phase[] = [
     from: 15,
     to: Infinity,
     quota: { minutes: 45, likes: 60, saves: 15, follows: 15, comments: 10, posts: 1, reposts: 0, messages: 30 },
-    tasks: ['Add the link in bio now, not earlier (a link on a brand-new account can get it restricted)', 'One reel a day', 'Record follower stats daily', 'Engage before and after posting'],
+    tasks: ['The link in bio waits until about day 30 on a brand-new account (an early link can get it restricted); then add it', 'One reel a day', 'Record follower stats daily', 'Engage before and after posting'],
   },
 ];
 
@@ -84,8 +93,33 @@ export interface DayTotals extends Quota {
   sessions: number;
 }
 
+/**
+ * Sessions grouped by site, handle and day, built once per list instead of filtering every session on every call
+ * (the warm-up math asks for many days, accounts and platforms each time). Rebuilt when sessions are added or
+ * removed (length, first or last changed) or the list is a new one; forgetDayIndex after changing a session's
+ * handle, site or start in place.
+ */
+const DAY_INDEX = new WeakMap<Session[], { len: number; first?: Session; last?: Session; map: Map<string, Session[]> }>();
+const dayKey = (site: Site, handle: string, ymd: string): string => `${site}|${normalizeHandle(handle)}|${ymd}`;
+function sessionsOn(sessions: Session[], handle: string, ymd: string, site: Site): Session[] {
+  let e = DAY_INDEX.get(sessions);
+  if (!e || e.len !== sessions.length || e.first !== sessions[0] || e.last !== sessions[sessions.length - 1]) {
+    const map = new Map<string, Session[]>();
+    for (const s of sessions) {
+      const k = dayKey(s.site ?? 'instagram', s.handle, localDate(s.startedAt));
+      const l = map.get(k);
+      if (l) l.push(s);
+      else map.set(k, [s]);
+    }
+    e = { len: sessions.length, first: sessions[0], last: sessions[sessions.length - 1], map };
+    DAY_INDEX.set(sessions, e);
+  }
+  return e.map.get(dayKey(site, handle, ymd)) ?? [];
+}
+export const forgetDayIndex = (sessions: Session[]): void => void DAY_INDEX.delete(sessions);
+
 export function totalsOn(sessions: Session[], handle: string, ymd: string, site: Site = 'instagram'): DayTotals {
-  const list = sessions.filter((s) => (s.site ?? 'instagram') === site && sameHandle(s.handle, handle) && localDate(s.startedAt) === ymd);
+  const list = sessionsOn(sessions, handle, ymd, site);
   return {
     sessions: list.length,
     minutes: list.reduce((n, s) => n + s.minutes, 0),
@@ -136,42 +170,50 @@ export const sitesOf = (a: IgAccount): Site[] => SITES.filter((s) => siteOn(a, s
 // TikTok's own ramp. House limits: TikTok shadow-limits new accounts that like, follow or comment in bursts, so the
 // first days are mostly watching the For You feed to teach it the niche, and posting starts after the feed has settled.
 export const TT_PHASES: Phase[] = [
-  { id: 'lurk', name: 'Lurk', from: 1, to: 3, quota: { minutes: 30, likes: 10, saves: 2, follows: 2, comments: 0, posts: 0, reposts: 0, messages: 0 }, tasks: ['Watch the For You feed and niche searches; watch most videos to the end', 'Skip what is off-niche quickly', 'Profile photo and bio'] },
-  { id: 'engage', name: 'Engage', from: 4, to: 7, quota: { minutes: 35, likes: 25, saves: 5, follows: 5, comments: 2, posts: 1, reposts: 0, messages: 3 }, tasks: ['First video can go up', 'A couple of real comments on niche videos (user approves each)', 'Follow creators the feed keeps serving'] },
-  { id: 'ramp', name: 'Ramp', from: 8, to: 14, quota: { minutes: 40, likes: 40, saves: 8, follows: 10, comments: 5, posts: 2, reposts: 0, messages: 10 }, tasks: ['Post reels as TikTok videos', 'Reply to comments on our videos'] },
-  { id: 'active', name: 'Active', from: 15, to: Infinity, quota: { minutes: 45, likes: 60, saves: 10, follows: 15, comments: 10, posts: 3, reposts: 0, messages: 20 }, tasks: ['Link in bio when TikTok allows it', 'Post daily; reply early to comments', 'Record follower stats'] },
+  // One week to the first video (research 2026-11-20): watch 3 days, first comments day 4, first video day 5, one a day to day 7.
+  { id: 'lurk', name: 'Lurk', from: 1, to: 3, quota: { minutes: 25, likes: 8, saves: 2, follows: 2, comments: 0, posts: 0, reposts: 0, messages: 0 }, tasks: ['Search the niche and watch videos to the end; skip off-niche ones quickly', 'Profile photo and bio (no link yet); account public, "Suggest your account to others" on', 'No posts, comments or DMs yet'] },
+  { id: 'engage', name: 'Engage', from: 4, to: 7, quota: { minutes: 30, likes: 15, saves: 3, follows: 4, comments: 3, posts: 1, reposts: 0, messages: 0 }, tasks: ['Day 4: two short real comments on fresh niche videos, no video yet', 'First video on day 5, then stay about 15 minutes to answer comments; one a day to day 7', 'Check the first video has views within 24 hours; if not, wait 48 hours before the next'] },
+  { id: 'ramp', name: 'Ramp', from: 8, to: 14, quota: { minutes: 30, likes: 30, saves: 5, follows: 8, comments: 5, posts: 2, reposts: 0, messages: 0 }, tasks: ['Up to 2 videos a day, the second only while the recent ones get views', 'Reply to every comment on our videos', 'No cold DMs before day 15'] },
+  { id: 'active', name: 'Active', from: 15, to: Infinity, quota: { minutes: 35, likes: 60, saves: 10, follows: 15, comments: 10, posts: 2, reposts: 0, messages: 5 }, tasks: ['Link in bio when TikTok allows it (1,000 followers on a personal account)', 'Post daily; reply early to comments; 3 a day only once views hold', 'Record follower stats'] },
 ];
 
 // X's own ramp. House limits, far under X's published ones (around 400 follows and 1,000 likes a day): X's automation
 // rules single out automated likes and aggressive following, and it locks new accounts for them quickly.
 // Facebook (posting as a Page): Meta links it to the Instagram side, so the same slow start; Reels can go up from week one.
 export const FB_PHASES: Phase[] = [
-  { id: 'lurk', name: 'Lurk', from: 1, to: 3, quota: { minutes: 20, likes: 10, saves: 0, follows: 2, comments: 0, posts: 0, reposts: 0, messages: 5 }, tasks: ['Page photo, cover and About filled in', 'Read the niche: groups, pages and Reels the feed serves', 'Like what you watched to the end; follow a page or two that keeps posting well in the niche', 'Answer anyone who messages the Page'] },
-  { id: 'engage', name: 'Engage', from: 4, to: 7, quota: { minutes: 25, likes: 20, saves: 0, follows: 4, comments: 3, posts: 1, reposts: 1, messages: 10 }, tasks: ['First Reel can go up', 'A few real comments on niche posts', 'Follow pages the feed keeps serving'] },
-  { id: 'ramp', name: 'Ramp', from: 8, to: 14, quota: { minutes: 30, likes: 35, saves: 0, follows: 8, comments: 6, posts: 2, reposts: 2, messages: 20 }, tasks: ['Post reels as Facebook Reels', 'Reply to comments on our posts'] },
-  { id: 'active', name: 'Active', from: 15, to: Infinity, quota: { minutes: 35, likes: 50, saves: 0, follows: 12, comments: 10, posts: 3, reposts: 3, messages: 30 }, tasks: ['Post daily; reply early to comments', 'Record follower stats'] },
+  // One week (research 2026-11-20): read 3 days, first comments day 4, first Reel day 5; no reposts (originality rules) and
+  // no cold messages (unwanted messages trigger blocks): messages are replies to people who wrote first.
+  { id: 'lurk', name: 'Lurk', from: 1, to: 3, quota: { minutes: 20, likes: 10, saves: 0, follows: 2, comments: 0, posts: 0, reposts: 0, messages: 5 }, tasks: ['Page photo, cover, category and About filled in (website field can wait)', 'Read the niche: groups, pages and Reels the feed serves; react to what you watched to the end', 'Join one niche group on day 3 and only read it', 'Messenger: only answer people who wrote to the Page'] },
+  { id: 'engage', name: 'Engage', from: 4, to: 7, quota: { minutes: 25, likes: 20, saves: 0, follows: 4, comments: 3, posts: 1, reposts: 0, messages: 5 }, tasks: ['Day 4: two or three short comments as the Page, no links, no Reel yet', 'First original Reel on day 5, then one a day', 'In groups only comments, no posts yet'] },
+  { id: 'ramp', name: 'Ramp', from: 8, to: 14, quota: { minutes: 30, likes: 35, saves: 0, follows: 8, comments: 6, posts: 2, reposts: 0, messages: 10 }, tasks: ['Up to 2 Reels a day, hours apart', 'First group post: original, no link, one group', 'Reply to every comment on our posts'] },
+  { id: 'active', name: 'Active', from: 15, to: Infinity, quota: { minutes: 35, likes: 50, saves: 0, follows: 12, comments: 15, posts: 3, reposts: 1, messages: 20 }, tasks: ['Post daily; reply early to comments', 'Links only from day 30 (and they are scarce)', 'Record follower stats'] },
 ];
 
 // Threads: text-first, signed in through Instagram. Replies are what grow an account there.
 export const TH_PHASES: Phase[] = [
-  { id: 'lurk', name: 'Lurk', from: 1, to: 3, quota: { minutes: 20, likes: 10, saves: 0, follows: 3, comments: 1, posts: 1, reposts: 0, messages: 0 }, tasks: ['Bio filled in', 'Read the niche feed and search; like only what fits', 'Follow a couple of accounts whose threads you read', 'One post a day at most'] },
-  { id: 'engage', name: 'Engage', from: 4, to: 7, quota: { minutes: 25, likes: 20, saves: 0, follows: 5, comments: 4, posts: 2, reposts: 1, messages: 3 }, tasks: ['A few real replies on niche threads', 'Follow accounts the feed keeps serving'] },
-  { id: 'ramp', name: 'Ramp', from: 8, to: 14, quota: { minutes: 30, likes: 35, saves: 0, follows: 10, comments: 8, posts: 3, reposts: 2, messages: 8 }, tasks: ['Post reels as video threads, and short text threads', 'Reply to replies on our threads'] },
-  { id: 'active', name: 'Active', from: 15, to: Infinity, quota: { minutes: 35, likes: 50, saves: 0, follows: 15, comments: 12, posts: 4, reposts: 3, messages: 15 }, tasks: ['Post daily; reply early', 'Record follower stats'] },
+  // One week (research 2026-11-20): read 2 days, first text post day 3, replies carry growth, no links or cold DMs in week 1.
+  { id: 'lurk', name: 'Lurk', from: 1, to: 2, quota: { minutes: 20, likes: 8, saves: 0, follows: 3, comments: 1, posts: 0, reposts: 0, messages: 0 }, tasks: ['Bio and profile topics filled in (no link yet)', 'Read the niche feed and search; like only what fits', 'Check Instagram and Threads Account status first'] },
+  { id: 'engage', name: 'Engage', from: 3, to: 7, quota: { minutes: 25, likes: 12, saves: 0, follows: 4, comments: 4, posts: 1, reposts: 1, messages: 0 }, tasks: ['First post on day 3: a short text post with one topic tag, no link', 'Short real replies on fresh niche posts', 'Answer every reply on our posts'] },
+  { id: 'ramp', name: 'Ramp', from: 8, to: 14, quota: { minutes: 30, likes: 18, saves: 0, follows: 6, comments: 8, posts: 2, reposts: 1, messages: 2 }, tasks: ['Screen clips and screenshots with a line of text, plus text posts', 'Links only in our own first reply', 'DMs only back to people who wrote first'] },
+  // A slower climb to Active (user, 2026-11-22, after Threads asked @yuhgodev to prove it was human on day 12).
+  { id: 'build', name: 'Build', from: 15, to: 21, quota: { minutes: 30, likes: 30, saves: 0, follows: 10, comments: 12, posts: 2, reposts: 2, messages: 5 }, tasks: ['Text posts plus clips and screenshots with a line of text', 'Most of the session on early replies', 'DMs only back to people who wrote first'] },
+  { id: 'active', name: 'Active', from: 22, to: Infinity, quota: { minutes: 35, likes: 50, saves: 0, follows: 15, comments: 20, posts: 3, reposts: 3, messages: 10 }, tasks: ['Post daily; most of the session on early replies', 'Record follower stats'] },
 ];
 
 // Pinterest: a search engine more than a feed. Saves (repins into our boards) teach it the niche; Pins keep being found for months.
 export const PIN_PHASES: Phase[] = [
-  { id: 'lurk', name: 'Lurk', from: 1, to: 3, quota: { minutes: 20, likes: 5, saves: 10, follows: 3, comments: 0, posts: 1, reposts: 0, messages: 0 }, tasks: ['Profile photo, bio and website', 'Make 3-5 boards named for what people search', 'Save niche Pins into them'] },
-  { id: 'engage', name: 'Engage', from: 4, to: 7, quota: { minutes: 25, likes: 10, saves: 20, follows: 5, comments: 1, posts: 2, reposts: 0, messages: 2 }, tasks: ['First video Pins can go up', 'Keep saving niche Pins'] },
-  { id: 'ramp', name: 'Ramp', from: 8, to: 14, quota: { minutes: 25, likes: 15, saves: 30, follows: 8, comments: 2, posts: 3, reposts: 0, messages: 5 }, tasks: ['Post reels as video Pins with keyword titles and the link', 'Spread Pins across boards'] },
-  { id: 'active', name: 'Active', from: 15, to: Infinity, quota: { minutes: 30, likes: 20, saves: 40, follows: 10, comments: 3, posts: 5, reposts: 0, messages: 10 }, tasks: ['Pin daily', 'Record follower stats'] },
+  // One week (research 2026-11-20): new accounts get suspended mostly over links, so Pins carry no link until day 4.
+  { id: 'lurk', name: 'Lurk', from: 1, to: 3, quota: { minutes: 20, likes: 5, saves: 8, follows: 3, comments: 0, posts: 1, reposts: 0, messages: 0 }, tasks: ['Profile photo and a short bio (no link yet); suggest claiming the account\'s own website', 'Make 3-5 boards named for what people search', 'Save niche Pins from many different websites', 'From day 2, one Pin a day of our own with NO link'] },
+  { id: 'engage', name: 'Engage', from: 4, to: 7, quota: { minutes: 25, likes: 10, saves: 12, follows: 5, comments: 1, posts: 2, reposts: 0, messages: 0 }, tasks: ['Links from day 4: one Pin a day at most with a direct link, no shortener', 'Fresh image or video on every Pin', 'Keep saving niche Pins from many websites'] },
+  { id: 'ramp', name: 'Ramp', from: 8, to: 14, quota: { minutes: 25, likes: 15, saves: 15, follows: 8, comments: 2, posts: 3, reposts: 0, messages: 2 }, tasks: ['Video and image Pins with keyword titles and the link', 'Spread Pins across boards; at least 30-60 minutes apart'] },
+  { id: 'active', name: 'Active', from: 15, to: Infinity, quota: { minutes: 30, likes: 20, saves: 20, follows: 10, comments: 3, posts: 5, reposts: 0, messages: 5 }, tasks: ['Pin daily, fresh designs only', 'Record follower stats'] },
 ];
 
 export const X_PHASES: Phase[] = [
-  { id: 'lurk', name: 'Lurk', from: 1, to: 3, quota: { minutes: 20, likes: 10, saves: 0, follows: 3, comments: 0, posts: 1, reposts: 0, messages: 0 }, tasks: ['Read the niche feed and search; like only what fits', 'Profile photo, banner and bio', 'One post a day at most'] },
-  { id: 'engage', name: 'Engage', from: 4, to: 7, quota: { minutes: 25, likes: 20, saves: 0, follows: 5, comments: 3, posts: 2, reposts: 2, messages: 5 }, tasks: ['A few real replies on niche posts (user approves each)', 'Follow accounts the feed keeps serving'] },
-  { id: 'ramp', name: 'Ramp', from: 8, to: 14, quota: { minutes: 30, likes: 35, saves: 0, follows: 10, comments: 6, posts: 3, reposts: 4, messages: 15 }, tasks: ['Post reels as video posts', 'Reply to replies on our posts'] },
+  // One week to the first posts (research 2026-11-20): read 3 days, first replies day 4, first post day 5, then a 10-day ramp.
+  { id: 'lurk', name: 'Lurk', from: 1, to: 3, quota: { minutes: 20, likes: 10, saves: 0, follows: 5, comments: 0, posts: 0, reposts: 0, messages: 0 }, tasks: ['Read the niche feed and search; like only what fits', 'Profile photo, banner and bio (no link yet)', 'No posts, replies or DMs yet'] },
+  { id: 'engage', name: 'Engage', from: 4, to: 4, quota: { minutes: 20, likes: 15, saves: 0, follows: 5, comments: 2, posts: 0, reposts: 1, messages: 0 }, tasks: ['One or two real replies on big niche accounts (no links)', 'Follow accounts the feed keeps serving'] },
+  { id: 'ramp', name: 'Ramp', from: 5, to: 14, quota: { minutes: 30, likes: 30, saves: 0, follows: 10, comments: 8, posts: 2, reposts: 3, messages: 3 }, tasks: ['First post on day 5: a native video, no link', 'Reply to everyone who replies to our posts', 'DMs only back to people who wrote first; no links until day 15'] },
   { id: 'active', name: 'Active', from: 15, to: Infinity, quota: { minutes: 40, likes: 50, saves: 0, follows: 15, comments: 10, posts: 4, reposts: 6, messages: 30 }, tasks: ['Link in bio now', 'Post daily; reply early to replies', 'Record follower stats'] },
 ];
 
@@ -210,7 +252,25 @@ export const limitsOf = (a: Pick<IgAccount, 'limits'>, site: Site): SiteLimits =
 /** Minutes that must pass between two posts on a platform: the user's number, otherwise the recommended one. */
 export const postGap = (a: Pick<IgAccount, 'limits'>, site: Site): number => limitsOf(a, site).gap ?? POST_GAP_MIN[site];
 /** Shorts a day for the account's channel: the user's number, otherwise the recommended one. */
-export const ytLimit = (a: Pick<IgAccount, 'limits'>): number => limitsOf(a, 'youtube').posts ?? YT_UPLOADS_PER_DAY;
+/** The channel's YouTube warm-up day (1 = its first day), or undefined for an established channel. */
+export const ytWarmDay = (a: Pick<IgAccount, 'youtube'>, today = localDate()): number | undefined =>
+  a.youtube?.warmupStart && /^\d{4}-\d{2}-\d{2}$/.test(a.youtube.warmupStart) ? Math.max(1, dayIndex(today) - dayIndex(a.youtube.warmupStart) + 1) : undefined;
+/** Recommended Shorts today: 0 on warm-up days 1-4, 1 on days 5-7, 2 in week 2, then YT_UPLOADS_PER_DAY. */
+export function ytRecommended(a: Pick<IgAccount, 'youtube'>, today = localDate()): number {
+  const day = ytWarmDay(a, today);
+  if (day === undefined || day > 14) return YT_UPLOADS_PER_DAY;
+  return day <= 4 ? 0 : day <= 7 ? 1 : Math.min(2, YT_UPLOADS_PER_DAY);
+}
+/** One line for the run while a channel warms up (empty once it is done). */
+export function ytWarmupLine(a: Pick<IgAccount, 'youtube'>, today = localDate()): string {
+  const day = ytWarmDay(a, today);
+  if (day === undefined || day > 14) return '';
+  if (day <= 4)
+    return `YOUTUBE WARM-UP day ${day} of 7: no uploads yet (the first Short goes up on day 5). Watch 20-30 minutes of niche Shorts and videos with natural skips, the way a person would; no comments, no links`;
+  if (day <= 7) return `YOUTUBE WARM-UP day ${day} of 7: one Short a day at most, each one its own script and footage; reply to every comment on our Shorts`;
+  return `YOUTUBE RAMP day ${day}: up to 2 Shorts a day, at least 2 hours apart; 3 a day from day 15 if there are no held comments, warnings or upload-limit messages`;
+}
+export const ytLimit = (a: Pick<IgAccount, 'limits' | 'youtube'>, today = localDate()): number => limitsOf(a, 'youtube').posts ?? ytRecommended(a, today);
 
 export interface WarmupPlan {
   day: number;
@@ -315,7 +375,7 @@ export const postedAtOn = (r: Reel, site: Site): string | undefined => linkOn(r,
 
 /** The post limit on a platform today: the user's own number, otherwise the recommended one (the warm-up phase's, or the Shorts number). */
 export function postLimit(a: IgAccount, site: Site, sessions: Session[], today = localDate()): { limit: number; recommended: number; own: boolean } {
-  if (site === 'youtube') return { limit: ytLimit(a), recommended: YT_UPLOADS_PER_DAY, own: limitsOf(a, 'youtube').posts !== undefined };
+  if (site === 'youtube') return { limit: ytLimit(a), recommended: ytRecommended(a), own: limitsOf(a, 'youtube').posts !== undefined };
   const plan = planFor(a, sessions, today, site);
   return { limit: plan.phase.quota.posts, recommended: plan.recommended.posts, own: plan.own.posts !== undefined };
 }

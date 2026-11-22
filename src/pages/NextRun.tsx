@@ -4,6 +4,7 @@ import { runWhen } from '../lib/autopilotWindow';
 import { Card, GhostButton, Page, PrimaryButton, Section } from '../components/ui';
 import { refreshAutopilot, useApp } from '../state/store';
 import { IdeasCard, PickCard, QueueCard } from '../components/ReelControls';
+import { YouTubeClipCard } from '../components/YouTubeClipCard';
 
 // Create > Next run: what the user wants the next autopilot run to do. One
 // note, handed to one run (it reads it at the top of its plan), then kept in
@@ -131,11 +132,14 @@ export default function NextRun() {
                 <div className="flex items-start gap-1.5 text-xs leading-relaxed text-amber-300">
                   <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                   <span>
-                    Scheduled runs skip the profile "{open!.name}": its Autopilot switch is off (Setup, Profiles). This note waits until a run works on this profile.
+                    Scheduled runs skip the profile "{open!.name}": its Autopilot switch is off (Multi run page). This note waits until a run works on this profile.
                   </span>
                 </div>
               )}
             </Card>
+          </Section>
+          <Section title="Clip a YouTube video" description="Paste a link: a run turns its best part into a captioned reel.">
+            <YouTubeClipCard />
           </Section>
           <Section title="Then" description="A queue for the runs after that one.">
             <QueueCard />

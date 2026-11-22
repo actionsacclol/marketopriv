@@ -3,6 +3,7 @@
 import type { SavedVoice, VoiceTune } from './voice';
 import type { SayAs } from './pronounce';
 import type { RunUsage, UsageTier } from './aiUsage';
+import type { PerfReadout, PerfSettings, ProcessReadout } from './perf';
 
 export type FieldValue = string | number | boolean;
 export type Fields = Record<string, FieldValue>;
@@ -41,6 +42,8 @@ export interface Reel {
   squarePath?: string;
   renderedAt?: string;
   renderSeconds?: number;
+  /** When its rendered files went to the Recycle Bin (Setup > Performance, clean up posted reels): render again to post again. */
+  filesCleaned?: string;
   caption?: string;
   hashtags?: string[];
   postedUrl?: string;
@@ -76,6 +79,8 @@ export interface Reel {
   style?: string;
   /** A part of a comment vote story. */
   vote?: VoteStory;
+  /** Made for a Content Rewards campaign (Campaign id): posted with the ad disclosure and submitted to it. */
+  campaignId?: string;
   /** Newest last. */
   metrics?: ReelMetrics[];
   /** What the user thinks of it (Training page). */
@@ -144,6 +149,8 @@ export type SessionAction = 'watch' | 'like' | 'save' | 'follow' | 'comment' | '
 
 export interface SessionItem {
   url: string;
+  /** The thread a comment, reply or message went into (the per-thread cap counts by it); missing = url. */
+  thread?: string;
   creator?: string;
   title?: string;
   actions: SessionAction[];
@@ -152,6 +159,8 @@ export interface SessionItem {
 
 export interface Session {
   id: string;
+  /** Its per-item list (each like, follow, comment) moved to the activity archive (Setup > Performance); its counts stay. */
+  itemsArchived?: number;
   kind: 'warmup' | 'engage' | 'post' | 'research' | 'inbox';
   handle: string;
   /** Which network (missing = Instagram). X sessions count toward X's limits only. */
@@ -309,7 +318,7 @@ export interface AccountSetup {
   firstPost: boolean;
 }
 
-/** An Instagram account we run. It is signed in either inside the hub's own browser (one private session per account) or in the user's own Chrome (through the Krypt Marketo extension). */
+/** An Instagram account we run. It is signed in in the user's own Chrome (through the Krypt Marketo extension). */
 /** A streamer whose clips the clipping style cuts into reels. */
 export interface ClipSource {
   site: ClipSite;
@@ -317,6 +326,8 @@ export interface ClipSource {
   channel: string;
 }
 export type ClipSite = 'twitch' | 'kick';
+/** Where a saved clip came from: a streamer's Twitch / Kick clip, or a part of a YouTube video (save_clip recorded it). */
+export type ClipOrigin = ClipSite | 'youtube';
 export type ClipRange = 'day' | 'week';
 export interface ClipSettings {
   sources: ClipSource[];
@@ -340,7 +351,7 @@ export interface ClipListing {
 /**
  * Where a clip starts in its stream, for spotting the same moment clipped twice. Twitch: `twitch:<vod id>`, start in
  * seconds into that VOD ("Watch Full Video" link). Kick: `kick:<channel>`, start as unix seconds (the clip page's
- * chat replay starts there).
+ * chat replay starts there). YouTube: `youtube:<video id>`, start in seconds into the video.
  */
 export interface ClipMoment {
   stream: string;
@@ -350,7 +361,7 @@ export interface ClipMoment {
 export interface IgAccount {
   id: string;
   handle: string;
-  /** Where it is signed in and driven: the hub's built-in browser, or the user's own Chrome through the extension (same device and fingerprint as their normal use). */
+  /** Where it is signed in and driven: always the user's own Chrome through the extension (same device and fingerprint as their normal use). 'hub' (the old built-in browser) is read as 'chrome'. */
   browser?: 'hub' | 'chrome';
   /** false = Instagram is not run for this account (only its other platforms); the handle is then just the account's name. Missing = on. */
   instagram?: boolean;
@@ -362,7 +373,7 @@ export interface IgAccount {
   igUserId?: string;
   /** Watch only: on Instagram the browser refuses likes, saves, follows, comments and posts (e.g. while Instagram restricts the account). YouTube uploads are not affected. */
   watchOnly?: boolean;
-  /** The account's YouTube channel, for uploading reels as Shorts. Runs in the same place as its Instagram (the hub's browser or the same Chrome profile). */
+  /** The account's YouTube channel, for uploading reels as Shorts. Runs in the same place as its Instagram (the same Chrome profile). */
   youtube?: YtChannel;
   /** The account's X profile: engagement and posting there, with its own warm-up and limits. Runs in the same place as its Instagram. */
   x?: NetProfile;
@@ -383,14 +394,24 @@ export interface IgAccount {
   kryptVisited?: Partial<Record<string, string>>;
   /** When it last reposted one of Krypt's posts on each platform (one a day per platform, keyed by the platform). */
   kryptReposted?: Partial<Record<string, string>>;
+  /** When each platform last asked this account to prove it is human (shared/humanCheck.ts: read-only there for a while after). */
+  humanCheck?: Partial<Record<string, string>>;
   /** Which of Krypt's accounts each follow went to (its id, else its handle), so a corrected id gets followed again (same keys). */
   kryptFollowedTo?: Partial<Record<string, string>>;
   /** When it last commented on one of each Krypt account's posts (as far as the hub could tell; same keys). */
   kryptCommented?: Partial<Record<string, string>>;
+  /** What the account is for on each platform (shared/goals.ts): grow followers or push a product. Missing = grow. */
+  goals?: Partial<Record<Site, GoalId>>;
+  /** What "Push product" pushes: a Krypt tool id or the user's own product (name and link). Missing = the brand (Krypt: all tools, one per reel). */
+  pushProduct?: string;
+  /** The user's own instructions for the AI on each platform (Home > click a platform). get_today and browser_open pass them on. */
+  platformNotes?: Partial<Record<Site, string>>;
   /** Channel styles it runs (Styles page, shared/styles.ts), main first. Missing = just the main style. */
   styles?: string[];
   /** Clipping style: whose Twitch / Kick clips to cut into reels, and how far back to look (Styles page, shared/clipping.ts). */
   clipping?: ClipSettings;
+  /** How rough its meme-style videos may be (reddit, greentext, meme, dumb): clean, edgy or raw (Styles page). Missing = clean. */
+  tone?: 'clean' | 'edgy' | 'raw';
   /** The share of reels each of its styles gets, in percent (Styles page). Missing = the main style half, the others the rest. */
   styleMix?: Record<string, number>;
   status: AccountStatus;
@@ -407,11 +428,19 @@ export interface IgAccount {
 /** A YouTube channel linked to an account. Only uploading Shorts is done there. */
 export interface YtChannel {
   enabled: boolean;
-  /** The channel id (UC…) seen in YouTube Studio, saved the first time; another channel signed in there locks the buttons. */
+  /**
+   * The channel id (UC…): set by the user (a pasted channel link, Accounts page) or saved the first time Studio shows a
+   * channel. One Google account can own many channels, so several accounts may share one Chrome profile's YouTube: the
+   * hub switches Studio to this channel before acting for the account.
+   */
   channelId?: string;
   channelName?: string;
+  /** Its @handle, when known. */
+  channelHandle?: string;
   /** When Shorts were published (ISO), newest last; counts the day's uploads. */
   uploads?: string[];
+  /** YYYY-MM-DD of YouTube warm-up day 1 (the wizard's "Warm up for 1 week"). Missing = an established channel, no warm-up. */
+  warmupStart?: string;
 }
 
 /** An X or TikTok profile linked to an account. */
@@ -496,6 +525,8 @@ export interface ElevenTtsResult {
 }
 
 export type Site = 'instagram' | 'youtube' | 'x' | 'tiktok' | 'facebook' | 'threads' | 'pinterest';
+/** Where the browser tools can open a tab: the platforms, plus contentrewards.com for campaign submissions. */
+export type BrowserSite = Site | 'rewards';
 /** The networks run with their own warm-up next to Instagram. */
 export type Network = 'x' | 'tiktok' | 'facebook' | 'threads' | 'pinterest';
 /** The platforms whose reel links live in Reel.links. */
@@ -526,6 +557,9 @@ export interface VoteStory {
   /** The last part of the series. */
   finale?: boolean;
 }
+
+/** What an account is for on a platform (shared/goals.ts). */
+export type GoalId = 'grow' | 'product';
 
 export type AccountInput = Partial<Omit<IgAccount, 'createdAt' | 'updatedAt' | 'setup'>> & { setup?: Partial<AccountSetup> };
 
@@ -563,6 +597,8 @@ export interface Settings {
   sayAs?: SayAs[];
   /** Ask the user before an AI posts, comments, messages, unfollows or reposts (Accounts page). Off by default: those go through at once, still inside the daily limits. Deletes, blocks, reports and account settings always ask. */
   askApproval?: boolean;
+  /** The most comments, replies and messages an account sends into one thread (a post's comments, an X or Threads conversation, a DM chat). The user's number (Accounts page); missing = 2, the recommended one. Keeps the AI out of long back-and-forths, which on X turn into AI accounts replying to each other. */
+  perThread?: number;
   /** Autopilot (Autopilot page): the AI app Windows starts a few times a day to run Marketo. */
   autopilot?: AutopilotSettings;
   /** Sound off everywhere in Marketo: the hub, its browser windows and the Chrome tabs it drives (sidebar button). */
@@ -574,7 +610,63 @@ export interface Settings {
   /** How much the runs experiment (Styles page). Missing = balanced. */
   variety?: Variety;
   /** Voice test (Voices page): ElevenLabs voices ("el:<id>") rotated with the default voice on story reels until each has measured posts on every platform. */
-  voiceTest?: string[];}
+  voiceTest?: string[];
+  /** Only from an earlier build: a profile's proxy is now its own file (proxy.json in the profile's folder). */
+  proxy?: ProxySettings;
+}
+
+export type ProxyScheme = 'http' | 'https' | 'socks5';
+export interface ProxySettings {
+  on: boolean;
+  scheme: ProxyScheme;
+  host: string;
+  port: number;
+  username?: string;
+  /** A password is saved (encrypted, in the profile's folder). */
+  hasPassword?: boolean;
+  /** When the password was last set (so other windows know to read it again). */
+  passAt?: string;
+  /** The exit IP the profile is kept to ("sticky"): the first one a check saw. Pages refuse to open from any other. */
+  ip?: string;
+  country?: string;
+  city?: string;
+  /** The last check: when, the IP it saw, and what went wrong if it failed. */
+  checkedAt?: string;
+  seenIp?: string;
+  error?: string;
+}
+
+/** What the Proxy card shows. */
+export interface ProxyState {
+  settings: ProxySettings | null;
+  /** The OS can encrypt the password (without it, the password is kept in memory until the app quits). */
+  canEncrypt: boolean;
+  /** The last check found a different exit IP than the sticky one. */
+  ipChanged: boolean;
+}
+
+/** One profile's line in the Multi run page's proxy list. */
+export interface ProxyRow {
+  id: string;
+  name: string;
+  /** The profile this window has open. */
+  active: boolean;
+  /** Multi-instance mode: its window is open. */
+  running?: boolean;
+  /** A Chrome profile's own proxy (Setup > Performance, a proxy for each Chrome profile): the accounts that run in it. */
+  accounts?: string[];
+  state: ProxyState;
+}
+
+export interface ProxyInput {
+  on: boolean;
+  scheme: ProxyScheme;
+  host: string;
+  port: number;
+  username?: string;
+  /** Left out = keep the saved one; '' = remove it. */
+  password?: string;
+}
 
 export type AutopilotAi = 'claude' | 'codex';
 export interface AutopilotSettings {
@@ -592,6 +684,8 @@ export interface AutopilotSettings {
   saver?: boolean;
   /** Usage tier (shared/aiUsage.ts): how much one run takes on. Missing = max (full runs, as before tiers). */
   tier?: UsageTier;
+  /** Goal-driven extra runs a day (shared/extraRuns.ts), only with the token saver off. Missing = the default; 0 = none. */
+  extraRuns?: number;
 }
 export interface AutopilotReport {
   file: string;
@@ -609,6 +703,8 @@ export interface AutopilotReport {
   profile?: string;
   /** The tokens it used, when the AI app reports them. */
   usage?: RunUsage;
+  /** A short goal-driven extra run between the scheduled ones. */
+  extra?: boolean;
 }
 export interface AutopilotStatus extends AutopilotSettings {
   /** Windows only for now. */
@@ -623,6 +719,8 @@ export interface AutopilotStatus extends AutopilotSettings {
   prompt: string;
   /** The profiles a run works through, when the hub has more than one. */
   profiles?: string[];
+  /** Goal-driven extra runs: how many a day, how many ran today, and what the planner sees now. */
+  extra: { max: number; today: number; note: string };
 }
 
 /** What the reels are for. Turned into the instructions every connected AI gets. */
@@ -697,6 +795,59 @@ export interface PostLog {
   updatedAt?: string;
 }
 
+/** One part of a long video's script: a chapter, spoken as one narration file. */
+export interface LongSection {
+  heading: string;
+  /** What the narrator says (the whole section). */
+  text: string;
+  /** What is on screen meanwhile (for the edit): footage, a card, a list. */
+  visual?: string;
+  /** The narration MP3, once bought (narrate_long_video), and its length. */
+  audio?: string;
+  seconds?: number;
+  /** The text that audio says (a changed text is narrated again). */
+  spoken?: string;
+  /** Kip's moves in this section, "0:wave, 3:talk, 9:point" (seconds into the section). Empty = automatic. */
+  kip?: string;
+  /** Kip presenting this section (render_kip): green-screen MP4. */
+  kipVideo?: string;
+}
+
+export type LongStatus = 'script' | 'narrated' | 'edited' | 'ready' | 'uploaded';
+
+/** A long YouTube video (5-20 min, 16:9): script in the hub, edit in Krypt Editor, upload through YouTube Studio. */
+export interface LongVideo {
+  id: string;
+  /** The account whose YouTube channel it goes to. */
+  accountId: string;
+  /** The YouTube title (search words first, under 70 characters). */
+  title: string;
+  topic?: string;
+  /** krypt_tools ids it is about. */
+  tools?: string[];
+  sections: LongSection[];
+  /** The YouTube description (SEO: what it covers, chapters, links). */
+  description?: string;
+  tags?: string[];
+  /** The few words on the thumbnail; *word* is drawn in the accent colour. */
+  thumbnailText?: string;
+  /** A picture or video behind the thumbnail text (a video: one frame of it). */
+  thumbnailBg?: string;
+  /** A second picture on the thumbnail's right side (a screenshot of the product). */
+  thumbnailSide?: string;
+  thumbnailPath?: string;
+  /** The Krypt Editor project and its export. */
+  projectPath?: string;
+  videoPath?: string;
+  status: LongStatus;
+  visibility?: 'unlisted' | 'public' | 'private';
+  /** The video's link once uploaded. */
+  url?: string;
+  voice?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Db {
   version: 1;
   settings: Settings;
@@ -707,6 +858,8 @@ export interface Db {
   reels: Reel[];
   /** Every post on every platform (see PostLog). */
   posts: PostLog[];
+  /** Long YouTube videos (Create > Long videos). */
+  longVideos?: LongVideo[];
   references: Reference[];
   /** Uploaded videos to copy the editing style of. */
   refVideos: RefVideo[];
@@ -723,6 +876,61 @@ export interface Db {
   customStyles?: CustomStyle[];
   /** Reels the AI suggested and the user has not queued or dropped yet, newest first. */
   reelIdeas?: ReelIdea[];
+  /** Content Rewards campaigns the user joined (Create > Campaigns). */
+  campaigns?: Campaign[];
+  /** Posts sent (or due) to a Content Rewards campaign, newest first. */
+  submissions?: Submission[];
+}
+
+/** A Content Rewards (contentrewards.com) campaign the user joined. Its reels are made to its rules and their links submitted after posting. */
+export interface Campaign {
+  id: string;
+  /** contentrewards.com/c/campaigns/<id> */
+  url: string;
+  title: string;
+  brand?: string;
+  /** Where it pays (Content Rewards connects TikTok, Instagram, YouTube, X and Facebook). */
+  platforms: Site[];
+  /** What it pays, as shown ("$1/1K views, max $150 a clip"). */
+  pay?: string;
+  /** The campaign's rules and brief, copied from its page once joined. */
+  rules?: string;
+  /** Must be in every caption. */
+  hashtags?: string[];
+  mentions?: string[];
+  links?: string[];
+  /** Streamer / channel links to clip from, for clipping campaigns. */
+  sources?: string[];
+  /** The campaign's ad banner (a picture in its folder): drawn near the bottom of every reel made for it. */
+  banner?: string;
+  /** Marketo account ids that make reels for it. */
+  accounts: string[];
+  /** Campaign reels a day per account (the user's number). */
+  perDay: number;
+  on: boolean;
+  /** Set by the user only: a test of the submit flow from their own (Krypt) accounts, no payout expected.
+   *  Lifts the Krypt-account block, and no reels are made for it unless the user asks. */
+  test?: boolean;
+  addedAt: string;
+  updatedAt: string;
+}
+
+export type SubmissionStatus = 'due' | 'submitted' | 'approved' | 'rejected' | 'missed';
+
+/** One post sent to a campaign. A post goes to one campaign, once. */
+export interface Submission {
+  id: string;
+  campaignId: string;
+  reelId: string;
+  accountId: string;
+  site: Site;
+  postUrl: string;
+  postedAt: string;
+  /** Content Rewards takes a post only within 30 minutes of it going up. */
+  deadline: string;
+  status: SubmissionStatus;
+  submittedAt?: string;
+  note?: string;
 }
 
 /** The user's instructions for the next autopilot run. Handed to one run, then kept in `done`. */
@@ -846,10 +1054,27 @@ export interface UiFocus {
   reelId?: string;
 }
 
-export type PageId = 'dashboard' | 'styles' | 'warming' | 'accounts' | 'next-run' | 'studio' | 'examples' | 'library' | 'results' | 'research' | 'train-rank' | 'train-hooks' | 'train-topics' | 'train-notes' | 'voices' | 'krypt' | 'chat' | 'agents' | 'autopilot' | 'usage' | 'kip' | 'setup';
+export type PageId = 'dashboard' | 'styles' | 'warming' | 'accounts' | 'next-run' | 'long' | 'studio' | 'examples' | 'library' | 'results' | 'research' | 'train-rank' | 'train-hooks' | 'train-topics' | 'train-notes' | 'voices' | 'krypt' | 'chat' | 'agents' | 'autopilot' | 'usage' | 'kip' | 'multi-run' | 'resources' | 'campaigns' | 'setup';
 
 // ── Instagram browser ───────────────────────────────────────────────────────
 /** One account's Instagram session, in the hub's browser or in the user's Chrome. */
+/** A channel of the Google sign-in in a Chrome profile, as YouTube's channel switcher lists it. */
+export interface YtChannelOption {
+  name: string;
+  /** Without the @. Channels without one can't be added from the list (paste their link instead). */
+  handle?: string;
+  photo?: string;
+  /** Google's current channel in that profile. */
+  selected: boolean;
+  /** The Marketo account that already runs it. */
+  owner?: { id: string; handle: string };
+}
+
+/** What a Chrome profile is signed in to, per platform (the setup wizard reads it when a profile is picked). */
+export interface ProfileScan {
+  sites: Partial<Record<Site, { signedIn: boolean; handle?: string; channels?: YtChannelOption[]; error?: string }>>;
+}
+
 export interface BrowserStatus {
   accountId: string;
   handle: string;
@@ -972,6 +1197,12 @@ export interface ProfileInfo {
   active: boolean;
   /** Scheduled autopilot runs work on it. */
   autopilot: boolean;
+  /** Multi-instance mode only: its own window is open now. */
+  running?: boolean;
+  /** Running, and its window is on screen (false = running in the background). */
+  visible?: boolean;
+  /** Runs in the background (no window) whenever Main is open or a run needs it. */
+  background?: boolean;
 }
 
 /** What the profile calls answer with. */
@@ -996,17 +1227,37 @@ export interface MarketoApi {
     update(): Promise<UpdateInfo>;
     profiles(): Promise<ProfileInfo[]>;
     /** New profile, empty or with this one's settings and voices (never its accounts, brand or content). */
-    createProfile(name: string, copySettings: boolean): Promise<ProfilesResult>;
+    /** A new profile; it can start with the open one's settings and/or its Training and knowledge (never its accounts). */
+    createProfile(name: string, copySettings: boolean, copyKnowledge: boolean): Promise<ProfilesResult>;
     renameProfile(id: string, name: string): Promise<ProfilesResult>;
     /** Its folder goes to the Recycle Bin. */
     deleteProfile(id: string): Promise<ProfilesResult>;
     /** Open it: the window reloads on that profile. */
     useProfile(id: string): Promise<ProfilesResult>;
     setProfileAutopilot(id: string, on: boolean): Promise<ProfilesResult>;
+    /** Multi-instance mode: run the profile in the background (no window); on starts it now. */
+    setProfileBackground(id: string, on: boolean): Promise<ProfilesResult>;
+    /** Multi-instance mode: quit another profile's window or background run. */
+    stopProfile(id: string): Promise<ProfilesResult>;
+    /** Multi-instance mode: start every background profile that is not running. */
+    startBackground(): Promise<ProfilesResult>;
+    /** Multi-instance mode: as saved (takes effect at the next start), and whether this window runs in it. */
+    profilesMulti(): Promise<{ saved: boolean; running: boolean }>;
+    setProfilesMulti(on: boolean): Promise<ProfilesResult>;
+    /** Quit and start again (multi-instance mode is read at start). */
+    restart(): Promise<void>;
     /** Where the shipped example videos are, and which ones exist. */
     examples(): Promise<{ dir: string; have: string[] }>;
     openExternal(url: string): Promise<void>;
     showItemInFolder(p: string): Promise<void>;
+    /** Open the Backgrounds or Memes folder (made when missing) for the meme styles. */
+    openMediaFolder(kind: 'backgrounds' | 'memes'): Promise<ActionResult<string>>;
+    /** A Content Rewards campaign's own folder under Campaigns/ (made when missing). */
+    openCampaignFolder(title: string): Promise<ActionResult<string>>;
+    /** A YouTube channel from a pasted link, @handle or UC… id: its id, name and handle. */
+    resolveYtChannel(input: string): Promise<ActionResult<{ id: string; name?: string; handle?: string }>>;
+    /** Setup > Help: save the logs as one zip (emails, user name and keys blanked). data null = the user closed the save box. */
+    exportLogs(): Promise<ActionResult<{ file: string; files: number; bytes: number } | null>>;
     pickFile(kind: 'video' | 'audio' | 'image'): Promise<string | null>;
     pickDirectory(): Promise<string | null>;
     copyText(text: string): Promise<void>;
@@ -1030,11 +1281,14 @@ export interface MarketoApi {
     askBrief(): Promise<ActionResult>;
     duplicateReel(id: string): Promise<ActionResult<Reel>>;
     deleteReel(id: string): Promise<ActionResult>;
+    deleteLongVideo(id: string): Promise<ActionResult>;
     /** Remove reels from the hub; with trashFiles their rendered videos go to the Recycle Bin / Trash. */
     deleteReels(ids: string[], trashFiles: boolean): Promise<ActionResult<DeleteReelsResult>>;
     updateSettings(patch: Partial<Settings>): Promise<ActionResult<Settings>>;
     deleteReference(id: string): Promise<ActionResult>;
     saveAccount(a: AccountInput): Promise<ActionResult<IgAccount>>;
+    /** Another YouTube channel of the same Google sign-in: a new YouTube-only account in this account's Chrome profile. */
+    addYtChannel(fromAccountId: string, link: string): Promise<ActionResult<IgAccount>>;
     /** The user's instructions for the next autopilot run ('' clears them). */
     setNextRun(text: string): Promise<ActionResult>;
     /** The reel queue (Create > Next run). */
@@ -1048,6 +1302,13 @@ export interface MarketoApi {
     queueIdea(id: string): Promise<ActionResult>;
     dropIdea(id: string): Promise<ActionResult>;
     deleteAccount(id: string): Promise<ActionResult>;
+    /** A reel went live (pasted link): its link, the post log, and a Content Rewards submission if it is a campaign reel. */
+    markPosted(id: string, site: Site, url: string): Promise<ActionResult<Reel>>;
+    saveCampaign(input: Partial<Campaign> & { url?: string; id?: string }): Promise<ActionResult<Campaign>>;
+    deleteCampaign(id: string): Promise<ActionResult>;
+    /** A picture file or https link as the campaign's ad banner ("" removes it); redo = reels sent back to draft. */
+    setCampaignBanner(id: string, source: string): Promise<ActionResult<{ path?: string; redo: number }>>;
+    setSubmission(id: string, status: SubmissionStatus): Promise<ActionResult>;
   };
   research: {
     docs(): Promise<ResearchDoc[]>;
@@ -1080,8 +1341,8 @@ export interface MarketoApi {
     /** Open the account's Instagram (or YouTube Studio) window, to sign in or to watch. */
     open(accountId: string, url?: string, site?: Site): Promise<ActionResult>;
     close(accountId: string, site?: Site): Promise<ActionResult>;
-    /** Sign the account out here: closes the window and wipes its session. */
-    clear(accountId: string): Promise<ActionResult>;
+    /** Every channel of the Google sign-in in the account's Chrome profile (opens YouTube's channel switcher there). */
+    ytChannels(accountId: string): Promise<ActionResult<YtChannelOption[]>>;
   };
   refs: {
     /** Store an analysed reference video (the hub keeps its own copy of the file). */
@@ -1089,23 +1350,51 @@ export interface MarketoApi {
     update(id: string, patch: { name?: string; notes?: string }): Promise<ActionResult<RefVideo>>;
     delete(id: string): Promise<ActionResult>;
   };
+  /** Setup > Performance: one set of settings for the whole PC (every profile window follows it). */
+  perf: {
+    get(): Promise<PerfSettings>;
+    set(patch: PerfSettings): Promise<PerfSettings>;
+    onChanged(cb: (p: PerfSettings) => void): () => void;
+    readout(): Promise<PerfReadout>;
+    /** Chrome and AI processes, read once from the process list. */
+    measure(): Promise<ProcessReadout>;
+    /** A render started (true) or ended (false): low-priority rendering lowers the hub's own processes meanwhile. */
+    rendering(on: boolean): Promise<void>;
+    /** One render at a time across profiles: whether this window's render may start, or whose is going. */
+    renderTurn(): Promise<{ ok: boolean; holder?: string }>;
+    renderDone(): Promise<void>;
+  };
   autopilot: {
     status(): Promise<AutopilotStatus>;
     enable(input: { ai: AutopilotAi; times: string[]; model?: string }): Promise<ActionResult<AutopilotStatus>>;
     /** Which model the runs use ('' = the AI app's own setting). */
     setModel(model: string): Promise<ActionResult<AutopilotStatus>>;
     setSaver(on: boolean): Promise<ActionResult<AutopilotStatus>>;
+    setExtraRuns(n: number): Promise<ActionResult<AutopilotStatus>>;
     /** Pick a usage tier: sets the model, run times and token saver to the tier's, and sizes each run to it. */
     setTier(tier: UsageTier): Promise<ActionResult<AutopilotStatus>>;
     disable(): Promise<ActionResult<AutopilotStatus>>;
     runNow(): Promise<ActionResult<AutopilotStatus>>;
     openFolder(): Promise<void>;
   };
+  proxy: {
+    /** Every profile and its proxy (any window can set any profile's). */
+    list(): Promise<ProxyRow[]>;
+    /** The open profile's Chrome profiles, each with its own proxy (Setup > Performance, a proxy for each Chrome profile). Their ids work in save, check and acceptIp. */
+    chromeRows(): Promise<ProxyRow[]>;
+    save(profileId: string, input: ProxyInput): Promise<ActionResult<ProxyState>>;
+    /** The exit IP through that profile's proxy now (the first good one becomes the sticky IP). */
+    check(profileId: string): Promise<ActionResult<ProxyState>>;
+    /** Keep the IP the last check saw as the sticky one. */
+    acceptIp(profileId: string): Promise<ActionResult<ProxyState>>;
+  };
   chrome: {
     status(): Promise<ChromeStatus>;
     onStatus(cb: (s: ChromeStatus) => void): () => void;
     /** Open a window of that Chrome profile (its folder, from the status list). */
     open(dir: string): Promise<ActionResult>;
+    /** Who that Chrome profile ('' = the only one connected) is signed in as on each platform, and its YouTube channels. */
+    scan(dir: string): Promise<ActionResult<ProfileScan>>;
   };
   approvals: {
     list(): Promise<Approval[]>;
@@ -1133,8 +1422,11 @@ export interface MarketoApi {
   };
   /** Stream clips for the clipping style (electron/clips.ts). */
   clips: {
-    /** Download a Twitch / Kick clip the way its page plays it. */
-    fetch(url: string): Promise<ActionResult<{ bytes: Uint8Array; kind: 'mp4' | 'ts'; site: ClipSite; channel: string; url: string; title: string; moment: ClipMoment | null }>>;
+    /**
+     * Download a Twitch / Kick clip the way its page plays it, or record a part of a YouTube video off its page
+     * (start / seconds; kind 'rec' = a recording that still needs remuxing into a plain MP4).
+     */
+    fetch(url: string, span?: { start?: number; seconds?: number }): Promise<ActionResult<{ bytes: Uint8Array; kind: 'mp4' | 'ts' | 'rec'; site: ClipOrigin; channel: string; url: string; title: string; moment: ClipMoment | null }>>;
     /** Save a clip MP4 in the output folder's Clips folder; returns its path. */
     save(bytes: Uint8Array, name: string): Promise<ActionResult<string>>;
     /** Keep a saved clip's length and speech; returns the reels whose clip is the same moment. */
@@ -1166,6 +1458,10 @@ export interface MarketoApi {
     save(reelId: string, data: Uint8Array, seconds: number, shape?: RenderShape): Promise<ActionResult<string>>;
     /** Write one frame (base64 PNG) next to the renders; returns its path. */
     saveImage(reelId: string, png: string, t: number, shape?: RenderShape): Promise<ActionResult<string>>;
+    /** A long video's thumbnail (1280x720 PNG) into its folder; saved on the video. */
+    saveLongThumb(id: string, png: string): Promise<ActionResult<string>>;
+    /** A file of a long video (a Kip clip) into its folder; with section, saved on that section as its Kip clip. */
+    saveLongFile(id: string, name: string, data: Uint8Array, section?: number): Promise<ActionResult<string>>;
   };
   ui: {
     onFocus(cb: (f: UiFocus) => void): () => void;

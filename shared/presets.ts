@@ -2,6 +2,7 @@ import type { FieldValue, Fields } from './types';
 import { ELEVEN_SPEED, TUNE_RANGE, VOICE_IDS, cleanTune, clipKey, hashKey, isEleven, readVoiceCache, tuneFromFields, voiceName, type VoiceTune } from './voice';
 import { chatEnd, pollEnd, storySfx } from './sfx';
 import { ACTION_HELP, ARTS } from './character';
+import { STICK_FLAG, STICK_GEAR, STICK_HELP, stickScreenStart } from './stickman';
 
 // Preset styles: the schema, defaults and timing of every reel format. Pure
 // data so the main process (MCP tool listing / validation) and the renderer
@@ -32,7 +33,47 @@ export interface PresetMeta {
   /** What in the niche it imitates (style only). */
   inspiredBy: string;
   fields: PresetField[];
+  /** Not a brand reel (memes, Reddit stories): new ones get no brand logo, end card or disclaimer unless asked. */
+  brandFree?: boolean;
 }
+
+/** Music Marketo makes itself, for the voiced presets. */
+export const BEDS = ['none', 'lofi', 'ambient', 'pulse', 'phonk', 'goofy', 'creepy'];
+const BED_HELP =
+  'Music made by Marketo itself (nothing licensed, nothing a platform can mute): lofi = dusty keys, swung drums and vinyl crackle; ambient = slow pads; pulse = a driving synth groove; phonk = cowbell riff, sliding 808 and hard drums (meme edits); goofy = bouncy tuba and xylophone (dumb / funny reels); creepy = a low drone and a music box (scary stories). It dips under the voice. The key and chords change per reel.';
+
+/** Effects a beat can carry in its flags (meme and narrated reels; story reels too). Sounds play at their time; picture effects change the frame from their time on. */
+export const FX_SOUNDS = ['boom', 'horn', 'scratch', 'ding', 'buzzer', 'boing', 'honk', 'sad', 'bass', 'whoosh', 'pop', 'impact', 'riser'] as const;
+export const FX_LOOKS = ['zoom', 'shake', 'fry', 'flash', 'freeze', 'slowzoom'] as const;
+export type FxKind = (typeof FX_SOUNDS)[number] | (typeof FX_LOOKS)[number];
+export interface Fx {
+  kind: FxKind;
+  /** Seconds into the beat. */
+  at: number;
+  /** Zoom: the point to zoom onto, fractions of the frame. */
+  x: number;
+  y: number;
+}
+export const FX_HELP =
+  'Effects (flags, any number): sounds boom (deep vine-boom hit), horn (air horn), scratch (record scratch), ding, buzzer (wrong answer), boing, honk (clown horn), sad (sad trombone), bass (distorted bass drop), whoosh, pop, impact, riser; picture effects zoom (sudden punch-in, zoom=0.5,0.3 onto that point of the frame), shake, fry (deep-fried colours), flash (white flash), freeze (the video stops), slowzoom (slow push-in). Each plays at the start of the beat, or add @seconds into the beat: "zoom@1.2=0.45,0.3 boom@1.2 shake@1.2". Use them on the punchline, not on every beat.';
+
+const FX_TOKEN = /^([a-z]+)(?:@(\d+(?:\.\d+)?))?(?:=(\d*\.?\d+),(\d*\.?\d+))?(?:@(\d+(?:\.\d+)?))?$/;
+const isFxKind = (k: string): k is FxKind => (FX_SOUNDS as readonly string[]).includes(k) || (FX_LOOKS as readonly string[]).includes(k);
+export const isFxSound = (k: string): boolean => (FX_SOUNDS as readonly string[]).includes(k);
+
+/** One flag token as an effect, or null. */
+export function parseFx(tok: string): Fx | null {
+  const m = FX_TOKEN.exec(tok.toLowerCase());
+  if (!m || !isFxKind(m[1])) return null;
+  const at = Number(m[2] ?? m[5] ?? 0);
+  const x = m[3] !== undefined ? Math.min(1, Math.max(0, Number(m[3]))) : 0.5;
+  const y = m[4] !== undefined ? Math.min(1, Math.max(0, Number(m[4]))) : 0.42;
+  return { kind: m[1], at: Number.isFinite(at) ? Math.max(0, at) : 0, x, y };
+}
+
+/** Presets that speak their beats (the story engine's voice, effects and music). */
+export const VOICED_PRESETS = ['story', 'narrated', 'meme', 'stickman'];
+export const isVoiced = (preset: string): boolean => VOICED_PRESETS.includes(preset);
 
 export const ACCENTS: Record<string, [string, string, string]> = {
   krypt: ['#6366F1', '#A855F7', '#EC4899'],
@@ -54,6 +95,29 @@ const COMMON: PresetField[] = [
   { key: 'music_volume', label: 'Music volume', type: 'number', default: 0.8, min: 0, max: 1, step: 0.05 },
 ];
 
+// Memes and Reddit stories carry no brand: no logo, no end card, no small print (the caller can still set them).
+const BRAND_FREE: PresetField[] = COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f.key === 'logo' ? { ...f, default: 'none' } : f.key === 'cta' ? { ...f, default: '' } : f.key === 'cta_sub' ? { ...f, default: '' } : f));
+
+// The voice, effects and music fields every voiced preset (story, narrated, meme) has.
+const VOICE_FIELDS: PresetField[] = [
+  { key: 'voiceover', label: 'Voice-over', type: 'toggle', default: true, help: 'On-device AI voice (Kokoro). Generated on preview and render.' },
+  { key: 'voice', label: 'Voice', type: 'select', default: 'am_michael', options: VOICE_IDS, help: 'One voice for the whole reel. A voice the user saved on the Voices page also works here by its name (it sets all the voice_* fields). An ElevenLabs voice is "el:<voice id>" or its name: it is bought only at render_reel; previews have no narration until then.' },
+  { key: 'voice_standin', label: 'Fallback voice', type: 'text', default: '', hidden: true, help: 'The free voice a render falls back to when the ElevenLabs lines cannot be bought (default Michael).' },
+  { key: 'voice_free', label: 'Rendered with the free voice', type: 'text', default: '', hidden: true, help: 'Set by the hub when a render could not buy the ElevenLabs lines and used the free voice.' },
+  { key: 'voice_speed', label: 'Voice speed', type: 'number', default: 1.2, min: 0.7, max: 1.5, step: 0.05 },
+  { key: 'voice_pitch', label: 'Voice pitch', type: 'number', default: 0, ...TUNE_RANGE.pitch, help: 'Semitones: below 0 is deeper, above 0 is higher.' },
+  { key: 'voice_warmth', label: 'Voice warmth', type: 'number', default: 0, ...TUNE_RANGE.warmth, help: 'More or less low end, in dB.' },
+  { key: 'voice_clarity', label: 'Voice clarity', type: 'number', default: 0, ...TUNE_RANGE.clarity, help: 'More or less high end, in dB.' },
+  { key: 'voice_blend', label: 'Blend with', type: 'select', default: 'none', options: ['none', ...VOICE_IDS], help: 'A second voice mixed into the first (still one voice for the whole reel).' },
+  { key: 'voice_blend_amount', label: 'Blend amount', type: 'number', default: 0, ...TUNE_RANGE.blendAmount, help: 'Share of the second voice: 0.3 = 30%.' },
+  { key: 'voice_volume', label: 'Voice volume', type: 'number', default: 1, min: 0, max: 1.5, step: 0.05 },
+  { key: 'sfx', label: 'Sound effects', type: 'toggle', default: true, help: 'Synthesized ticks, pops, whooshes, risers and hits on every on-screen change, mixed under the voice.' },
+  { key: 'sfx_volume', label: 'Effects volume', type: 'number', default: 0.5, min: 0, max: 1, step: 0.05 },
+  { key: 'bed', label: 'Background music', type: 'select', default: 'none', options: BEDS, help: BED_HELP },
+  { key: 'bed_volume', label: 'Music level', type: 'number', default: 0.6, min: 0, max: 1, step: 0.05, help: 'Level in the gaps between lines; it drops to about 40% of this while someone talks.' },
+  { key: 'vo_cache', label: 'Voice cache', type: 'longtext', default: '', hidden: true },
+];
+
 export const PRESETS: PresetMeta[] = [
   {
     id: 'story',
@@ -73,26 +137,11 @@ export const PRESETS: PresetMeta[] = [
           '4.0 | So Krypto Mirror shows what *you* would have kept. | card | Krypto Mirror | Copy score: what a follower keeps;Every follow starts on paper;Keys never leave your PC',
           '3.4 | Not a money printer. An *honest* record. | cta | krypt.cc | link in bio',
         ].join('\n'),
-        help: 'One beat per line: seconds | headline | visual | a | b | say | flags. say = what the voice reads (default: the headline; - = silent); write numbers as words. flags (space separated): light / dark (this beat\'s look), wipe (colour wipe into the beat), pause=1.2 (silence before the line, for suspense), speed=0.95 (this line\'s pace). A beat stretches to fit its line. *word* = accent. Visuals: title (a big, b small) · number (a counts up, b label) · chart (a = values "0.2,0.5,7.3,15.1,0.6" or labelled "2010:41;2013:7500000", b = format "$%M", or "$~" for compact $41 / $7.5M / $1.26B; draws live with the labels along the bottom, red bracket on a crash) · coin (a = symbol "₿" or "SOL", b = label "10,000 BTC"; a gold coin spins in and lands) · flow (a = source labels "A;B;C;D;E" or a count, b = arrow label "983 SOL") · dots (a = count "10,939", b label; a field of dots fills while it counts) · wallet (a title, b = "Label:value;Label:value"; checking… then values) · bars (a = "Label:-9.9;*Highlight:-4.7;!Bad outcome:82.5", b unit; * = highlight, ! = red) · wallets (a big, b label) · lag (a = leader tag, b = follower tag) · steps (a = "One;Two;!Bad") · card (a title, b = "row;row") · follow (a button text, b line; a cursor clicks it) · poll (a = \"Copy;Skip\", b line; two answers and a 3-2-1 countdown, pair with pause=0.4) · stamp (a = verdict \"BUSTED\" or \"−9.4%\", b line; slams in with a hit) · crosshair (a = shapes \"cross;dot;circle;t;chevron;x;plus;lineup\", each optionally :#colour, b line; a game scene where the crosshair snaps through each shape every 0.5s, its name under it) · radar (a = sounds \"Footsteps:left;Gunshot:right;Reload:front-left\", each a name and a side: ahead, left, right, behind, front-left... or degrees, optionally :#colour; b line; a game scene with a ring round the crosshair that lights up on each sound\'s side, one sound a second, its name and side under it; footsteps amber, shots cyan; for Krypt Radar) · tier (a = "S:Item", tiers S A B C D F; each tier beat drops one item onto a tier-list board that keeps the earlier ones, b = optional line under the board) · chat (a = messages separated by ; , ">text" = sent by me on the right, others received on the left; b = the contact name; the thread carries on across chat beats with the same contact, messages pop in as the line is read) · screen (shows the screen recording in, field video: a = the second to start at, optionally "@0.7,0.3 x2" to zoom 2x around that point; b = an optional callout under it) · cta (a title, b line) · none. ' + ACTION_HELP,
+        help: 'One beat per line: seconds | headline | visual | a | b | say | flags. say = what the voice reads (default: the headline; - = silent); write numbers as words. flags (space separated): light / dark (this beat\'s look), wipe (colour wipe into the beat), pause=1.2 (silence before the line, for suspense), speed=0.95 (this line\'s pace). A beat stretches to fit its line. *word* = accent. Visuals: title (a big, b small) · number (a counts up, b label) · chart (a = values "0.2,0.5,7.3,15.1,0.6" or labelled "2010:41;2013:7500000", b = format "$%M", or "$~" for compact $41 / $7.5M / $1.26B; draws live with the labels along the bottom, red bracket on a crash) · coin (a = symbol "₿" or "SOL", b = label "10,000 BTC"; a gold coin spins in and lands) · flow (a = source labels "A;B;C;D;E" or a count, b = arrow label "983 SOL") · dots (a = count "10,939", b label; a field of dots fills while it counts) · wallet (a title, b = "Label:value;Label:value"; checking… then values) · bars (a = "Label:-9.9;*Highlight:-4.7;!Bad outcome:82.5", b unit; * = highlight, ! = red) · wallets (a big, b label) · lag (a = leader tag, b = follower tag) · steps (a = "One;Two;!Bad") · card (a title, b = "row;row") · follow (a button text, b line; a cursor clicks it) · poll (a = \"Copy;Skip\", b line; two answers and a 3-2-1 countdown, pair with pause=0.4) · stamp (a = verdict \"BUSTED\" or \"−9.4%\", b line; slams in with a hit) · crosshair (a = shapes \"cross;dot;circle;t;chevron;x;plus;lineup\", each optionally :#colour, b line; a game scene where the crosshair snaps through each shape every 0.5s, its name under it) · radar (a = sounds \"Footsteps:left;Gunshot:right;Reload:front-left\", each a name and a side: ahead, left, right, behind, front-left... or degrees, optionally :#colour; b line; a game scene with a ring round the crosshair that lights up on each sound\'s side, one sound a second, its name and side under it; footsteps amber, shots cyan; for Krypt Radar) · tier (a = "S:Item", tiers S A B C D F; each tier beat drops one item onto a tier-list board that keeps the earlier ones, b = optional line under the board) · chat (a = messages separated by ; , ">text" = sent by me on the right, others received on the left; b = the contact name; the thread carries on across chat beats with the same contact, messages pop in as the line is read) · screen (shows the screen recording in, field video: a = the second to start at, optionally "@0.7,0.3 x2" to zoom 2x around that point; b = an optional callout under it) · cta (a title, b line) · none. ' + ACTION_HELP + ' ' + FX_HELP,
       },
       { key: 'card_by', label: 'Card maker line', type: 'text', default: 'by Krypt', help: 'Small line under the product name on card beats, e.g. "by Krypt" for a Krypt tool or "by <your brand>".' },
       { key: 'video', label: 'Screen recording', type: 'file', fileKind: 'video', default: '', help: 'The recording screen beats show (record_screen makes one). Each screen beat picks its own start second.' },
-      { key: 'voiceover', label: 'Voice-over', type: 'toggle', default: true, help: 'On-device AI voice (Kokoro). Generated on preview and render.' },
-      { key: 'voice', label: 'Voice', type: 'select', default: 'am_michael', options: VOICE_IDS, help: 'One voice for the whole reel. A voice the user saved on the Voices page also works here by its name (it sets all the voice_* fields). An ElevenLabs voice is "el:<voice id>" or its name: it is bought only at render_reel; previews have no narration until then.' },
-      { key: 'voice_standin', label: 'Fallback voice', type: 'text', default: '', hidden: true, help: 'The free voice a render falls back to when the ElevenLabs lines cannot be bought (default Michael).' },
-      { key: 'voice_free', label: 'Rendered with the free voice', type: 'text', default: '', hidden: true, help: 'Set by the hub when a render could not buy the ElevenLabs lines and used the free voice.' },
-      { key: 'voice_speed', label: 'Voice speed', type: 'number', default: 1.2, min: 0.7, max: 1.5, step: 0.05 },
-      { key: 'voice_pitch', label: 'Voice pitch', type: 'number', default: 0, ...TUNE_RANGE.pitch, help: 'Semitones: below 0 is deeper, above 0 is higher.' },
-      { key: 'voice_warmth', label: 'Voice warmth', type: 'number', default: 0, ...TUNE_RANGE.warmth, help: 'More or less low end, in dB.' },
-      { key: 'voice_clarity', label: 'Voice clarity', type: 'number', default: 0, ...TUNE_RANGE.clarity, help: 'More or less high end, in dB.' },
-      { key: 'voice_blend', label: 'Blend with', type: 'select', default: 'none', options: ['none', ...VOICE_IDS], help: 'A second voice mixed into the first (still one voice for the whole reel).' },
-      { key: 'voice_blend_amount', label: 'Blend amount', type: 'number', default: 0, ...TUNE_RANGE.blendAmount, help: 'Share of the second voice: 0.3 = 30%.' },
-      { key: 'voice_volume', label: 'Voice volume', type: 'number', default: 1, min: 0, max: 1.5, step: 0.05 },
-      { key: 'sfx', label: 'Sound effects', type: 'toggle', default: true, help: 'Synthesized ticks, pops, whooshes, risers and hits on every on-screen change, mixed under the voice.' },
-      { key: 'sfx_volume', label: 'Effects volume', type: 'number', default: 0.5, min: 0, max: 1, step: 0.05 },
-      { key: 'bed', label: 'Background music', type: 'select', default: 'none', options: ['none', 'lofi', 'ambient', 'pulse'], help: 'Music made by Marketo itself (nothing licensed, nothing a platform can mute): lofi = dusty keys, swung drums and vinyl crackle; ambient = slow pads; pulse = a driving synth groove. It dips under the voice. The key and chords change per reel.' },
-      { key: 'bed_volume', label: 'Music level', type: 'number', default: 0.6, min: 0, max: 1, step: 0.05, help: 'Level in the gaps between lines; it drops to about 40% of this while someone talks.' },
-      { key: 'vo_cache', label: 'Voice cache', type: 'longtext', default: '', hidden: true },
+      ...VOICE_FIELDS,
       { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3.4, min: 1.5, max: 8, step: 0.1, help: 'How fast the headline words light up' },
       { key: 'motion', label: 'Motion', type: 'select', default: 'kinetic', options: ['kinetic', 'calm'], help: 'kinetic = words pop in with highlight boxes on accents, zoom-through cuts with a whoosh, slow camera push, bursts when numbers and stamps land; calm = soft fades and blur' },
       { key: 'theme', label: 'Look', type: 'select', default: 'light', options: ['dark', 'light'], help: 'Default look; a beat can switch with the light / dark flag. light = clean keynote, dark = Krypt desk' },
@@ -222,13 +271,133 @@ export const PRESETS: PresetMeta[] = [
       { key: 'seconds', label: 'Length (s)', type: 'number', default: 12, min: 2, max: 90, step: 0.5 },
       { key: 'fit', label: 'Framing', type: 'select', default: 'blur', options: ['blur', 'cover', 'full', 'split'], help: 'blur = whole frame over a blurred copy (landscape recordings). cover = fill 9:16, slightly dimmed for the hook. full = fill 9:16 untouched (a finished vertical video made elsewhere). split = a stream clip: the facecam on top, the gameplay below.' },
       { key: 'cam', label: 'Facecam area', type: 'text', default: '', help: 'Split framing: where the streamer\'s camera is in the video, as "x,y,w,h" fractions of the frame (0.72,0.05,0.26,0.3 = top right). Empty = no camera: the gameplay fills the screen.' },
-      { key: 'game', label: 'Gameplay area', type: 'text', default: '', help: 'Split framing: the part of the frame to show below the camera, as "x,y,w,h" fractions. Empty = the middle of the whole frame.' },
-      { key: 'source', label: 'Source clip', type: 'text', default: '', help: 'The Twitch / Kick clip this reel is cut from (clipping style): keeps the same clip from being used twice.' },
+      { key: 'game', label: 'Area to show', type: 'text', default: '', help: 'Split framing: the part of the frame to show below the camera (the gameplay). Cover framing: the part of the recording that fills the screen, e.g. the one panel that matters in a wide app window (desktop text is too small to read at phone width otherwise); it can move: "0 | x,y,w,h; 8.5 | x,y,w,h" glides to each area at its time (follow the action). "x,y,w,h" fractions of the frame. Empty = the middle of the whole frame.' },
+      { key: 'source', label: 'Source clip', type: 'text', default: '', help: 'The Twitch / Kick clip, or the YouTube video at the part\'s start (…&t=123s), this reel is cut from (clipping style): keeps the same clip from being used twice.' },
       { key: 'sound', label: "Keep the clip's sound", type: 'toggle', default: false, help: 'Use the audio that is in the video file (a finished video with its own voice and music).' },
       { key: 'zoom', label: 'Slow punch-in', type: 'toggle', default: true },
+      { key: 'look', label: 'Text look', type: 'select', default: 'box', options: ['box', 'meme'], help: 'box = the hook and captions in solid boxes. meme = white heavy text with a black outline and no box, the way TikTok and meme pages write on video (POV reels).' },
       { key: 'headline', label: 'Hook', type: 'longtext', default: 'This app lets Claude\ntrade Kalshi on paper first' },
+      { key: 'stamps', label: 'Stamps', type: 'lines', default: '', help: 'Big text slammed onto the middle of the video at a moment: "2.1 | 41 FPS", "7.5 | 144 FPS / after". "2.1-4 | text" sets how long it stays (else until the next one, at most 2.5 s); " / " adds a small line under it. Only numbers and words that are on the recording itself.' },
+      { key: 'punches', label: 'Zoom punches', type: 'lines', default: '', help: 'A quick zoom onto a spot of the video: "3.2 | 0.7,0.4" zooms at 3.2 s onto the point 70% across and 40% down (fractions of the video), "3.2 | 0.7,0.4 | 2 | 1.8" = 2x for 1.8 s (default 1.7x for 1.4 s). Not in split framing.' },
       { key: 'captions', label: 'Captions', type: 'lines', default: 'connect your AI\nit researches + forecasts\npaper trades only\nscored against the market', help: 'One per line; spread evenly over the clip. Prefix "4.5 | text" to set a start time; a line with only a time ("6.2 |") clears the caption until the next one. Split framing shows them stream style: white outlined text, the word being said lit up.' },
       ...COMMON.map((f) => (f.key === 'disclaimer' ? { ...f, default: 'Not financial advice.' } : f)),
+    ],
+  },
+  {
+    id: 'narrated',
+    name: 'Narrated story',
+    tagline: 'A story read out over moving background footage, with big captions popping in a few words at a time. Opens on a forum post card (Reddit-style stories) or builds a greentext board.',
+    inspiredBy: 'Reddit story and greentext channels: a post card, then the story narrated over gameplay with word-by-word captions',
+    brandFree: true,
+    fields: [
+      {
+        key: 'beats',
+        label: 'Lines',
+        type: 'lines',
+        default: [
+          '1 | AITA for eating my roommate\'s "labelled" leftovers after she ate mine for a month? | post | r/AmItheAsshole · u/fridge_wars_22 · 6h | 18.4K;2,113 | Am I the jerk for eating my roommate\'s labelled leftovers, after she ate mine for a month?',
+          '1 | So my roommate labels everything. Milk, eggs, even one single lemon. | none',
+          '1 | For a month my leftovers kept disappearing. She swore it wasn\'t her. | none',
+          '1 | Then I found my lasagna container in HER room. Licked clean. | none | | | | zoom boom',
+          '1 | So last night I ate her labelled curry. All of it. | none',
+          '1 | Now she\'s telling the whole building I\'m a thief. | none',
+          '1 | So, am I the jerk? | none',
+        ].join('\n'),
+        help:
+          'One line per sentence or two: seconds | text | visual | a | b | say | flags. The text is what the captions show and, by default, what the voice reads (say = something else to read, - = silent); write numbers the way they are said. A line lasts as long as its voice (seconds is the least). Visuals: post (the opening post card: text = the post title, a = "r/sub · u/name · 7h", b = "upvotes;comments" like "18.4K;2,113"; the card stays up while the title is read) · green (greentext: the text is one or more lines of the post, each starting ">", separated by " / "; the lines stack up on one board across green lines in a row, the newest lit; the voice reads them without the ">") · image (a = an image file shown above the captions, b = an optional line under it) · none (just the captions over the background). Flags: pause=0.8 (silence before the line), speed=0.95. ' +
+          FX_HELP,
+      },
+      { key: 'part', label: 'Part', type: 'text', default: '', help: 'A long story split into parts: "Part 1" shows on the post card and in the top corner. Empty = one video.' },
+      { key: 'board', label: 'Board name', type: 'text', default: 'Anonymous', help: 'Greentext: the poster name at the top of the board.' },
+      { key: 'board_look', label: 'Board look', type: 'select', default: 'classic', options: ['classic', 'dark'], help: 'Greentext: classic = the pale board with green text; dark = a dark board.' },
+      {
+        key: 'bg',
+        label: 'Background',
+        type: 'select',
+        default: 'runner',
+        options: ['runner', 'bounce', 'slice', 'video', 'none'],
+        help: "What plays behind the captions. Made by Marketo itself (no footage needed, nothing to claim): runner = a neon endless-runner track, bounce = a ball bouncing inside a spinning ring, slice = colour layers sliced off a block one by one (satisfying). video = the background video file (gameplay, parkour, soap cutting: the user's own from the Backgrounds folder, or a part saved from a YouTube video with save_clip), muted and looped. none = plain dark.",
+      },
+      { key: 'video', label: 'Background video', type: 'file', fileKind: 'video', default: '', help: 'With background "video": the footage behind the story (muted, loops, fills the screen).' },
+      { key: 'bg_start', label: 'Background starts at (s)', type: 'number', default: 0, min: 0, max: 36000, step: 0.5 },
+      { key: 'bg_dim', label: 'Background dim', type: 'number', default: 0.15, min: 0, max: 0.8, step: 0.05, help: 'Darkens the background so the captions read.' },
+      { key: 'captions', label: 'Captions', type: 'select', default: 'words', options: ['words', 'line', 'off'], help: 'words = 1-3 words at a time, big in the middle, popping in as they are said (the Reddit-story look); line = the whole line, the word being said lit up; off = none.' },
+      { key: 'caption_color', label: 'Word colour', type: 'select', default: 'yellow', options: ['yellow', 'green', 'white', 'accent'], help: 'Colour of the word being said.' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.12, min: 0, max: 1.5, step: 0.02, help: 'Story channels read fast: a short gap keeps it moving.' },
+      ...VOICE_FIELDS.map((f) => (f.key === 'sfx_volume' ? { ...f, default: 0.35 } : f.key === 'bed_volume' ? { ...f, default: 0.35 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3.2, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice.' },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      { key: 'loop', label: 'Loop back to the opening', type: 'toggle', default: false },
+      ...BRAND_FREE,
+    ],
+  },
+  {
+    id: 'meme',
+    name: 'Meme',
+    tagline: 'Meme panels cut hard one after another: a picture, a clip or the mascot, with meme text, effects (zoom, shake, deep fry, flash) and meme sounds.',
+    inspiredBy: 'Meme pages and shitpost edits: relatable meme slideshows, vine-boom zooms, deep-fried punchlines',
+    brandFree: true,
+    fields: [
+      {
+        key: 'beats',
+        label: 'Panels',
+        type: 'lines',
+        default: [
+          '2.4 | me opening the fridge for the 9th time hoping new food appeared | char | think',
+          '2.0 | the same 3 eggs: | char | shock | | | zoom boom shake',
+          '2.4 | me after doing one (1) thing today | char | cheer',
+          '2.4 | my body: time for a 4 hour nap | char | sad | | | fry bass',
+        ].join('\n'),
+        help:
+          'One panel per line: seconds | caption | media | a | b | say | flags. caption = the meme text (where it goes: layout). media: image (a = an image file: a meme template, a screenshot, a photo; b = bottom text in the impact layout) · screen (a part of the video field: a = the second to start at, optionally "@0.6,0.4 x2" to zoom there; b = bottom text in the impact layout) · char (the mascot acting it out: a = its move: talk, point, present, shrug, shock, cheer, think, wave, facepalm, sad, laugh; b = a big word over it) · text (just the caption, big: a = white, black or notes for the look). Panels cut hard, each with a pop. say = what the voice reads on that panel when voice-over is on (default the caption; - = silent). Flags: top / impact / over (this panel\'s layout), pause=0.5. ' +
+          FX_HELP,
+      },
+      { key: 'layout', label: 'Text layout', type: 'select', default: 'top', options: ['top', 'impact', 'over'], help: 'top = the caption in a white bar above the picture (the modern meme); impact = big white outlined text at the top and the bottom of the picture (classic); over = the meme-look caption over the picture, which fills the screen (POV / reaction edits).' },
+      { key: 'video', label: 'Video', type: 'file', fileKind: 'video', default: '', help: 'The clip screen panels show (a stream clip, a screen recording, the user\'s own footage).' },
+      { key: 'art', label: 'Mascot look', type: 'select', default: '3d', options: ['3d', 'cartoon', 'ps2'], help: 'How the mascot in char panels looks.' },
+      { key: 'char_name', label: 'Character name', type: 'text', default: 'KIP' },
+      { key: 'char_color', label: 'Character colour', type: 'text', default: '#8B5CF6', help: 'Body colour as #RRGGBB.' },
+      { key: 'gap', label: 'Pause after a line (s)', type: 'number', default: 0.35, min: 0, max: 1.5, step: 0.05, hidden: true },
+      ...VOICE_FIELDS.map((f) => (f.key === 'voiceover' ? { ...f, default: false } : f.key === 'sfx_volume' ? { ...f, default: 0.7 } : f.key === 'bed' ? { ...f, default: 'goofy' } : f.key === 'bed_volume' ? { ...f, default: 0.55 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3.4, min: 1.5, max: 8, step: 0.1, hidden: true },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      { key: 'loop', label: 'Loop', type: 'toggle', default: true, help: 'No end card: the reel replays from the first panel.' },
+      ...BRAND_FREE,
+    ],
+  },
+  {
+    id: 'stickman',
+    name: 'Stickman',
+    tagline: 'A hand-drawn stick figure (or two side by side) acting the story out: poses with anticipation and overshoot, props, a moving camera, captions, the mouth moving with the voice. Narrated "why / how" explainers, or wordless versus clips where the payoff lights up in one colour.',
+    inspiredBy: 'Stickman explainer and "X vs Y" shorts: one simple figure, ink on paper or white on black, one highlight colour, a new scene every few seconds',
+    fields: [
+      {
+        key: 'beats',
+        label: 'Beats',
+        type: 'lines',
+        default: [
+          '1 | Why does your aim feel like it\'s on ice? | shock | ?! | desk;monitor | | cam=close',
+          '1 | Same hand speed. But move fast, and the cursor flies further. | point | | chart=up',
+          '1 | That\'s Windows\' "Enhance pointer precision". Mouse acceleration. | think | | think=why?',
+          '1 | Mouse settings, additional mouse settings, pointer options. Untick it. | type | | | | push',
+          '1 | Now the same move lands in the same spot. Every time. | cheer | STEADY | | | win',
+          '1 | Save this for your next match. | thumbsup',
+        ].join('\n'),
+        help: STICK_HELP + FX_HELP,
+      },
+      { key: 'labels', label: 'Figure names', type: 'text', default: '', help: 'Two figures (versus): their names over their heads, "Overthinker;Doer". Empty = one figure, or two without names.' },
+      { key: 'gear', label: 'Gear', type: 'text', default: '', help: `What the figures wear, so a channel's figure is its own: "A:headphones;B:cap". Choices: ${STICK_GEAR.join(', ')}.` },
+      { key: 'bg', label: 'Look', type: 'select', default: 'paper', options: ['paper', 'white', 'dark', 'chalk'], help: 'paper = black ink on warm paper; white = black on white; dark = white figures on black; chalk = chalk on a green board.' },
+      { key: 'highlight', label: 'Highlight colour', type: 'select', default: 'orange', options: ['orange', 'yellow', 'red', 'green', 'cyan', 'accent'], help: 'The one colour on screen: the big word, the spoken word in the captions, the winner (win flag), charts and screens. Keep everything else ink.' },
+      { key: 'line', label: 'Line weight', type: 'number', default: 16, min: 8, max: 28, step: 1, help: 'Ink thickness at full size.' },
+      { key: 'captions', label: 'Captions', type: 'select', default: 'words', options: ['words', 'line', 'title', 'off'], help: 'words = 1-3 words at a time popping in as they are said; line = the whole line, the word being said lit up; title = the caption as plain text at the top (wordless versus clips); off = none.' },
+      { key: 'video', label: 'Screen recording', type: 'file', fileKind: 'video', default: '', help: 'The recording laptop, monitor, phone and screen props show (record_screen or a tool\'s bundled recording).' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.15, min: 0, max: 1.5, step: 0.02 },
+      ...VOICE_FIELDS.map((f) => (f.key === 'sfx_volume' ? { ...f, default: 0.45 } : f.key === 'bed' ? { ...f, default: 'lofi' } : f.key === 'bed_volume' ? { ...f, default: 0.35 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice.' },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      { key: 'loop', label: 'Loop back to the opening', type: 'toggle', default: true, help: 'The last beat runs back into the first (no end card).' },
+      ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
     ],
   },
 ];
@@ -242,7 +411,7 @@ export const clipSound = (f: Fields): boolean => f.sound === true && typeof f.vi
 export function hasSound(preset: string, f: Fields): boolean {
   if (typeof f.music === 'string' && f.music) return true;
   if (preset === 'clip') return clipSound(f);
-  if (preset !== 'story') return false;
+  if (!isVoiced(preset)) return false;
   const voiced = f.voiceover === true && rows(f, 'beats').some((r) => (r[5] ?? '').trim() !== '-');
   return voiced || f.sfx === true || (!!f.bed && f.bed !== 'none');
 }
@@ -326,7 +495,10 @@ export function timingFor(presetId: string, f: Fields): Timing {
     case 'clip':
       body = num(f, 'seconds', 12);
       break;
-    case 'story': {
+    case 'story':
+    case 'narrated':
+    case 'meme':
+    case 'stickman': {
       const b = storyBeats(f);
       body = b.length ? b[b.length - 1].start + b[b.length - 1].dur : 3;
       if (f.loop === true) return { body, cta: 0, total: body };
@@ -402,40 +574,76 @@ export interface StoryBeat {
   wipe: boolean;
   /** Reel motion style: kinetic (pop-in words, zoom-through cuts, bursts) or calm (fades). */
   kinetic: boolean;
+  /** Effects from its flags (meme sounds, zoom, shake, fry...). */
+  fx: Fx[];
+  /** Layout named in its flags (meme panels: top / impact / over), '' = the reel's. */
+  layout: string;
+  /** Other flags a preset reads itself (stickman: cam=close, push, win=a, who=b). */
+  tags: string[];
+  /** When each spoken word starts, seconds into the voice clip (from ElevenLabs' timings; absent = estimate). */
+  voWords?: number[];
 }
 
 /** A voice line starts VO_LEAD into its beat, and the beat holds VO_TAIL after it ends. */
 export const VO_LEAD = 0.15;
 export const VO_TAIL = 0.45;
 
-function beatFlags(raw: string): { theme: '' | 'light' | 'dark'; wipe: boolean; pause: number; speed: number | null } {
-  const out = { theme: '' as '' | 'light' | 'dark', wipe: false, pause: 0, speed: null as number | null };
-  for (const tok of raw.toLowerCase().split(/[\s,]+/).filter(Boolean)) {
+/** Flag tokens: spaces between them; commas too, except inside an effect's point (zoom=0.5,0.3). */
+const flagTokens = (raw: string): string[] => raw.toLowerCase().split(/\s+/).flatMap((t) => (/=\d*\.?\d+,\d/.test(t) ? [t] : t.split(','))).filter(Boolean);
+const LAYOUTS = ['top', 'impact', 'over'];
+
+function beatFlags(raw: string): { theme: '' | 'light' | 'dark'; wipe: boolean; pause: number; speed: number | null; fx: Fx[]; layout: string; tags: string[] } {
+  const out = { theme: '' as '' | 'light' | 'dark', wipe: false, pause: 0, speed: null as number | null, fx: [] as Fx[], layout: '', tags: [] as string[] };
+  for (const tok of flagTokens(raw)) {
+    const fx = parseFx(tok);
+    if (fx) {
+      out.fx.push(fx);
+      continue;
+    }
+    if (LAYOUTS.includes(tok)) {
+      out.layout = tok;
+      continue;
+    }
     if (tok === 'light' || tok === 'dark') out.theme = tok;
     else if (tok === 'wipe') out.wipe = true;
     else if (tok.startsWith('pause=')) out.pause = Math.min(3, Math.max(0, Number(tok.slice(6)) || 0));
     else if (tok.startsWith('speed=')) {
       const s = Number(tok.slice(6));
       if (Number.isFinite(s) && s > 0) out.speed = Math.min(1.5, Math.max(0.7, s));
-    }
+    } else if (STICK_FLAG.test(tok)) out.tags.push(tok);
     // Anything else (an old per-line voice name) is ignored: one voice per reel.
   }
   return out;
 }
 
-const FLAGS_ONLY = /^(?:(?:light|dark|wipe|pause=[\d.]+|speed=[\d.]+)[\s,]*)+$/i;
+/** Whether a column holds only flags (never spoken). */
+const flagsOnly = (s: string): boolean => {
+  const toks = flagTokens(s);
+  return toks.length > 0 && toks.every((t) => /^(?:light|dark|wipe|pause=[\d.]+|speed=[\d.]+)$/.test(t) || LAYOUTS.includes(t) || STICK_FLAG.test(t) || !!parseFx(t));
+};
 
 /** A beat row's spoken line and its flags. */
 function lineOf(r: string[]): { say: string; flagsRaw: string } {
   const headline = r[1] ?? '';
   let sayRaw = (r[5] ?? '').trim();
-  let flagsRaw = r[6] ?? '';
+  // Anything past the flags column (a row with one | too many) counts as flags too.
+  let flagsRaw = r.slice(6).join(' ');
   // A row one column short puts its flags where the line goes; never speak them.
-  if (r.length === 6 && FLAGS_ONLY.test(sayRaw)) {
+  if (r.length === 6 && flagsOnly(sayRaw)) {
     flagsRaw = sayRaw;
     sayRaw = '';
   }
-  return { say: sayRaw === '-' ? '' : sayRaw || headline.replace(/\*/g, ''), flagsRaw };
+  return { say: sayRaw === '-' ? '' : sayRaw || spokenHeadline(headline), flagsRaw };
+}
+
+/** A headline as read out: no *accent* marks; greentext lines (" / ", ">be me") as sentences. */
+export function spokenHeadline(headline: string): string {
+  return headline
+    .replace(/\*/g, '')
+    .split(/\s+\/\s+/)
+    .map((x) => x.replace(/^\s*>+\s*/, '').trim())
+    .filter(Boolean)
+    .join('. ');
 }
 
 /** What the preview sounds like when the reel's voice is ElevenLabs ('' otherwise). */
@@ -472,9 +680,12 @@ export function storyBeats(f: Fields): StoryBeat[] {
   const baseSpeed = el && allEl ? elSpeed : num(f, 'voice_speed', 1.2);
   const look = str(f, 'theme') === 'dark' ? 'dark' : 'light';
   const kinetic = str(f, 'motion') !== 'calm';
+  // Narrated and meme reels set their own gap between lines (story channels read fast).
+  const tail = f.gap !== undefined && f.gap !== '' ? Math.min(1.5, Math.max(0, num(f, 'gap', VO_TAIL))) : VO_TAIL;
+  const lead = tail < VO_TAIL ? 0.04 : VO_LEAD;
   return rows(f, 'beats').map((r) => {
     const secs = Number(r[0]);
-    let dur = Number.isFinite(secs) && secs > 0 ? Math.min(12, Math.max(1.2, secs)) : 3;
+    let dur = Number.isFinite(secs) && secs > 0 ? Math.min(12, Math.max(0.6, secs)) : 3;
     const headline = r[1] ?? '';
     const { say, flagsRaw } = lineOf(r);
     const fl = beatFlags(flagsRaw);
@@ -483,9 +694,9 @@ export function storyBeats(f: Fields): StoryBeat[] {
     const key = voiceOn && say && !silent ? (el && allEl ? elKey : clipKey(tune, speed, say)) : '';
     const vo = key ? cache?.clips[key] : undefined;
     const est = silent && say ? elSpeechSecs(say, elSpeed) : 0;
-    const voStart = VO_LEAD + fl.pause;
-    if (vo) dur = Math.max(dur, voStart + vo.dur + VO_TAIL);
-    else if (est) dur = Math.max(dur, voStart + est + VO_TAIL);
+    const voStart = lead + fl.pause;
+    if (vo) dur = Math.max(dur, voStart + vo.dur + tail);
+    else if (est) dur = Math.max(dur, voStart + est + tail);
     else if (fl.pause) dur += fl.pause;
     const visual = (r[2] ?? 'none').toLowerCase();
     if (visual === 'poll') dur = Math.max(dur, pollEnd({ voStart, voDur: vo?.dur ?? 0 }));
@@ -508,6 +719,10 @@ export function storyBeats(f: Fields): StoryBeat[] {
       theme: fl.theme || look,
       wipe: fl.wipe,
       kinetic,
+      fx: fl.fx,
+      layout: fl.layout,
+      tags: fl.tags,
+      ...(vo?.words?.length ? { voWords: vo.words } : {}),
     };
     t += dur;
     return beat;
@@ -515,11 +730,24 @@ export function storyBeats(f: Fields): StoryBeat[] {
 }
 
 /** Story reels with screen beats: the second of the screen recording to show at reel time t, or null (no screen beat now). */
-export function storyVideoTime(f: Fields, t: number, beats = storyBeats(f)): number | null {
+export function storyVideoTime(f: Fields, t: number, beats = storyBeats(f), videoLen = 0): number | null {
   if (!str(f, 'video')) return null;
+  // Narrated reels: the background video runs under everything, looped.
+  if (str(f, 'bg') === 'video') {
+    const start = Math.max(0, num(f, 'bg_start', 0));
+    const at = start + Math.max(0, t);
+    return videoLen > start + 1 ? start + ((at - start) % (videoLen - start - 0.05)) : at;
+  }
   const b = beats.find((x) => t >= x.start && t < x.start + x.dur) ?? beats[beats.length - 1];
-  if (!b || b.visual !== 'screen') return null;
-  return Math.max(0, screenStart(b.a) + Math.min(t, b.start + b.dur) - b.start);
+  if (!b) return null;
+  // Story and meme screen beats: a = the start second. Stickman beats: a laptop / monitor / screen / phone prop's value.
+  const from = b.visual === 'screen' ? screenStart(b.a) : stickScreenStart(b.b);
+  if (from === null) return null;
+  let local = Math.min(t, b.start + b.dur) - b.start;
+  // A freeze effect stops the video from its time on.
+  const freeze = b.fx.find((x) => x.kind === 'freeze');
+  if (freeze) local = Math.min(local, freeze.at);
+  return Math.max(0, from + local);
 }
 
 /** A screen beat's a: "12.5" (start second in the recording), optionally "@0.7,0.3 x2" (zoom 2x around that point of the frame). */

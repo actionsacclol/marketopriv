@@ -9,20 +9,20 @@
 // can't be bought (after retries) stops the render: a reel is never switched
 // to the free voice or any other.
 
-import { app, safeStorage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ElevenModel, ElevenSettings, ElevenStatus, ElevenTtsRequest, ElevenTtsResult, ElevenVoice, LibrarySort, LibraryVoice } from '../shared/types';
 import { localDate } from '../shared/warmup';
 import { setElevenNames } from '../shared/voice';
 import * as store from './store';
+import * as instance from './instance';
+import { SecretFile } from './secret';
 
 const API = 'https://api.elevenlabs.io';
 const DAY = 86_400_000;
 /** A day may spend this much more than its even share before the hub switches to Flash. */
 const DAY_SLACK = 1.5;
 
-let memoryKey = '';
 let log: (level: 'info' | 'warn', m: string) => void = () => {};
 let sub: { tier: string; used: number; limit: number; resetAt: number; at: number } | null = null;
 
@@ -32,30 +32,17 @@ export function init(d: { log: typeof log }): void {
 }
 
 // ── Key ────────────────────────────────────────────────────────────────────
-const keyFile = (): string => path.join(app.getPath('userData'), 'eleven-key.bin');
+const keyFile = (): string => path.join(instance.ROOT, 'eleven-key.bin');
 
-function readKey(): string {
-  if (memoryKey) return memoryKey;
-  try {
-    if (!safeStorage.isEncryptionAvailable()) return '';
-    memoryKey = safeStorage.decryptString(fs.readFileSync(keyFile()));
-    return memoryKey;
-  } catch {
-    return '';
-  }
-}
+const key = new SecretFile(keyFile);
+const readKey = (): string => key.get();
+/** Read the saved key (at start, after secret.init). */
+export const loadKey = (): Promise<string> => key.load();
 
-function writeKey(key: string): void {
-  const k = key.trim();
-  memoryKey = k;
+function writeKey(k: string): void {
   sub = null;
-  try {
-    if (!k) fs.rmSync(keyFile(), { force: true });
-    else if (safeStorage.isEncryptionAvailable()) fs.writeFileSync(keyFile(), safeStorage.encryptString(k));
-    // No OS encryption: the key stays in memory for this run only, never on disk in the clear.
-  } catch (e) {
-    log('warn', `eleven: could not store the key: ${(e as Error).message}`);
-  }
+  // No OS encryption: the key stays in memory for this run only, never on disk in the clear.
+  key.set(k.trim()).catch((e) => log('warn', `eleven: could not store the key: ${(e as Error).message}`));
 }
 
 const settings = (): ElevenSettings => store.get().settings.eleven ?? {};

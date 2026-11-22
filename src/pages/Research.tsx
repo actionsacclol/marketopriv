@@ -3,6 +3,8 @@ import { BookOpen, Bookmark, ChevronDown, ExternalLink, Eye, Heart, MessageCircl
 import type { ResearchDoc, Session, SessionAction } from '@shared/types';
 import { Card, Empty, GhostButton, Page, Section, Tag } from '../components/ui';
 import { Markdown } from '../components/Markdown';
+import { PAGE_SIZE, useShowMore } from '../components/ShowMore';
+import { usePerf } from '../lib/perf';
 import { useApp } from '../state/store';
 import { RefVideosView } from './RefVideos';
 import { cls, fmtDate, shortUrl } from '../lib/format';
@@ -44,6 +46,11 @@ function SessionCard({ s, initiallyOpen }: { s: Session; initiallyOpen: boolean 
       {openState && (
         <div className="border-t border-white/5 px-5 pb-4 pt-3">
           {s.notes && <div className="mb-3 text-sm text-white/80">{s.notes}</div>}
+          {!!s.itemsArchived && (
+            <div className="mb-3 text-xs text-krypt-muted">
+              {s.itemsArchived} item{s.itemsArchived === 1 ? '' : 's'} moved to the activity archive (Setup &gt; Performance). The totals above still count them.
+            </div>
+          )}
           <div className="mb-3 flex gap-1.5">
             {(['like', 'save', 'follow', 'comment'] as const).map((a) => (
               <button key={a} onClick={() => setOnly(only === a ? null : a)} className={cls('rounded-full border px-2.5 py-1 text-[11px] capitalize transition', only === a ? 'border-krypt-purple/60 bg-krypt-purple/15 text-white' : 'border-white/10 text-krypt-muted hover:text-white')}>
@@ -80,16 +87,28 @@ function SessionsView() {
   const [q, setQ] = useState('');
   const tags = [...new Set(db.references.flatMap((r) => r.tags))].sort();
   const refs = db.references.filter((r) => (!tag || r.tags.includes(tag)) && (!q || `${r.creator} ${r.title} ${r.notes}`.toLowerCase().includes(q.toLowerCase())));
+  // Long lists 50 at a time (Setup > Performance): the sessions get a handle search once there are more than 50.
+  const [hq, setHq] = useState('');
+  const pageOn = usePerf().pageLists;
+  const handleSearch = pageOn && db.sessions.length > PAGE_SIZE;
+  const needle = handleSearch ? hq.trim().replace(/^@/, '').toLowerCase() : '';
+  const sessions = needle ? db.sessions.filter((s) => s.handle.toLowerCase().includes(needle)) : db.sessions;
+  const sessionPage = useShowMore(sessions, needle);
+  const refPage = useShowMore(refs, `${tag ?? ''}|${q}`);
   return (
       <div className="grid gap-8 2xl:grid-cols-[1fr_520px]">
         <Section title={`Sessions · ${db.sessions.length}`}>
+          {handleSearch && <input className="input mb-3" placeholder="Search by handle" value={hq} onChange={(e) => setHq(e.target.value)} />}
           {db.sessions.length === 0 ? (
             <Empty icon={<Eye className="h-6 w-6" />} title="No sessions yet">When your AI scrolls Instagram through Marketo, every post it touched is logged here.</Empty>
+          ) : sessions.length === 0 ? (
+            <div className="py-6 text-sm text-krypt-muted">No session from that handle.</div>
           ) : (
             <div className="space-y-3">
-              {db.sessions.map((s, i) => (
+              {sessionPage.shown.map((s, i) => (
                 <SessionCard key={s.id} s={s} initiallyOpen={i === 0} />
               ))}
+              {sessionPage.more}
             </div>
           )}
         </Section>
@@ -108,7 +127,7 @@ function SessionsView() {
             <Empty icon={<Bookmark className="h-6 w-6" />} title="No references">Saved posts from sessions land here automatically.</Empty>
           ) : (
             <div className="space-y-2">
-              {refs.map((r) => (
+              {refPage.shown.map((r) => (
                 <Card key={r.id} padded={false} className="group flex items-start gap-3 px-4 py-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -126,6 +145,7 @@ function SessionsView() {
                   </button>
                 </Card>
               ))}
+              {refPage.more}
             </div>
           )}
         </Section>

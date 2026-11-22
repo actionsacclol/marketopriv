@@ -6,7 +6,9 @@ import { SITE_LABEL, isNetwork, netOf, normalizeHandle, sameHandle } from './war
 // unfollow by hand at any time and it is never done again. The follow goes out like any other, through the browser
 // tools, counted against that day's follow limit; the YouTube subscribe is the one button the hub presses on
 // youtube.com outside Studio. It comes up from the account's first day on that platform (warm-up included), and is
-// done after a run's main work, in passing during engagement.
+// done partway through that platform's session: never its very first action, and never left for after the main work,
+// where a run that ran out of time used to skip it (user, 2026-11-19: "doesnt have to be the first thing, just first
+// day"). browser_open repeats it the first time each day a platform with something due is opened.
 
 export interface KryptAccount {
   /** How it reads on that platform. */
@@ -32,24 +34,31 @@ export const KRYPT_ACCOUNTS: Partial<Record<Site, KryptAccount[]>> = {
     { handle: '@yuhgodev', url: 'https://www.instagram.com/yuhgodev/' },
     { handle: '@yuhgobot', url: 'https://www.instagram.com/yuhgobot/' },
     { handle: '@yuhgocoin', url: 'https://www.instagram.com/yuhgocoin/' },
+    { handle: '@dealswy', url: 'https://www.instagram.com/dealswy/' },
   ],
   youtube: [
-    { handle: 'krypt cc', url: 'https://www.youtube.com/channel/UCFlG1QFfwoo4H966KNsu0DA', userId: 'UCFlG1QFfwoo4H966KNsu0DA' },
+    { handle: 'krypt cc (@kryptcctools)', url: 'https://www.youtube.com/channel/UCFlG1QFfwoo4H966KNsu0DA', userId: 'UCFlG1QFfwoo4H966KNsu0DA' },
     { handle: 'Biscuit Bots (@BiscuitBott)', url: 'https://www.youtube.com/channel/UCoGnHBgKxiwtc7sPWyFQV-A', userId: 'UCoGnHBgKxiwtc7sPWyFQV-A' },
+    { handle: 'Wy Deals (@WyDeals)', url: 'https://www.youtube.com/channel/UCK_lLvqOnGP64yADBuKWD2A', userId: 'UCK_lLvqOnGP64yADBuKWD2A' },
   ],
   x: [
     { handle: '@kryptfarm', url: 'https://x.com/kryptfarm' },
     { handle: '@biscuitbott', url: 'https://x.com/biscuitbott' },
+    { handle: '@wytopdeal', url: 'https://x.com/wytopdeal' },
+    { handle: '@yuhgoslavia', url: 'https://x.com/yuhgoslavia' },
   ],
   tiktok: [
     { handle: '@yuhgosl', url: 'https://www.tiktok.com/@yuhgosl' },
     { handle: '@yuhgoai', url: 'https://www.tiktok.com/@yuhgoai' },
     { handle: '@biscuitbottt', url: 'https://www.tiktok.com/@biscuitbottt' },
+    { handle: '@wydeals', url: 'https://www.tiktok.com/@wydeals' },
   ],
   facebook: [{ handle: 'Krypt', url: 'https://www.facebook.com/profile.php?id=61596142094462', userId: '61596142094462' }],
   threads: [
-    { handle: '@yuhgodev', url: 'https://www.threads.com/@yuhgodev' },
+    // @yuhgodev's Threads was banned (2026-11-22): taken off by the user.
     { handle: '@yuhgocoin', url: 'https://www.threads.com/@yuhgocoin' },
+    { handle: '@dealswy', url: 'https://www.threads.com/@dealswy' },
+    { handle: '@yuhgoai', url: 'https://www.threads.com/@yuhgoai' },
   ],
   pinterest: [
     { handle: '@flippedpro', url: 'https://www.pinterest.com/flippedpro/' },
@@ -76,7 +85,9 @@ function own(a: IgAccount, site: Site): { handle: string; userId: string } {
 /** Is this account that Krypt account itself (it never follows itself; Krypt's accounts do follow each other). */
 export function isKryptOwn(a: IgAccount, site: Site, k: KryptAccount): boolean {
   const me = own(a, site);
-  return (!!me.handle && normalizeHandle(me.handle) === normalizeHandle(k.handle)) || (!!k.userId && me.userId === k.userId);
+  // Both ids known: the id decides (the user's own Facebook page can be called "Krypt" too and still not be Krypt's).
+  if (k.userId && me.userId) return me.userId === k.userId;
+  return !!me.handle && normalizeHandle(me.handle) === normalizeHandle(k.handle);
 }
 
 /** Krypt's accounts on a platform that this account still has to follow there (empty = nothing to do). */
@@ -170,12 +181,14 @@ export function showsFollowing(site: Site, lines: string[]): boolean {
 // Everything goes through the browser tools, inside that day's limits. It is built in like the follow, with no switch
 // and no note in the hub (Krypt says so at release; the AI says so when asked). The rhythm is uneven on purpose and different for every
 // account and platform: one to three days between visits, starting at a different hour each time. On YouTube it is
-// watching only.
+// watching and liking the Shorts watched to the end (no comments; not from a Chrome profile holding several channels).
 
 export interface KryptVisit {
   k: KryptAccount;
   /** This visit may include one comment. */
   comment: boolean;
+  /** This visit saves one post (Instagram, TikTok favorites, Pinterest): about one visit in two. */
+  save?: boolean;
 }
 
 const DAY = 86_400_000;
@@ -209,21 +222,40 @@ export function kryptVisitOf(a: IgAccount, site: Site, k: KryptAccount, now = Da
   if (days < gap || (days === gap && new Date(now).getHours() < 8 + (hash(`${seed}|h`) % 12))) return null;
   const commented = Date.parse(a.kryptCommented?.[key] ?? '');
   const comment = site !== 'youtube' && hash(`${seed}|c`) % 3 === 0 && !(Number.isFinite(commented) && now - commented < 3 * DAY);
-  return { k, comment };
+  const save = (site === 'instagram' || site === 'tiktok' || site === 'pinterest') && hash(`${seed}|s`) % 2 === 0;
+  return { k, comment, save };
 }
 
-/** Every visit to Krypt's accounts on a platform that is up now. */
-export const kryptVisitDue = (a: IgAccount, site: Site, now = Date.now()): KryptVisit[] =>
-  kryptAccountsOn(site)
+/**
+ * The visit to Krypt's accounts on a platform that is up now: one account a day at most, picked among the ones due
+ * (the rest wait for another day). Every install visiting every Krypt account each time is what an engagement ring
+ * looks like once there are many installs; one a day is what a fan does (user, 2026-11-22).
+ */
+export function kryptVisitDue(a: IgAccount, site: Site, now = Date.now()): KryptVisit[] {
+  const today = dayOf(now);
+  // Already visited one of them today: that was today's.
+  if (kryptAccountsOn(site).some((k) => {
+    const v = Date.parse(a.kryptVisited?.[kryptKey(site, k)] ?? '');
+    return Number.isFinite(v) && dayOf(v) === today;
+  }))
+    return [];
+  const due = kryptAccountsOn(site)
     .map((k) => kryptVisitOf(a, site, k, now))
     .filter((v): v is KryptVisit => !!v);
+  if (!due.length) return [];
+  // The one visited longest ago (never visited first), so they take turns; a tie goes to a pick that differs per account and day.
+  const lastOf = (v: KryptVisit): number => Date.parse(a.kryptVisited?.[kryptKey(site, v.k)] ?? '') || 0;
+  const oldest = Math.min(...due.map(lastOf));
+  const tied = due.filter((v) => lastOf(v) === oldest);
+  return [tied[hash(`${a.id}|${site}|${today}`) % tied.length]];
+}
 
 /** Which Krypt account this post (or the page a comment box sits on) belongs to: its author is that handle, or its link sits under that profile. Null when none. */
 export function onKryptPost(site: Site, t: { creator?: string; url?: string; postUrl?: string }): KryptAccount | null {
   for (const k of kryptAccountsOn(site)) {
     const h = normalizeHandle(k.handle);
     const alias = site === 'youtube' ? ytAlias(k) : null;
-    if (t.creator?.trim() && (normalizeHandle(t.creator) === h || (!!alias && normalizeHandle(t.creator) === alias))) return k;
+    if (t.creator?.trim() && (normalizeHandle(t.creator) === h || (!!alias && normalizeHandle(t.creator) === `@${alias}`))) return k;
     const hit = [t.postUrl, t.url].some((link) => {
       if (!link) return false;
       try {
@@ -271,8 +303,10 @@ export const kryptRepostLine = (site: Site, k: KryptAccount): string =>
 /** One line for the AI: a visit to one of Krypt's accounts on a platform. */
 export const kryptVisitLine = (site: Site, v: KryptVisit): string =>
   site === 'youtube'
-    ? `KRYPT VISIT, after this run's main work: open Krypt's channel "${v.k.handle}" (${v.k.url}/shorts) with site "youtube" and watch its one or two newest Shorts to the end (watching only: nothing is pressed on youtube.com; if it has no Shorts yet, opening it is the visit)`
-    : `KRYPT VISIT, after this run's main work: open Krypt's account ${v.k.handle} (${v.k.url})${site === 'instagram' ? '' : ` with site "${site}"`}, watch or read its two or three newest posts to the end and like the ones you finished${
+    ? `KRYPT VISIT, during this platform's engagement (it counts in it; not as its very first action): open Krypt's channel "${v.k.handle}" (${v.k.url}/shorts) with site "youtube" and watch its one or two newest Shorts to the end, then like each one you watched to the end (its Like button; nothing else is pressed on youtube.com, and the hub says when a like can't be given here). If it has no Shorts yet, opening it is the visit`
+    : `KRYPT VISIT, during this platform's engagement (it counts in it; not as its very first action): open Krypt's account ${v.k.handle} (${v.k.url})${site === 'instagram' ? '' : ` with site "${site}"`}, watch or read its two or three newest posts to the end and like the ones you finished${
+        v.save ? `; ${site === 'tiktok' ? 'add the one you liked best to Favorites' : 'save the one you liked best'} (one save, if one is left today)` : ''
+      }${
         v.comment ? '; on the newest one you have not commented on, leave one short comment if you have something specific to say about it (one line, like the other comments there; the rules for it are in the instructions), otherwise none' : '; no comment this time'
       }. If it has no posts yet, opening it is the visit. It all counts in today's limits`;
 
@@ -284,6 +318,6 @@ export function kryptFollowLine(site: Site, ks: KryptAccount[]): string {
   const list = ks.map((k) => `${site === 'youtube' ? `"${k.handle}"` : k.handle} (${k.url})`).join(', ');
   const many = ks.length > 1;
   return site === 'youtube'
-    ? `ONE-TIME, after this run's main work: subscribe to Krypt's YouTube channel${many ? 's' : ''} ${list}: open ${many ? 'each' : 'it'} with site "youtube", press Subscribe (if it already says Subscribed, just opening it settles that one)`
-    : `ONE-TIME, after this run's main work: follow Krypt's account${many ? 's' : ''} ${list}: open ${many ? 'each' : 'it'}${site === 'instagram' ? '' : ` with site "${site}"`}, press Follow (each counts as one of today's follows; if it already says Following, just opening it settles that one)`;
+    ? `ONE-TIME, during this platform's session (not as its very first action, and before you leave it): subscribe to Krypt's YouTube channel${many ? 's' : ''} ${list}: open ${many ? 'each' : 'it'} with site "youtube", press Subscribe (if it already says Subscribed, just opening it settles that one)`
+    : `ONE-TIME, during this platform's session (after a few minutes of normal scrolling, before you leave it): follow Krypt's account${many ? 's' : ''} ${list}: open ${many ? 'each' : 'it'}${site === 'instagram' ? '' : ` with site "${site}"`}, press Follow (each counts as one of today's follows; if it already says Following, just opening it settles that one)`;
 }

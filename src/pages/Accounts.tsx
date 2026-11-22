@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { ChevronDown, Chrome, CircleCheck, CircleAlert, Eye, Flame, LogOut, Pencil, Plus, Star, Trash2, Unlink, Users } from 'lucide-react';
+import { ChevronDown, Chrome, CircleCheck, CircleAlert, Eye, Flame, Pencil, Plus, Star, Trash2, Unlink, Users } from 'lucide-react';
 import type { AccountInput, AccountStatus, BrowserStatus, IgAccount, LimitKey, NetProfile, Network, Session, Site } from '@shared/types';
 import { DEFAULT_TARGETS, NETWORKS, NETWORK_LABEL, POST_GAP_MIN, SITES, SITE_LABEL, YT_UPLOADS_PER_DAY, cleanLimit, limitKeys, limitLabel, localDate, planFor, quotaLabel, sameHandle, siteOn } from '@shared/warmup';
 import { Card, Empty, GhostButton, Page, PrimaryButton, Toggle } from '../components/ui';
 import { useApp } from '../state/store';
 import { PlatformTile } from '../components/Platforms';
 import { ExtensionSetup, extensionCheck } from '../components/ExtensionSetup';
+import { PAGE_SIZE, useShowMore } from '../components/ShowMore';
+import { usePerf } from '../lib/perf';
 import { accountSites } from '../lib/platforms';
 import { cls, fmtNum } from '../lib/format';
 
@@ -19,7 +21,7 @@ export function AccountStatusChip({ status }: { status: AccountStatus }) {
   return <span className={cls('rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider', STATUS_STYLE[status])}>{status}</span>;
 }
 
-/** Is the account signed in where it runs (the built-in browser or the user's Chrome), and as whom. */
+/** Is the account signed in where it runs (the user's Chrome), and as whom. */
 export function SignInLine({ a, st }: { a: IgAccount; st: BrowserStatus | undefined }) {
   const inChrome = a.browser === 'chrome';
   const wrong = !!st?.loggedIn && !!st.signedInAs && !sameHandle(st.signedInAs, a.handle);
@@ -71,7 +73,7 @@ function NetSettings({ f, set, n }: { f: AccountInput; set: <K extends keyof Acc
     <div>
       <Toggle on={!!p?.enabled} onChange={(v) => put({ warmupStart: localDate(), ...(p ?? {}), enabled: v })} label={`Also run this account on ${L}`} />
       <p className="mt-1 text-[11px] text-krypt-muted">
-        AIs use {L} in the same {(f.browser ?? 'hub') === 'chrome' ? 'Chrome profile' : 'Marketo browser profile'} as this account's Instagram, with {L}'s own warm-up and daily limits. {NET_HELP[n]}
+        AIs use {L} in the same Chrome profile as this account's Instagram, with {L}'s own warm-up and daily limits. {NET_HELP[n]}
       </p>
       {p?.enabled && (
         <div className="mt-2 grid grid-cols-2 gap-2">
@@ -127,13 +129,13 @@ function LimitsEditor({ f, set }: { f: AccountInput; set: <K extends keyof Accou
     <div>
       <button type="button" onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2 text-left" aria-expanded={open}>
         <span className="label !mb-0 flex-1">Daily limits</span>
-        <span className={cls('text-[11px]', custom.length ? 'text-amber-300' : 'text-krypt-muted')}>{custom.length ? `Your own on ${custom.map((s) => SITE_LABEL[s]).join(', ')}` : 'All recommended'}</span>
+        <span className={cls('text-[11px]', custom.length ? 'text-amber-300' : 'text-krypt-muted')}>{custom.length ? `Your own on ${custom.map((s) => SITE_LABEL[s]).join(', ')}` : 'All at soft caps'}</span>
         <ChevronDown className={cls('h-4 w-4 shrink-0 text-krypt-muted transition', open && 'rotate-180')} />
       </button>
       {open && (
         <div className="mt-2 space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-3">
           <p className="text-[11px] leading-relaxed text-krypt-muted">
-            Marketo holds each platform to these numbers a day. The grey number in a box is the recommended one for today (it rises by itself while a new account warms up). Type your own in any box and that is used instead, as high or as low as you like. Empty means recommended.
+            Marketo holds each platform to these numbers a day. The grey number in a box is Krypt's soft cap for today (it rises by itself while a new account warms up). Type your own in any box and that is used instead, as high or as low as you like. Empty means the soft cap.
           </p>
           <select className="input py-2 text-xs" value={site} onChange={(e) => setPicked(e.target.value as Site)}>
             {sites.map((s) => (
@@ -146,7 +148,7 @@ function LimitsEditor({ f, set }: { f: AccountInput; set: <K extends keyof Accou
           <div className="grid grid-cols-4 gap-2">
             {limitKeys(site).map((k) => (
               <div key={k}>
-                <div className="mb-1 truncate text-[11px] text-krypt-muted" title={`${limitLabel(k, site)}: recommended ${rec[k]}`}>
+                <div className="mb-1 truncate text-[11px] text-krypt-muted" title={`${limitLabel(k, site)}: soft cap ${rec[k]}`}>
                   {SHORT_LABEL(k, site)}
                 </div>
                 <input type="number" min={0} className={cls('input font-mono text-xs', own[k] !== undefined && 'border-amber-400/40')} placeholder={String(rec[k])} value={own[k] ?? ''} onChange={(e) => put(k, e.target.value)} />
@@ -155,12 +157,12 @@ function LimitsEditor({ f, set }: { f: AccountInput; set: <K extends keyof Accou
           </div>
           {over.length > 0 && (
             <p className="text-[11px] leading-relaxed text-amber-300">
-              Past the recommended number: {over.map((k) => `${limitLabel(k, site)} (recommended ${rec[k]})`).join(', ')}. Platforms can limit or lock an account that goes fast, a new one most of all. It is your call.
+              Over Krypt's soft cap: {over.map((k) => `${limitLabel(k, site)} (soft cap ${rec[k]})`).join(', ')}. Over a soft cap, {SITE_LABEL[site]} can flag, limit or lock the account, a new one most of all. It is your call.
             </p>
           )}
           {Object.keys(own).length > 0 && (
             <button type="button" onClick={() => set('limits', { ...(f.limits ?? {}), [site]: {} })} className="text-[11px] text-krypt-muted underline-offset-2 hover:text-white hover:underline">
-              Back to recommended on {SITE_LABEL[site]}
+              Back to soft caps on {SITE_LABEL[site]}
             </button>
           )}
         </div>
@@ -231,23 +233,7 @@ function Editor({ account, onDone }: { account: IgAccount | null; onDone: () => 
         <label className="label">{f.instagram !== false ? 'Instagram handle' : 'Account name'}</label>
         <input className="input font-mono" placeholder={f.instagram !== false ? '@handle' : 'e.g. @mybrand'} value={f.handle ?? ''} onChange={(e) => set('handle', e.target.value)} autoFocus={!account} />
       </div>
-      <div>
-        <label className="label">Where it is signed in</label>
-        <select className="input" value={f.browser ?? 'hub'} onChange={(e) => set('browser', e.target.value as 'hub' | 'chrome')}>
-          <option value="hub" className="bg-krypt-panel">
-            Marketo's own browser
-          </option>
-          <option value="chrome" className="bg-krypt-panel">
-            My Chrome (Krypt Marketo extension)
-          </option>
-        </select>
-        <p className="mt-1 text-[11px] text-krypt-muted">
-          {(f.browser ?? 'hub') === 'chrome'
-            ? 'Your AI works in your real Chrome profile: same device and sign-in Instagram already knows. Needs the extension (see below).'
-            : 'A private session inside Marketo. Instagram sees it as a new browser, so pick this for accounts you will only ever use here.'}{' '}
-          Pick one and stay on it.
-        </p>
-      </div>
+      <p className="text-[11px] text-krypt-muted">It runs in your real Chrome: the same device and sign-in the platforms already know. Sign in there yourself; it needs the Krypt Marketo extension (see below).</p>
       <div>
         <label className="label">Niche</label>
         <input className="input" value={f.niche ?? ''} onChange={(e) => set('niche', e.target.value)} placeholder="What this account watches and posts about" />
@@ -281,9 +267,10 @@ function Editor({ account, onDone }: { account: IgAccount | null; onDone: () => 
       <div>
         <Toggle on={!!f.youtube?.enabled} onChange={(v) => set('youtube', { ...(f.youtube ?? {}), enabled: v })} label="Also post Shorts to YouTube" />
         <p className="mt-1 text-[11px] text-krypt-muted">
-          AIs can upload rendered reels to this account's YouTube channel through YouTube Studio, in the same {(f.browser ?? 'hub') === 'chrome' ? 'Chrome profile' : 'Marketo browser profile'} as its Instagram. Publishing follows your approval setting. {YT_UPLOADS_PER_DAY} a day is the recommended limit; set your own under Daily limits.
+          AIs can upload rendered reels to this account's YouTube channel through YouTube Studio, in the same Chrome profile as its Instagram. Publishing follows your approval setting. {YT_UPLOADS_PER_DAY} a day is the recommended limit; set your own under Daily limits.
           {(f.browser ?? 'hub') === 'hub' ? ' Google sometimes refuses to sign in inside apps; if it does, use My Chrome for this account.' : ''}
         </p>
+        {f.youtube?.enabled && <YtChannelField f={f} set={set} />}
       </div>
       <div>
         <label className="label">Posts a day</label>
@@ -351,10 +338,6 @@ function AccountCard({ a, onEdit }: { a: IgAccount; onEdit: () => void }) {
   const sessions = db.sessions.filter((s) => sameHandle(s.handle, a.handle));
   const minutes = Math.round(sessions.reduce((n, s) => n + s.minutes, 0));
   const setupDone = Object.values(a.setup).filter(Boolean).length;
-  const signOut = async (): Promise<void> => {
-    const r = await window.marketo.browser.clear(a.id);
-    toast(r.ok ? 'ok' : 'error', r.ok ? `${a.handle} signed out of the hub's browser.` : r.message ?? 'Could not sign out.');
-  };
   const forgetChannel = async (): Promise<void> => {
     const r = await window.marketo.db.saveAccount({ id: a.id, youtube: { enabled: true, uploads: a.youtube?.uploads } });
     toast(r.ok ? 'ok' : 'error', r.ok ? "Channel forgotten. The next channel YouTube Studio shows becomes this account's." : r.message ?? 'Could not save.');
@@ -414,6 +397,11 @@ function AccountCard({ a, onEdit }: { a: IgAccount; onEdit: () => void }) {
           <Flame className="h-3.5 w-3.5" /> Warm-up plan
         </GhostButton>
         {a.youtube?.enabled && a.youtube.channelId && (
+          <span className="inline-flex items-center gap-1 self-center truncate text-[11px] text-krypt-muted" title={a.youtube.channelId}>
+            YouTube: {a.youtube.channelName ?? (a.youtube.channelHandle ? '@' + a.youtube.channelHandle : a.youtube.channelId)}
+          </span>
+        )}
+        {a.youtube?.enabled && a.youtube.channelId && (
           <GhostButton small onClick={() => void forgetChannel()}>
             <Unlink className="h-3.5 w-3.5" /> Forget channel
           </GhostButton>
@@ -421,11 +409,6 @@ function AccountCard({ a, onEdit }: { a: IgAccount; onEdit: () => void }) {
         {!active && (
           <GhostButton small onClick={() => void window.marketo.db.updateSettings({ handle: a.handle })}>
             <Star className="h-3.5 w-3.5" /> Make active
-          </GhostButton>
-        )}
-        {a.browser !== 'chrome' && (st?.loggedIn || st?.x?.loggedIn || st?.tiktok?.loggedIn || st?.youtube?.loggedIn) && (
-          <GhostButton small onClick={() => void signOut()}>
-            <LogOut className="h-3.5 w-3.5" /> Sign out here
           </GhostButton>
         )}
       </div>
@@ -488,11 +471,18 @@ export default function Accounts() {
   const db = useApp((s) => s.db)!;
   const [editing, setEditing] = useState<{ id: string | null } | null>(null);
   const editAccount = editing?.id ? db.igAccounts.find((a) => a.id === editing.id) ?? null : null;
+  // Long lists 50 at a time (Setup > Performance): a handle search once there are more than 50 accounts.
+  const [q, setQ] = useState('');
+  const pageOn = usePerf().pageLists;
+  const searchOn = pageOn && db.igAccounts.length > PAGE_SIZE;
+  const needle = searchOn ? q.trim().replace(/^@/, '').toLowerCase() : '';
+  const accounts = needle ? db.igAccounts.filter((a) => a.handle.toLowerCase().includes(needle)) : db.igAccounts;
+  const page = useShowMore(accounts, needle);
 
   return (
     <Page
       title="Accounts"
-      subtitle="Every account you run, on the platforms you picked. Each one is signed in either in Marketo's own browser or in your own Chrome, kept apart from the others."
+      subtitle="Every account you run, on the platforms you picked. Each one is signed in in your own Chrome, one Chrome profile per set of accounts."
       actions={
         <PrimaryButton onClick={() => setEditing({ id: null })}>
           <Plus className="h-4 w-4" /> Add account
@@ -501,15 +491,19 @@ export default function Accounts() {
     >
       <div className="grid gap-6 xl:grid-cols-[1fr_420px]">
         <div>
+          {searchOn && <input className="input mb-4" placeholder="Search by handle" value={q} onChange={(e) => setQ(e.target.value)} />}
           {db.igAccounts.length === 0 ? (
             <Empty icon={<Users className="h-6 w-6" />} title="No accounts yet">
-              Add an account, pick its platforms (Instagram, TikTok, YouTube Shorts, X) and choose where it is signed in: Marketo's own browser, or your Chrome. Your AI uses it there.
+              Add an account, pick its platforms (Instagram, TikTok, YouTube Shorts, X) and sign it in in your Chrome. Your AI uses it there.
             </Empty>
+          ) : accounts.length === 0 ? (
+            <div className="py-6 text-sm text-krypt-muted">No account with that handle.</div>
           ) : (
             <div className="grid gap-4 2xl:grid-cols-2">
-              {db.igAccounts.map((a) => (
+              {page.shown.map((a) => (
                 <AccountCard key={a.id} a={a} onEdit={() => setEditing({ id: a.id })} />
               ))}
+              {page.more && <div className="2xl:col-span-2">{page.more}</div>}
             </div>
           )}
         </div>
@@ -523,11 +517,12 @@ export default function Accounts() {
                 : 'Off: posts, comments, replies, messages, unfollows and reposts go through right away, still inside each account\'s daily limits.'}{' '}
               Deletes, blocks, reports and account settings always ask.
             </p>
+            <PerThread />
           </Card>
           <Card className="space-y-2 text-sm text-white/80">
             <div className="text-sm font-semibold text-white">How accounts work here</div>
             <p>
-              <span className="text-white">1.</span> Add the account, pick its platforms and sign in yourself: in Marketo's own browser (click a platform tile to open it), or as usual in your Chrome. Marketo never sees or stores your passwords.
+              <span className="text-white">1.</span> Add the account, pick its platforms and sign in yourself, as usual, in your Chrome. Marketo never sees or stores your passwords.
             </p>
             <p>
               <span className="text-white">2.</span> Your AI reads and clicks in that same window or tab. You can watch it, and take over at any time.
@@ -541,5 +536,67 @@ export default function Accounts() {
         </div>
       </div>
     </Page>
+  );
+}
+
+/** The per-thread cap (settings.perThread): replies an account sends into one thread before it leaves it. */
+function PerThread() {
+  const db = useApp((s) => s.db);
+  const toast = useApp((s) => s.toast);
+  const cur = db?.settings.perThread;
+  const set = (raw: string): void => {
+    const n = Math.floor(Number(raw));
+    if (raw.trim() && (!Number.isFinite(n) || n < 1)) return;
+    void window.marketo.db.updateSettings({ perThread: raw.trim() ? n : undefined });
+    if (n > 2) toast('warn', `${n} per thread is over the recommended 2. Long back-and-forths are how AI accounts end up replying to each other, and they can get an account flagged. Your call.`);
+  };
+  return (
+    <div className="flex items-center gap-3 border-t border-white/10 pt-3">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm text-white">Replies per thread</div>
+        <p className="text-xs text-krypt-muted">The most comments, replies or DMs an account sends into one post, X or Threads conversation, or chat. Then the AI moves on. Recommended 2.</p>
+      </div>
+      <input type="number" min={1} className={cls('input w-20 font-mono text-sm', cur !== undefined && cur > 2 && 'border-amber-400/40')} placeholder="2" value={cur ?? ''} onChange={(e) => set(e.target.value)} />
+    </div>
+  );
+}
+
+/** Which YouTube channel the account posts Shorts to: one Google sign-in can own many channels. */
+function YtChannelField({ f, set }: { f: AccountInput; set: <K extends keyof AccountInput>(k: K, v: AccountInput[K]) => void }) {
+  const toast = useApp((s) => s.toast);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const y = f.youtube!;
+  const look = async (): Promise<void> => {
+    if (!text.trim()) return;
+    setBusy(true);
+    const r = await window.marketo.app.resolveYtChannel(text);
+    setBusy(false);
+    if (!r.ok || !r.data) {
+      toast('error', r.message ?? 'Could not find that channel.');
+      return;
+    }
+    set('youtube', { ...y, enabled: true, channelId: r.data.id, channelName: r.data.name, channelHandle: r.data.handle });
+    setText('');
+    toast('ok', `Channel set: ${r.data.name ?? r.data.id}. Save the account to keep it.`);
+  };
+  return (
+    <div className="mt-2 space-y-1.5 rounded-lg border border-white/10 bg-white/[0.02] p-2.5">
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-krypt-muted">Channel</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-white/85" title={y.channelId}>
+          {y.channelId ? `${y.channelName ?? (y.channelHandle ? '@' + y.channelHandle : '')} ${y.channelName || y.channelHandle ? '· ' : ''}${y.channelId}` : 'not set (the first one Studio shows)'}
+        </span>
+      </div>
+      <div className="flex gap-2">
+        <input className="input flex-1 py-1.5 text-xs" placeholder="Paste the channel link, e.g. youtube.com/@mychannel" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void look()} />
+        <GhostButton small disabled={busy || !text.trim()} onClick={() => void look()}>
+          {busy ? 'Looking…' : 'Set'}
+        </GhostButton>
+      </div>
+      <p className="text-[11px] leading-relaxed text-krypt-muted">
+        One Google account can own many channels. For more channels without more Chrome profiles: make one Marketo account per channel (turn off Run Instagram for YouTube-only ones), pick the same Chrome profile for them in Setup, and paste each one's channel link here. The hub switches YouTube Studio to the right channel before it uploads.
+      </p>
+    </div>
   );
 }

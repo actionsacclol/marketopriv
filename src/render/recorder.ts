@@ -1,5 +1,6 @@
 import { ALL_FORMATS, BlobSource, BufferTarget, Conversion, Input, Mp4OutputFormat, Output, WebMOutputFormat } from 'mediabunny';
 import { seekingSource } from './media';
+import { perfNow } from '../lib/perf';
 
 // record_screen: record one app window for a few seconds (desktop capture +
 // MediaRecorder), turn it into a seekable MP4, save it in the output folder and
@@ -33,13 +34,20 @@ async function findWindow(want: string, waitMs: number): Promise<{ hits: Array<{
   return { error: `No open window matches "${want}". Open windows: ${names.slice(0, 25).map((n) => `"${n}"`).join(', ') || 'none'}.` };
 }
 
-/** Re-encode the recorder's WebM (no index, so it can't be scrubbed) as an H.264 MP4; falls back to a remuxed WebM. */
-async function seekable(blob: Blob): Promise<{ bytes: Uint8Array; ext: 'mp4' | 'webm' }> {
-  for (const ext of ['mp4', 'webm'] as const) {
+/**
+ * Re-encode the recorder's WebM (no index, so it can't be scrubbed) as an H.264 MP4; falls back to a remuxed WebM.
+ * An H.264 MP4 recording (fastRecording) is first only copied into an indexed MP4: no re-encode.
+ */
+async function seekable(blob: Blob, h264 = false): Promise<{ bytes: Uint8Array; ext: 'mp4' | 'webm' }> {
+  const ways = h264 ? (['copy', 'mp4', 'webm'] as const) : (['mp4', 'webm'] as const);
+  for (const way of ways) {
+    const ext = way === 'webm' ? 'webm' : 'mp4';
     try {
       const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
       const output = new Output({ format: ext === 'mp4' ? new Mp4OutputFormat({ fastStart: 'in-memory' }) : new WebMOutputFormat(), target: new BufferTarget() });
-      const conv = await Conversion.init({ input, output, ...(ext === 'mp4' ? { video: { codec: 'avc' as const, bitrate: 8e6 } } : {}) });
+      // Same codec and no bitrate: mediabunny copies the frames as they are.
+      const video = way === 'copy' ? { codec: 'avc' as const } : way === 'mp4' ? { codec: 'avc' as const, bitrate: 8e6 } : undefined;
+      const conv = await Conversion.init({ input, output, ...(video ? { video } : {}) });
       if (!conv.isValid) throw new Error('not convertible');
       await conv.execute();
       const buf = (output.target as BufferTarget).buffer;
@@ -48,7 +56,7 @@ async function seekable(blob: Blob): Promise<{ bytes: Uint8Array; ext: 'mp4' | '
       // try the next way
     }
   }
-  return { bytes: new Uint8Array(await blob.arrayBuffer()), ext: 'webm' };
+  return { bytes: new Uint8Array(await blob.arrayBuffer()), ext: h264 ? 'mp4' : 'webm' };
 }
 
 export async function recordScreen(a: RecordArgs, progress: (fraction: number, message: string) => void): Promise<{ path: string; seconds: number; window: string; frames: Array<{ t: number; data: string }> }> {
@@ -75,7 +83,9 @@ export async function recordScreen(a: RecordArgs, progress: (fraction: number, m
     }
   }
   if (!stream) throw new Error(`Windows would not let the hub capture "${src.name}" (${why || 'no reason given'}). The window may be hidden or minimised (show it first), or the app blocks screen capture.`);
-  const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m)) ?? 'video/webm';
+  // Fast recording (Setup > Performance): H.264 MP4, encoded by the graphics card where Chromium can; else as before.
+  const h264 = perfNow().fastRecording && MediaRecorder.isTypeSupported('video/mp4;codecs=avc1');
+  const mime = h264 ? 'video/mp4;codecs=avc1' : (['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m)) ?? 'video/webm');
   const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 10e6 });
   const chunks: Blob[] = [];
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
@@ -90,7 +100,7 @@ export async function recordScreen(a: RecordArgs, progress: (fraction: number, m
   await done;
   stream.getTracks().forEach((t) => t.stop());
   progress(0.85, 'Making it seekable');
-  const out = await seekable(new Blob(chunks, { type: mime }));
+  const out = await seekable(new Blob(chunks, { type: mime }), h264);
   const saved = await window.marketo.screen.save(out.bytes, `${a.name?.trim() || src.name}.${out.ext}`);
   if (!saved.ok || !saved.data) throw new Error(saved.message ?? 'Could not save the recording.');
   // A few frames, so the AI can pick the seconds for its screen beats.

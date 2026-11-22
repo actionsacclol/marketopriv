@@ -40,13 +40,13 @@ function Meter({ label, m }: { label: string; m?: { done: number; cap: number } 
 }
 
 /** One platform of an account: status dot, who it runs as, today's posts ring and warm-up meters. Click opens the platform. */
-export function PlatformTile({ s, accountId, compact }: { s: SiteState; accountId: string; compact?: boolean }) {
+export function PlatformTile({ s, accountId, compact, onSelect }: { s: SiteState; accountId: string; compact?: boolean; onSelect?: () => void }) {
   const Icon = SITE_ICON[s.site];
   const color = SITE_COLOR[s.site];
   return (
     <button
-      onClick={() => void openSite(accountId, s.site)}
-      title={`${s.detail}. Click to open ${SITE_SHORT[s.site]}.`}
+      onClick={() => (onSelect ? onSelect() : void openSite(accountId, s.site))}
+      title={onSelect ? `${s.detail}. Click for the breakdown and your AI instructions.` : `${s.detail}. Click to open ${SITE_SHORT[s.site]}.`}
       className="glass-tile group relative flex flex-col gap-2.5 overflow-hidden rounded-2xl p-3.5 text-left transition hover:-translate-y-0.5"
     >
       <div className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full opacity-[0.12] blur-2xl transition group-hover:opacity-25" style={{ background: color }} />

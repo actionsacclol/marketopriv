@@ -20,6 +20,8 @@ export interface Env {
   logo: HTMLImageElement | null;
   /** clip preset: the current video frame, already resolved for time t. */
   video: CanvasImageSource | null;
+  /** A campaign's ad banner is drawn from here down: captions stay above it (null = no banner). */
+  bannerTop: number | null;
   videoSize: { w: number; h: number } | null;
   frame: number;
 }
@@ -36,6 +38,12 @@ export const FONT = {
   sans: '"Chakra Petch", Inter, system-ui, sans-serif',
   mono: '"JetBrains Mono", ui-monospace, monospace',
   pixel: '"Press Start 2P", monospace',
+  /** Captions and meme bars: a heavy round sans. */
+  meme: 'Montserrat, "Arial Black", Arial, sans-serif',
+  /** Classic top / bottom meme text. */
+  impact: 'Anton, Impact, "Arial Black", sans-serif',
+  /** Forum post cards and greentext boards. */
+  board: 'Arial, Helvetica, sans-serif',
 };
 
 // ── Math ───────────────────────────────────────────────────────────────────
@@ -336,12 +344,40 @@ export interface FrameInput {
   logo: HTMLImageElement | null;
   video?: CanvasImageSource | null;
   videoSize?: { w: number; h: number } | null;
+  /** The reel's campaign's ad banner (loadBanner), if it has one. */
+  banner?: HTMLImageElement | null;
+}
+
+/** Where a campaign's ad banner sits: centred, its bottom just above the platforms' caption area. */
+const BANNER = { maxW: 900, maxH: 200, bottom: 1520 };
+
+function bannerBox(img: HTMLImageElement): { x: number; y: number; w: number; h: number } {
+  const s = Math.min(BANNER.maxW / img.naturalWidth, BANNER.maxH / img.naturalHeight);
+  const w = img.naturalWidth * s;
+  const h = img.naturalHeight * s;
+  return { x: W / 2 - w / 2, y: BANNER.bottom - h, w, h };
+}
+
+function drawBanner(ctx: Ctx, img: HTMLImageElement): void {
+  const b = bannerBox(img);
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.45)';
+  ctx.shadowBlur = 24;
+  ctx.shadowOffsetY = 6;
+  rrect(ctx, b.x, b.y, b.w, b.h, 14);
+  ctx.fillStyle = 'rgba(0,0,0,0.001)';
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.clip();
+  ctx.drawImage(img, b.x, b.y, b.w, b.h);
+  ctx.restore();
 }
 
 export function drawReel(ctx: Ctx, input: FrameInput): Timing {
   const timing = timingFor(input.preset, input.fields);
   const accent = ACCENTS[String(input.fields.accent)] ?? ACCENTS.krypt;
-  const env: Env = { t: input.t, fields: input.fields, timing, accent, logo: input.logo, video: input.video ?? null, videoSize: input.videoSize ?? null, frame: input.frame };
+  const banner = input.banner && input.banner.naturalWidth > 0 ? input.banner : null;
+  const env: Env = { t: input.t, fields: input.fields, timing, accent, logo: input.logo, video: input.video ?? null, videoSize: input.videoSize ?? null, frame: input.frame, bannerTop: banner ? bannerBox(banner).y : null };
   ctx.save();
   ctx.clearRect(0, 0, W, H);
   lightFrame = null;
@@ -360,8 +396,33 @@ export function drawReel(ctx: Ctx, input: FrameInput): Timing {
   if (timing.cta > 0 && input.t >= timing.body + 0.2) endCard(ctx, env, input.t - timing.body - 0.2);
   disclaimer(ctx, env);
   finish(ctx, env);
+  // Over the vignette and grain, so the brand's banner shows as they made it.
+  if (banner) drawBanner(ctx, banner);
   ctx.restore();
   return timing;
+}
+
+const banners = new Map<string, Promise<HTMLImageElement | null>>();
+/** A campaign's ad banner (a picture path), or null when there is none or it can't be read. */
+export function loadBanner(path?: string): Promise<HTMLImageElement | null> {
+  const key = (path ?? '').trim();
+  if (!key) return Promise.resolve(null);
+  let p = banners.get(key);
+  if (!p) {
+    p = new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      // Not kept: the user may put the file back or set the banner again.
+      img.onerror = () => {
+        banners.delete(key);
+        resolve(null);
+      };
+      img.src = window.marketo.app.mediaUrl(key);
+    });
+    banners.set(key, p);
+  }
+  return p;
 }
 
 // ── Assets ─────────────────────────────────────────────────────────────────
@@ -385,6 +446,58 @@ export function loadLogo(path?: unknown): Promise<HTMLImageElement | null> {
   return p;
 }
 
+// Pictures a reel shows (meme panels, narrated image lines). Drawing is synchronous, so they are loaded first
+// (preloadImages) and drawn from here; one still loading draws as an empty frame and redraws when it lands.
+const images = new Map<string, { img: HTMLImageElement; ready: Promise<void>; ok: boolean }>();
+
+function imageEntry(path: string): { img: HTMLImageElement; ready: Promise<void>; ok: boolean } {
+  let e = images.get(path);
+  if (!e) {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    const entry = { img, ok: false, ready: Promise.resolve() };
+    entry.ready = new Promise<void>((resolve) => {
+      img.onload = () => {
+        entry.ok = true;
+        resolve();
+      };
+      img.onerror = () => resolve();
+    });
+    img.src = window.marketo.app.mediaUrl(path);
+    images.set(path, entry);
+    e = entry;
+  }
+  return e;
+}
+
+/** A loaded picture by file path, or null while it loads (or when it can't be read). */
+export function imageOf(path: string): HTMLImageElement | null {
+  if (!path) return null;
+  const e = imageEntry(path);
+  return e.ok ? e.img : null;
+}
+
+/** The picture files a reel's lines point at (image panels and lines: column a). */
+export function imagePaths(fields: Fields): string[] {
+  const out = new Set<string>();
+  for (const line of String(fields.beats ?? '').split('\n')) {
+    const c = line.split('|').map((x) => x.trim());
+    if ((c[2] ?? '').toLowerCase() === 'image' && c[3]) out.add(c[3]);
+  }
+  return [...out];
+}
+
+/** Load every picture a reel needs before frames are drawn for export or stills. */
+export async function preloadImages(fields: Fields, onLoad?: () => void): Promise<void> {
+  await Promise.all(
+    imagePaths(fields).map((p) =>
+      imageEntry(p).ready.then(() => {
+        onLoad?.();
+      }),
+    ),
+  );
+}
+
 /** Webfonts load lazily; make sure every face the engine uses is ready before drawing frames that get encoded. */
 export async function loadFonts(): Promise<void> {
   try {
@@ -396,6 +509,10 @@ export async function loadFonts(): Promise<void> {
       document.fonts.load(`500 32px ${FONT.mono}`),
       document.fonts.load(`600 32px ${FONT.mono}`),
       document.fonts.load(`400 24px ${FONT.pixel}`),
+      document.fonts.load(`400 64px ${FONT.impact}`),
+      document.fonts.load(`600 64px ${FONT.meme}`),
+      document.fonts.load(`800 64px ${FONT.meme}`),
+      document.fonts.load(`900 64px ${FONT.meme}`),
     ]);
     await document.fonts.ready;
   } catch {

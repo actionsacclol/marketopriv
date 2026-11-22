@@ -1,6 +1,7 @@
 import { num, screenZoom, storyBeats, str, type StoryBeat } from '@shared/presets';
 import { COIN_LAND, CROSS_AT, CROSS_STEP, FOLLOW_CLICK, NUMBER_LAND, POLL_STEP, RADAR_AT, RADAR_STEP, STAMP_AT, TIERS, TIER_LAND, pollStart, WALLET_AT, WALLET_STEP, chartDrawTime, chartPoints, chatMessages, chatTimes, list, parseNum, radarPulses, radarShift, radarSounds, tierItem, type RadarKind } from '@shared/sfx';
 import { isAction } from '@shared/character';
+import { applyView, fxMoves, fxPost, fxView } from './fx';
 import { actionFx, actionLabel, artBackdrop, artOf, cartoonHeadline, dialogueBox, drawMascot } from './storyArt';
 import { FONT, H, W, backdrop, clamp01, countUp, drawLines, easeBack, easeInOut, easeOut, fit, font, gradient, hexA, lerp, logo, markLightFrame, prog, registerPreset, rrect, scaled, withAlpha, type Ctx, type Env } from '../engine';
 
@@ -1907,9 +1908,15 @@ function draw(ctx: Ctx, env: Env): void {
   // instead; a kinetic cut zooms through instead).
   const exit = last || b.kinetic ? 0 : prog(local, b.dur - 0.2, 0.2);
   // The opening beat's visual is there from frame 0 (the poster); its words still blur in.
+  // Beat-flag effects (zoom punch, shake, fry, flash), the same as meme reels.
+  const view = fxView(b, local);
+  ctx.save();
+  if (fxMoves(view)) applyView(ctx, view);
   const th = scene(ctx, env, beats, i, local, { animateIn: i !== 0, exit });
   if (b.wipe) wipe(ctx, th, local);
   else if (b.kinetic && i > 0 && local < CUT) zoomThrough(ctx, env, beats, i - 1, prog(local, 0, CUT));
+  ctx.restore();
+  fxPost(ctx, b, local);
   markLightFrame(th.light);
   if (loop && last) {
     const fade = prog(env.t, env.timing.body - LOOP_FADE, LOOP_FADE);

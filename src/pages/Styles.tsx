@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, Check, Copy, Film, Pencil, Plus, Trash2, Volume2, VolumeX } from 'lucide-react';
 import type { CustomStyle, IgAccount } from '@shared/types';
 import { ClipSources } from '../components/ClipSourcesEditor';
-import { STYLES, allStyles, styleName, stylesOf, type ChannelStyle } from '@shared/styles';
+import { MemeStyleSettings } from '../components/MemeStyleSettings';
+import { STYLES, TONE_STYLES, allStyles, styleName, stylesOf, type ChannelStyle } from '@shared/styles';
 import { MixCard, VarietyCard } from '../components/ReelControls';
 import { STYLE_PAGES } from '@shared/stylePages';
 import { Card, GhostButton, Page, PrimaryButton } from '../components/ui';
@@ -256,6 +257,7 @@ function StylePageView({ st, media, accounts, onBack }: { st: ChannelStyle; medi
             </div>
           </Card>
           {st.id === 'clipping' && accounts.some((a) => stylesOf(a).includes('clipping')) && <ClipSources accounts={accounts.filter((a) => stylesOf(a).includes('clipping'))} />}
+          {TONE_STYLES.includes(st.id) && <MemeStyleSettings styleId={st.id} accounts={accounts} />}
           {page && (
             <div className="grid gap-4 xl:grid-cols-2">
               <Section title="Why it works">

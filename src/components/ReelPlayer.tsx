@@ -1,23 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
 import { Pause, Play, RotateCcw, ScanLine } from 'lucide-react';
-import { clipSound, num, storyVideoTime, storyVoiceTrack, str, timingFor } from '@shared/presets';
+import { clipSound, isVoiced, num, storyVideoTime, storyVoiceTrack, str, timingFor } from '@shared/presets';
 import type { Fields } from '@shared/types';
-import { H, SAFE, W, drawReel, loadFonts, loadLogo } from '../render/engine';
+import { H, SAFE, W, drawReel, imagePaths, loadBanner, loadFonts, loadLogo, preloadImages } from '../render/engine';
 import { MUSIC_UNDER_VOICE, mediaUrl, seek, videoElement, waitMeta } from '../render/media';
 import '../render/presets';
 import { cls } from '../lib/format';
+import { useHubActive } from '../lib/hubActive';
+import { usePerf } from '../lib/perf';
 
 // Live preview: the same drawReel the export uses, driven by rAF. Video (clip
 // preset) and music play along and are re-synced when they drift.
+// Lite preview (Setup > Performance): drawn at half size, at most 30 times a second, and held still while nobody is
+// using the hub. The export is untouched (it draws on its own canvas).
 
 /** `jump` moves the preview to a time whenever its `n` changes (the beat cards use it). */
-export function ReelPlayer({ preset, fields, jump }: { preset: string; fields: Fields; jump?: { t: number; n: number } }) {
+export function ReelPlayer({ preset, fields, jump, banner: bannerPath }: { preset: string; fields: Fields; jump?: { t: number; n: number }; banner?: string }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [playing, setPlaying] = useState(true);
   const [t, setT] = useState(0);
   const [safe, setSafe] = useState(false);
-  const state = useRef({ t: 0, last: 0, playing: true, preset, fields, logo: null as HTMLImageElement | null, video: null as HTMLVideoElement | null, music: null as HTMLAudioElement | null, voice: null as HTMLAudioElement | null, frame: 0, dirty: true });
+  const state = useRef({ t: 0, last: 0, playing: true, preset, fields, logo: null as HTMLImageElement | null, banner: null as HTMLImageElement | null, video: null as HTMLVideoElement | null, music: null as HTMLAudioElement | null, voice: null as HTMLAudioElement | null, frame: 0, dirty: true });
   const timing = timingFor(preset, fields);
+  const lite = usePerf().litePreview;
+  const active = useHubActive();
+  const scale = lite ? 0.5 : 1;
+  const opts = useRef({ lite, away: false });
+  opts.current = { lite, away: lite && !active };
 
   state.current.preset = preset;
   state.current.fields = fields;
@@ -38,8 +47,28 @@ export function ReelPlayer({ preset, fields, jump }: { preset: string; fields: F
     };
   }, [logoPath]);
 
-  // Video for the clip preset.
-  const videoPath = preset === 'clip' || preset === 'story' ? str(fields, 'video') : '';
+  // The campaign's ad banner, if the reel is for a campaign that has one.
+  useEffect(() => {
+    let alive = true;
+    void loadBanner(bannerPath).then((b) => {
+      if (!alive) return;
+      state.current.banner = b;
+      state.current.dirty = true;
+    });
+    return () => {
+      alive = false;
+    };
+  }, [bannerPath]);
+
+  // Pictures (meme panels, narrated image lines): redraw as each one loads.
+  const picKey = isVoiced(preset) ? imagePaths(fields).join('|') : '';
+  useEffect(() => {
+    if (!picKey) return;
+    void preloadImages(state.current.fields, () => (state.current.dirty = true));
+  }, [picKey]);
+
+  // Video for the clip preset (and story / meme screen beats, a narrated reel's background).
+  const videoPath = preset === 'clip' || isVoiced(preset) ? str(fields, 'video') : '';
   useEffect(() => {
     if (!videoPath) {
       state.current.video = null;
@@ -78,7 +107,7 @@ export function ReelPlayer({ preset, fields, jump }: { preset: string; fields: F
   }, [musicPath]);
 
   // Voice-over (story preset), once generated for the current beats.
-  const voicePath = preset === 'story' ? storyVoiceTrack(fields) : null;
+  const voicePath = isVoiced(preset) ? storyVoiceTrack(fields) : null;
   useEffect(() => {
     if (!voicePath) {
       state.current.voice = null;
@@ -97,6 +126,8 @@ export function ReelPlayer({ preset, fields, jump }: { preset: string; fields: F
   useEffect(() => {
     let raf = 0;
     let alive = true;
+    let lastDraw = 0;
+    let lastLabel = 0;
     const ctx = canvas.current!.getContext('2d', { alpha: false })!;
     void loadFonts().then(() => {
       state.current.dirty = true;
@@ -107,39 +138,47 @@ export function ReelPlayer({ preset, fields, jump }: { preset: string; fields: F
       const total = timingFor(s.preset, s.fields).total;
       const dt = s.last ? (now - s.last) / 1000 : 0;
       s.last = now;
-      if (s.playing) {
+      const o = opts.current;
+      const playing = s.playing && !o.away;
+      if (playing) {
         s.t += dt;
         if (s.t >= total) s.t = 0;
         s.dirty = true;
       }
-      const story = s.preset === 'story';
-      const storyT = story && s.video ? storyVideoTime(s.fields, s.t) : null;
+      const story = isVoiced(s.preset);
+      const storyT = story && s.video ? storyVideoTime(s.fields, s.t, undefined, Number.isFinite(s.video.duration) ? s.video.duration : 0) : null;
       const clipT = story ? (storyT ?? 0) : num(s.fields, 'start', 0) + Math.min(s.t, num(s.fields, 'seconds', 12));
       const inClip = story ? storyT !== null : s.t < num(s.fields, 'seconds', 12);
       if (s.video && s.video.readyState >= 1) {
         s.video.muted = !(s.preset === 'clip' && clipSound(s.fields));
-        if (s.playing && inClip) {
+        if (playing && inClip) {
           if (s.video.paused) void s.video.play().catch(() => {});
           if (Math.abs(s.video.currentTime - clipT) > 0.3) s.video.currentTime = clipT;
         } else {
           if (!s.video.paused) s.video.pause();
-          if (!s.playing && Math.abs(s.video.currentTime - clipT) > 0.05) s.video.currentTime = clipT;
+          if (!playing && Math.abs(s.video.currentTime - clipT) > 0.05) s.video.currentTime = clipT;
         }
       }
       if (s.music) s.music.volume = Math.max(0, Math.min(1, num(s.fields, 'music_volume', 0.8) * (s.voice ? MUSIC_UNDER_VOICE : 1)));
       for (const a of [s.music, s.voice]) {
         if (!a) continue;
-        if (s.playing) {
+        if (playing) {
           if (a.paused) void a.play().catch(() => {});
           if (Math.abs(a.currentTime - s.t) > 0.3) a.currentTime = s.t;
         } else if (!a.paused) a.pause();
       }
-      if (s.dirty) {
+      if (s.dirty && (!o.lite || now - lastDraw >= 33)) {
         s.dirty = false;
         s.frame++;
+        lastDraw = now;
         const v = s.video && s.video.readyState >= 2 && inClip ? s.video : null;
-        drawReel(ctx, { preset: s.preset, fields: s.fields, t: s.t, frame: s.frame, logo: s.logo, video: v, videoSize: v ? { w: v.videoWidth, h: v.videoHeight } : null });
-        setT(s.t);
+        const k = ctx.canvas.width / W;
+        ctx.setTransform(k, 0, 0, k, 0, 0);
+        drawReel(ctx, { preset: s.preset, fields: s.fields, t: s.t, frame: s.frame, logo: s.logo, banner: s.banner, video: v, videoSize: v ? { w: v.videoWidth, h: v.videoHeight } : null });
+        if (!o.lite || now - lastLabel >= 100 || !playing) {
+          lastLabel = now;
+          setT(s.t);
+        }
       }
       raf = requestAnimationFrame(tick);
     };
@@ -166,7 +205,7 @@ export function ReelPlayer({ preset, fields, jump }: { preset: string; fields: F
   return (
     <div className="flex h-full flex-col items-center gap-3">
       <div className="relative min-h-0 flex-1" style={{ aspectRatio: `${W} / ${H}` }}>
-        <canvas ref={canvas} width={W} height={H} className="h-full w-full rounded-2xl border border-white/10 bg-black shadow-krypt-card" />
+        <canvas ref={canvas} width={W * scale} height={H * scale} className="h-full w-full rounded-2xl border border-white/10 bg-black shadow-krypt-card" />
         {safe && (
           <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl">
             <div className="absolute inset-x-0 top-0 bg-rose-500/20" style={{ height: `${(220 / H) * 100}%` }} />

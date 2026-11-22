@@ -3,12 +3,15 @@
 //   lofi    - dusty electric-piano 7th chords, swung boom-bap drums, round bass, vinyl crackle
 //   ambient - slow detuned pads and a soft sub, no drums
 //   pulse   - a driving four-on-the-floor groove with an 8th-note bass and a pad
+//   phonk   - a pitched cowbell riff, a sliding distorted 808 and hard half-time drums (meme edits)
+//   goofy   - an oom-pah tuba, staccato chords and a bouncy xylophone tune (dumb / funny reels)
+//   creepy  - a low drone and a slightly detuned music box (scary stories)
 // The seed (from the reel's text) picks the key and the progression, so two
 // reels don't sound the same. The bed is rendered on its own, levelled, then
 // mixed under the voice with ducking while anyone speaks.
 
-export type BedStyle = 'lofi' | 'ambient' | 'pulse';
-export const BED_STYLES: BedStyle[] = ['lofi', 'ambient', 'pulse'];
+export type BedStyle = 'lofi' | 'ambient' | 'pulse' | 'phonk' | 'goofy' | 'creepy';
+export const BED_STYLES: BedStyle[] = ['lofi', 'ambient', 'pulse', 'phonk', 'goofy', 'creepy'];
 
 const hz = (midi: number): number => 440 * Math.pow(2, (midi - 69) / 12);
 
@@ -49,10 +52,30 @@ const PULSE: number[][][] = [
   [[38, 57, 62, 65], [46, 58, 62, 65], [41, 57, 60, 65], [45, 57, 61, 64]], // Dm Bb F A
 ];
 
+const PHONK: number[][][] = [
+  [[45, 57, 60, 64], [45, 57, 60, 64], [41, 57, 60, 65], [43, 55, 59, 62]], // Am Am F G
+  [[38, 57, 62, 65], [38, 57, 62, 65], [46, 58, 62, 65], [45, 57, 61, 64]], // Dm Dm Bb A
+];
+const GOOFY: number[][][] = [
+  [[36, 60, 64, 67], [41, 60, 65, 69], [43, 62, 67, 71], [36, 60, 64, 67]], // C F G C
+  [[36, 60, 64, 67], [45, 60, 64, 69], [41, 60, 65, 69], [43, 59, 62, 67]], // C Am F G
+];
+const CREEPY: number[][][] = [
+  [[45, 57, 60, 64], [46, 58, 62, 65], [45, 57, 60, 64], [44, 56, 59, 64]], // Am Bb Am E/G#
+  [[38, 50, 53, 57], [39, 51, 55, 58], [38, 50, 53, 57], [37, 49, 52, 57]],
+];
+// Scales for the melodies (semitones from C).
+const MINOR_PENT = [0, 3, 5, 7, 10];
+const MAJOR_PENT = [0, 2, 4, 7, 9];
+const MINOR = [0, 2, 3, 5, 7, 8, 11];
+
 const STYLE = {
   lofi: { bpm: [76, 84], swing: 0.16 },
   ambient: { bpm: [60, 60], swing: 0 },
   pulse: { bpm: [100, 108], swing: 0 },
+  phonk: { bpm: [128, 140], swing: 0 },
+  goofy: { bpm: [112, 124], swing: 0.12 },
+  creepy: { bpm: [56, 64], swing: 0 },
 } as const;
 
 /** Render the bed on its own (stereo), levelled to a fixed loudness. */
@@ -66,7 +89,7 @@ export async function renderBed(style: BedStyle, seconds: number, seed: number, 
   const beat = 60 / bpm;
   const bar = beat * 4;
   const swing = STYLE[style].swing;
-  const progs = style === 'lofi' ? LOFI : style === 'ambient' ? AMBIENT : PULSE;
+  const progs = { lofi: LOFI, ambient: AMBIENT, pulse: PULSE, phonk: PHONK, goofy: GOOFY, creepy: CREEPY }[style];
   const prog = progs[Math.floor(r() * progs.length)];
   const noise = noiseBuffer(ctx, 2, seed ^ 0x9e3779b9);
 
@@ -78,7 +101,7 @@ export async function renderBed(style: BedStyle, seconds: number, seed: number, 
   master.gain.linearRampToValueAtTime(0, seconds);
   const tape = ctx.createBiquadFilter();
   tape.type = 'lowpass';
-  tape.frequency.value = style === 'lofi' ? 5200 : style === 'ambient' ? 7000 : 11000;
+  tape.frequency.value = style === 'lofi' ? 5200 : style === 'ambient' || style === 'creepy' ? 7000 : 11000;
   tape.Q.value = 0.4;
   master.connect(tape).connect(ctx.destination);
 
@@ -110,12 +133,12 @@ export async function renderBed(style: BedStyle, seconds: number, seed: number, 
   };
   const kick = (t: number, v: number): void => {
     const o = ctx.createOscillator();
-    o.frequency.setValueAtTime(style === 'pulse' ? 140 : 115, t);
+    o.frequency.setValueAtTime(style === 'pulse' || style === 'phonk' ? 140 : 115, t);
     o.frequency.exponentialRampToValueAtTime(46, t + 0.11);
     const g = ctx.createGain();
     g.gain.setValueAtTime(0, t);
     g.gain.linearRampToValueAtTime(0.95 * v, t + 0.003);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + (style === 'pulse' ? 0.32 : 0.42));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + (style === 'pulse' || style === 'phonk' ? 0.32 : 0.42));
     o.connect(g).connect(center);
     o.start(t);
     o.stop(t + 0.5);
@@ -204,6 +227,124 @@ export async function renderBed(style: BedStyle, seconds: number, seed: number, 
     o.stop(t + dur + 0.05);
   };
 
+  // ── The meme styles' instruments ──
+  /** Pitched cowbell (phonk): two squares a fifth-ish apart through a band-pass, short. */
+  const cowbell = (t: number, midi: number, v: number): void => {
+    const f0 = hz(midi + transpose);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = f0 * 1.5;
+    bp.Q.value = 2.5;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.16 * v, t + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.03 * v, t + 0.06);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+    bp.connect(g).connect(pan(0.12));
+    for (const k of [1, 1.48]) {
+      const o = ctx.createOscillator();
+      o.type = 'square';
+      o.frequency.value = f0 * k;
+      o.connect(bp);
+      o.start(t);
+      o.stop(t + 0.3);
+    }
+  };
+  /** Distorted 808 (phonk): a long sine that slides from the last note, driven. */
+  const shaper = ctx.createWaveShaper();
+  {
+    const n = 1024;
+    const curve = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * 2 - 1;
+      curve[i] = Math.tanh(x * 3) / Math.tanh(3);
+    }
+    shaper.curve = curve;
+    shaper.connect(center);
+  }
+  let last808 = 0;
+  const b808 = (t: number, midi: number, dur: number, v: number): void => {
+    const f = hz(midi + transpose);
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(last808 || f, t);
+    o.frequency.exponentialRampToValueAtTime(f, t + (last808 && last808 !== f ? 0.09 : 0.01));
+    last808 = f;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.42 * v, t + 0.006);
+    g.gain.setValueAtTime(0.36 * v, t + dur * 0.7);
+    g.gain.linearRampToValueAtTime(0, t + dur);
+    o.connect(g).connect(shaper);
+    o.start(t);
+    o.stop(t + dur + 0.05);
+  };
+  /** Xylophone / music box: a sine with a quick 4x partial, ringing out. */
+  const mallet = (t: number, midi: number, v: number, ring: number, dest: AudioNode, wobble = 0): void => {
+    const f = hz(midi + transpose);
+    for (const [k, amp, len] of [
+      [1, 0.2, ring],
+      [3.98, 0.07, ring * 0.25],
+    ]) {
+      const o = ctx.createOscillator();
+      o.frequency.value = f * k;
+      if (wobble) o.detune.value = (r() - 0.5) * wobble;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(amp * v, t + 0.003);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+      o.connect(g).connect(dest);
+      o.start(t);
+      o.stop(t + len + 0.05);
+    }
+  };
+  /** Tuba (goofy): a soft saw through a low-pass, puffy attack. */
+  const tuba = (t: number, midi: number, dur: number, v: number): void => {
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.value = hz(midi + transpose);
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(260, t);
+    f.frequency.linearRampToValueAtTime(620, t + 0.04);
+    f.frequency.linearRampToValueAtTime(380, t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.32 * v, t + 0.03);
+    g.gain.linearRampToValueAtTime(0, t + dur);
+    o.connect(f).connect(g).connect(center);
+    o.start(t);
+    o.stop(t + dur + 0.05);
+  };
+  /** Staccato chord stab (goofy "pah"). */
+  const stab = (t: number, tones: number[], v: number): void => {
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = 2400;
+    f.connect(pan(-0.15));
+    for (const n of tones) {
+      const o = ctx.createOscillator();
+      o.type = 'square';
+      o.frequency.value = hz(n + transpose);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.022 * v, t + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+      o.connect(g).connect(f);
+      o.start(t);
+      o.stop(t + 0.15);
+    }
+  };
+  const woodblock = (t: number, v: number): void => burst(t, 0.05, 0.3 * v, 'bandpass', 1800, 9, pan(0.2));
+  // A melody walks the scale: mostly steps, sometimes a leap, from the chord's root.
+  let melIdx = 2;
+  const melodyNote = (scale: number[], base: number): number => {
+    melIdx = Math.max(0, Math.min(scale.length * 2 - 1, melIdx + (r() < 0.7 ? (r() < 0.5 ? -1 : 1) : Math.floor(r() * 5) - 2)));
+    return base + Math.floor(melIdx / scale.length) * 12 + scale[melIdx % scale.length];
+  };
+  const phonkRiff = Array.from({ length: 16 }, (_, k) => (k % 4 === 0 || r() < 0.45 ? Math.floor(r() * 5) : -1));
+  const goofyRhythm = Array.from({ length: 8 }, (_, k) => k === 0 || r() < 0.6);
+  const creepyTune = Array.from({ length: 8 }, () => Math.floor(r() * MINOR.length));
+
   // Tremolo bus for the keys (lofi wobble).
   const keys = ctx.createGain();
   keys.gain.value = 1;
@@ -246,6 +387,42 @@ export async function renderBed(style: BedStyle, seconds: number, seed: number, 
       bass(t0, root - 12 < 28 ? root : root - 12, bar, 0.55);
       // A soft bell on the top note every other bar.
       if (b % 2 === 1) ep(t0 + beat * 2, tones[tones.length - 1] + 12, beat * 2, 0.35, keys);
+    } else if (style === 'phonk') {
+      // Cowbell riff (repeats every bar, follows the chord), sliding 808, half-time drums with hat rolls.
+      phonkRiff.forEach((deg, s) => {
+        if (deg >= 0) cowbell(step(t0, s), root + 24 + MINOR_PENT[deg], s % 4 === 0 ? 1 : 0.7);
+      });
+      b808(t0, root - 12 < 26 ? root : root - 12, beat * 1.6, 1);
+      b808(step(t0, 10), root - 12 < 26 ? root + 7 : root - 5, beat * 1.3, 0.9);
+      if (b > 0 || r() > 0.4) {
+        kick(t0, 1);
+        kick(step(t0, 10), 0.9);
+        snare(step(t0, 8), 1.1);
+        burst(step(t0, 8), 0.12, 0.32, 'highpass', 1200, 0.7, pan(0.05)); // clap layer
+        for (let s = 0; s < 16; s++) hat(step(t0, s), s % 2 === 0 ? 0.7 : 0.4);
+        if (b % 2 === 1) for (let k = 0; k < 6; k++) hat(step(t0, 12) + k * (beat / 6), 0.5); // triplet roll
+      }
+    } else if (style === 'goofy') {
+      // Oom-pah: tuba on 1 and 3 (root, fifth), chord stabs on 2 and 4, a bouncy xylophone tune, woodblock.
+      tuba(t0, root - 12 < 28 ? root : root - 12, beat * 0.55, 1);
+      tuba(t0 + beat * 2, (root - 12 < 28 ? root : root - 12) + 7, beat * 0.55, 0.9);
+      stab(t0 + beat, tones, 1);
+      stab(t0 + beat * 3, tones, 1);
+      goofyRhythm.forEach((on, k) => {
+        if (on) mallet(step(t0, k * 2), melodyNote(MAJOR_PENT, 72), 0.9, 0.5, pan(0.22));
+      });
+      woodblock(t0 + beat * 1.5, 0.8);
+      woodblock(t0 + beat * 3.5, 0.6);
+      if (b % 4 === 3) woodblock(t0 + beat * 3.75, 0.5);
+    } else if (style === 'creepy') {
+      // A low drone under a music box that is slightly out of tune, and a breath of noise now and then.
+      pad(t0, root - 12, bar, 1.1, pan(-0.2), 420);
+      pad(t0, root - 5, bar, 0.6, pan(0.2), 380);
+      creepyTune.forEach((deg, k) => {
+        if (k % 2 === 1 && r() < 0.4) return;
+        mallet(t0 + k * (bar / 8), 69 + MINOR[(deg + b) % MINOR.length], 0.7, 1.6, pan(0.3), 22);
+      });
+      if (b % 2 === 1) burst(t0 + beat * 2, 1.4, 0.05, 'lowpass', 700, 0.5, pan(-0.4));
     } else {
       tones.forEach((n, i) => pad(t0, n, bar, 0.7, pan(i % 2 ? 0.3 : -0.3), 3200));
       for (let s = 0; s < 16; s += 2) bass(step(t0, s), root, beat * 0.42, s % 4 === 0 ? 1 : 0.75, 'sawtooth');

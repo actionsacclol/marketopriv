@@ -6,13 +6,14 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AccountInput, AccountSnapshot, AgentConfig, Brand, Db, Fields, IgAccount, Learning, PostLog, Reel, ReelFeedback, Reference, RefVideo, Session, SessionAction, Settings, Site, TrainingBrief, TrainingNote, TrainingTopic } from '../shared/types';
-import { mergePosts, reelPosts } from '../shared/posts';
-import { defaultsFor, normalizeFields, presetById } from '../shared/presets';
+import type { AccountInput, AccountSnapshot, AgentConfig, Brand, Campaign, Submission, Db,Fields, IgAccount, Learning, PostLog, Reel, ReelFeedback, Reference, RefVideo, Session, SessionAction, Settings, Site, TrainingBrief, TrainingNote, TrainingTopic, LongVideo } from '../shared/types';
+import { mergePosts, postKey, reelPosts } from '../shared/posts';
+import { REWARDS_SITES, SUBMIT_WINDOW_MS, campaignIdOf, campaignUrl, isKryptAccountOn } from '../shared/campaigns';
+import { defaultsFor, isVoiced, normalizeFields, presetById } from '../shared/presets';
 import { formatById } from '../shared/formats';
 import { hookLine } from '../shared/score';
 import { BRIEF_MAX_CHARS, topicKeyOf, trainingOf } from '../shared/training';
-import { cleanLimits, localDate, normalizeHandle, sameHandle } from '../shared/warmup';
+import { cleanLimits, forgetDayIndex, linkPatch, localDate, normalizeHandle, sameHandle } from '../shared/warmup';
 import { cleanTune, tuneToFields, voiceId, type SavedVoice, type VoiceTune } from '../shared/voice';
 import { cleanSayAs, setSayAs } from '../shared/pronounce';
 import { EMPTY_BRAND, KRYPT_BRAND, cleanInvite, creatorProblem } from '../shared/brand';
@@ -41,7 +42,8 @@ export function init(userData: string, defaultOutputDir: string): void {
     const brand: Brand = raw.brand ? { ...EMPTY_BRAND, ...raw.brand } : { ...KRYPT_BRAND };
     // The Krypt tools catalog used to have a switch. It is built in now.
     delete (brand as Brand & { kryptPack?: boolean }).kryptPack;
-    db = { ...db, ...raw, igAccounts: (raw.igAccounts ?? []).map((a: IgAccount) => (a.browser ? a : { ...a, browser: a.chromeProfile ? ('chrome' as const) : ('hub' as const) })), learnings: raw.learnings ?? [], posts: raw.posts ?? [], refVideos: raw.refVideos ?? [], voices: raw.voices ?? [], settings: { ...db.settings, ...(raw.settings ?? {}) }, brand, agent: { ...EMPTY_AGENT, ...(raw.agent ?? {}) }, version: 1 };
+    // The built-in browser is gone (2026-11-19): every account runs in the user's Chrome.
+    db = { ...db, ...raw, igAccounts: (raw.igAccounts ?? []).map((a: IgAccount) => ({ ...a, browser: 'chrome' as const })), learnings: raw.learnings ?? [], posts: raw.posts ?? [], refVideos: raw.refVideos ?? [], voices: raw.voices ?? [], settings: { ...db.settings, ...(raw.settings ?? {}) }, brand, agent: { ...EMPTY_AGENT, ...(raw.agent ?? {}) }, version: 1 };
     // Reels posted before the post log existed go into it.
     if (!raw.posts) db.posts = mergePosts([], db.reels.flatMap((r) => reelPosts(r, db.settings.handle)), () => newId('post'), now()).list;
     // A recording left open by a crash or quit is closed as it stands.
@@ -67,37 +69,94 @@ export function open(dir: string, defaultOutputDir: string): void {
   // Session time since the last save (it is written every 20 s) stays with the profile being closed.
   if (file) persist();
   init(dir, defaultOutputDir);
+  lastBak = 0;
   lastSite.clear();
   for (const l of listeners) l(db);
 }
 
 /**
- * Write a new profile's first data file: empty, or with the open profile's settings, saved voices and chat setup.
- * Never its accounts, brand, reels, posts, Training or learnings: those are what a profile keeps apart.
+ * Write a new profile's first data file: empty, or with the open profile's settings, saved voices and chat setup,
+ * and/or its knowledge (Training, learnings, playbook notes, references, reference videos, own styles, brand).
+ * Never its accounts, their follower numbers, sessions, reels or post log: those are what a profile keeps apart.
  */
-export function seed(dir: string, outputDir: string, copySettings: boolean): void {
+export function seed(dir: string, outputDir: string, copy: { settings: boolean; knowledge: boolean }): void {
   const next = empty(outputDir);
-  if (copySettings) {
-    const settings = { ...db.settings, handle: '', outputDir };
-    delete settings.autopilot;
-    next.settings = settings;
-    next.voices = db.voices.map((v) => ({ ...v }));
-    next.agent = { ...db.agent };
-  }
+  const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
   fs.mkdirSync(dir, { recursive: true });
+  if (copy.settings) {
+    const settings = { ...clone(db.settings), handle: '', outputDir };
+    delete settings.autopilot;
+    delete settings.proxy;
+    next.settings = settings;
+    next.voices = clone(db.voices);
+    next.agent = clone(db.agent);
+  }
+  if (copy.knowledge) {
+    const from = path.dirname(file);
+    if (db.training) next.training = clone(db.training);
+    next.learnings = clone(db.learnings);
+    next.references = clone(db.references);
+    if (db.customStyles) next.customStyles = clone(db.customStyles);
+    if (db.settings.promoting) next.settings.promoting = db.settings.promoting;
+    // The brand as it is here, set up: the new profile opens ready, with only its accounts to add (no setup wizard).
+    next.brand = clone(db.brand);
+    // The user's playbook notes and the reference videos (their files too, so each profile can delete its own).
+    for (const sub of ['playbook', 'refs']) {
+      try {
+        if (fs.existsSync(path.join(from, sub))) fs.cpSync(path.join(from, sub), path.join(dir, sub), { recursive: true });
+      } catch {
+        /* best effort: the rows below still point at files that exist */
+      }
+    }
+    const moved = (p: string): string => {
+      const rel = path.relative(path.join(from, 'refs'), p);
+      const there = path.join(dir, 'refs', rel);
+      return !rel.startsWith('..') && !path.isAbsolute(rel) && fs.existsSync(there) ? there : p;
+    };
+    next.refVideos = clone(db.refVideos).map((r) => ({ ...r, file: moved(r.file), sheets: { poster: moved(r.sheets.poster), hook: moved(r.sheets.hook), shots: moved(r.sheets.shots) } }));
+  }
   fs.writeFileSync(path.join(dir, 'marketo-db.json'), JSON.stringify(next, null, 2), 'utf8');
 }
 
+/** When the .bak copy was last made: once a minute is enough (a run saves after every like and follow). */
+let lastBak = 0;
+let lastSaveMs = 0;
+/** How long the last save took (Setup > Performance). */
+export const saveTime = (): number => lastSaveMs;
 function persist(): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  try {
-    if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
-  } catch {
-    /* best effort */
+  const t0 = performance.now();
+  // Whatever a batched save was waiting for goes in this one.
+  if (batchTimer) {
+    clearTimeout(batchTimer);
+    batchTimer = null;
   }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (Date.now() - lastBak >= 60_000)
+    try {
+      if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
+      lastBak = Date.now();
+    } catch {
+      /* best effort */
+    }
   const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(db, null, 2), 'utf8');
+  // Compact: about a quarter smaller and quicker to write than indented JSON; it reads back the same.
+  fs.writeFileSync(tmp, JSON.stringify(db), 'utf8');
   fs.renameSync(tmp, file);
+  lastSaveMs = Math.round(performance.now() - t0);
+}
+
+// Batched saves (Setup > Performance, off by default): likes, follows, saves and watches are counted in memory at
+// once (every limit check reads memory), and written to disk at most every batchSec seconds. Posts, comments and
+// messages always save at once.
+let batchSec = 0;
+let batchTimer: NodeJS.Timeout | null = null;
+export function setBatchSave(sec: number): void {
+  batchSec = Math.max(0, Number(sec) || 0);
+  if (!batchSec) flush();
+}
+/** Write anything a batched save is still holding (quit, profile switch). */
+export function flush(): void {
+  if (batchTimer) saveLive(true);
 }
 
 export const get = (): Db => db;
@@ -113,6 +172,150 @@ function commit<T>(fn: (d: Db) => T): T {
   persist();
   for (const l of listeners) l(db);
   return out;
+}
+
+// ── Long videos ────────────────────────────────────────────────────────────
+export function findLongVideo(idOrTitle: string): LongVideo {
+  const list = db.longVideos ?? [];
+  const q = idOrTitle.trim().toLowerCase();
+  const v = list.find((x) => x.id === idOrTitle) ?? list.find((x) => x.title.toLowerCase() === q);
+  if (!v) throw new Error(`No long video "${idOrTitle}". list_long_videos shows them.`);
+  return v;
+}
+
+export function saveLongVideo(input: Partial<LongVideo> & { id?: string }): LongVideo {
+  return commit((d) => {
+    const list = (d.longVideos ??= []);
+    const t = now();
+    const i = input.id ? list.findIndex((x) => x.id === input.id) : -1;
+    if (input.id && i < 0) throw new Error(`No long video "${input.id}".`);
+    const clean = Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) as Partial<LongVideo>;
+    if (i >= 0) {
+      list[i] = { ...list[i], ...clean, updatedAt: t };
+      return list[i];
+    }
+    if (!clean.title?.trim()) throw new Error('A long video needs a title.');
+    if (!clean.accountId) throw new Error('A long video needs the account whose channel it goes to.');
+    const v: LongVideo = { sections: [], status: 'script', ...clean, id: newId('long'), title: clean.title.trim(), accountId: clean.accountId, createdAt: t, updatedAt: t } as LongVideo;
+    list.unshift(v);
+    return v;
+  });
+}
+
+export function deleteLongVideo(id: string): void {
+  commit((d) => {
+    d.longVideos = (d.longVideos ?? []).filter((x) => x.id !== id);
+  });
+}
+
+// ── Content Rewards campaigns ──────────────────────────────────────────────
+export function findCampaign(idOrTitle: string): Campaign {
+  const list = db.campaigns ?? [];
+  const q = idOrTitle.trim().toLowerCase();
+  const key = campaignIdOf(idOrTitle) ?? q;
+  const c = list.find((x) => x.id === key) ?? list.find((x) => x.title.toLowerCase() === q);
+  if (!c) throw new Error(`No campaign "${idOrTitle}". list_campaigns shows them; the user adds one on the Campaigns page.`);
+  return c;
+}
+
+const cleanTags = (v: unknown): string[] | undefined => (Array.isArray(v) ? [...new Set(v.map((x) => String(x).trim()).filter(Boolean))].slice(0, 20) : undefined);
+
+/** Add a campaign (by its link) or change one. Only the fields given change. */
+export function saveCampaign(input: Partial<Campaign> & { url?: string; id?: string }): Campaign {
+  return commit((d) => {
+    const list = (d.campaigns ??= []);
+    const t = now();
+    const id = input.id ?? (input.url ? campaignIdOf(input.url) : null);
+    if (!id) throw new Error('A campaign needs its contentrewards.com link (contentrewards.com/c/campaigns/…).');
+    const i = list.findIndex((x) => x.id === id);
+    const clean: Partial<Campaign> = {};
+    if (input.title !== undefined) clean.title = String(input.title).trim().slice(0, 140);
+    if (input.brand !== undefined) clean.brand = String(input.brand).trim().slice(0, 80) || undefined;
+    if (input.platforms !== undefined) clean.platforms = input.platforms.filter((s) => REWARDS_SITES.includes(s));
+    if (input.pay !== undefined) clean.pay = String(input.pay).trim().slice(0, 200) || undefined;
+    if (input.rules !== undefined) clean.rules = String(input.rules).trim().slice(0, 6000) || undefined;
+    if (input.hashtags !== undefined) clean.hashtags = cleanTags(input.hashtags);
+    if (input.mentions !== undefined) clean.mentions = cleanTags(input.mentions);
+    if (input.links !== undefined) clean.links = cleanTags(input.links);
+    if (input.sources !== undefined) clean.sources = cleanTags(input.sources);
+    // Set by campaignBanner.setBanner (a copy in the campaign's folder); "" removes it.
+    if (input.banner !== undefined) clean.banner = String(input.banner).trim() || undefined;
+    if (input.accounts !== undefined) clean.accounts = input.accounts.filter((x) => d.igAccounts.some((a) => a.id === x));
+    // The user's number, no ceiling.
+    if (input.perDay !== undefined) clean.perDay = Math.max(0, Math.round(Number(input.perDay) || 0));
+    if (input.on !== undefined) clean.on = !!input.on;
+    if (input.test !== undefined) clean.test = !!input.test || undefined;
+    // Krypt's own accounts never post for a paying campaign (every install engages with them: a Content Rewards
+    // ban). A test campaign, set by the user on the page, is the exception.
+    const noKrypt = (c: Campaign): Campaign => c.test ? c : ({
+      ...c,
+      accounts: c.accounts.filter((x) => {
+        const a = d.igAccounts.find((y) => y.id === x);
+        return !!a && !c.platforms.some((s) => isKryptAccountOn(a, s));
+      }),
+    });
+    if (i >= 0) {
+      list[i] = noKrypt({ ...list[i], ...clean, updatedAt: t });
+      return list[i];
+    }
+    const c = noKrypt({ platforms: [], accounts: [], perDay: 1, on: true, ...clean, id, url: campaignUrl(id), title: clean.title || 'New campaign', addedAt: t, updatedAt: t });
+    list.unshift(c);
+    return c;
+  });
+}
+
+export function deleteCampaign(id: string): void {
+  commit((d) => {
+    d.campaigns = (d.campaigns ?? []).filter((x) => x.id !== id);
+  });
+}
+
+/** Submissions, with ones past their 30 minutes turned to missed. */
+export function submissions(): Submission[] {
+  const list = db.submissions ?? [];
+  const t = Date.now();
+  if (list.some((s) => s.status === 'due' && Date.parse(s.deadline) < t))
+    commit((d) => {
+      d.submissions = (d.submissions ?? []).map((s) => (s.status === 'due' && Date.parse(s.deadline) < t ? { ...s, status: 'missed', note: s.note ?? 'not submitted within 30 minutes of posting' } : s));
+    });
+  return db.submissions ?? [];
+}
+
+export function updateSubmission(id: string, patch: Partial<Pick<Submission, 'status' | 'note'>>): Submission {
+  return commit((d) => {
+    const list = d.submissions ?? [];
+    const i = list.findIndex((s) => s.id === id || s.postUrl === id);
+    if (i < 0) throw new Error(`No submission "${id}". list_campaigns shows them.`);
+    const s = list[i];
+    list[i] = { ...s, ...(patch.status ? { status: patch.status } : {}), ...(patch.note !== undefined ? { note: patch.note.trim().slice(0, 300) || undefined } : {}), ...(patch.status === 'submitted' && !s.submittedAt ? { submittedAt: now() } : {}) };
+    return list[i];
+  });
+}
+
+/**
+ * A campaign reel just went live on a platform: queue its link for Content Rewards (due within 30 minutes).
+ * Null when the reel has no campaign, the campaign doesn't pay there, or the post is already in one.
+ */
+function queueSubmission(d: Db, r: Reel, site: Site, url: string, at: string, by: string): Submission | null {
+  const c = r.campaignId ? (d.campaigns ?? []).find((x) => x.id === r.campaignId) : undefined;
+  if (!c || !c.platforms.includes(site)) return null;
+  const list = (d.submissions ??= []);
+  const key = postKey(url);
+  if (list.some((s) => postKey(s.postUrl) === key)) return null;
+  const a = d.igAccounts.find((x) => sameHandle(x.handle, by));
+  if (!a || isKryptAccountOn(a, site)) return null;
+  const s: Submission = { id: newId('sub'), campaignId: c.id, reelId: r.id, accountId: a.id, site, postUrl: url, postedAt: at, deadline: new Date(Date.parse(at) + SUBMIT_WINDOW_MS).toISOString(), status: 'due' };
+  list.unshift(s);
+  return s;
+}
+
+/** A reel went live: its link on the reel, the post log, and a Content Rewards submission if it was made for a campaign. */
+export function markPosted(id: string, site: Site, url: string, at: string, by: string, extra: Partial<Reel> = {}): { reel: Reel; submission: Submission | null } {
+  const r0 = findReel(id);
+  const { reel } = updateReel(id, { status: 'posted', postedBy: by, ...linkPatch(r0, site, url, at), ...extra });
+  logPosts([{ site, handle: by, url, postedAt: at, title: reel.title, kind: 'video', reelId: reel.id, source: 'marketo' }]);
+  const submission = commit((d) => queueSubmission(d, reel, site, url, at, by));
+  return { reel, submission };
 }
 
 // ── Reels ──────────────────────────────────────────────────────────────────
@@ -165,7 +368,7 @@ export function createReel(presetId: string, title?: string, fields: Fields = {}
   if (!p) throw new Error(`Unknown preset "${presetId}". list_presets shows them.`);
   // New narrated reels start with the user's voice (Voices page), unless the format or the caller says otherwise.
   const voice = db.settings.voice && p.fields.some((x) => x.key === 'voice') ? { ...tuneToFields(db.settings.voice), ...(p.fields.some((x) => x.key === 'voice_standin') && db.settings.eleven?.standin ? { voice_standin: db.settings.eleven.standin } : {}) } : {};
-  const { fields: f, warnings } = normalizeFields(p, expandVoice(fields), { ...defaultsFor(p), ...brandDefaults(p.fields.map((x) => x.key)), ...voice, ...(fmt?.fields ?? {}) });
+  const { fields: f, warnings } = normalizeFields(p, expandVoice(fields), { ...defaultsFor(p), ...(p.brandFree ? {} : brandDefaults(p.fields.map((x) => x.key))), ...voice, ...(fmt?.fields ?? {}) });
   const t = now();
   const reel: Reel = { id: newId('reel'), title: title?.trim() || `${fmt?.name ?? p.name} ${db.reels.length + 1}`, preset: p.id, fields: f, status: 'draft', ...(fmt ? { format: fmt.id, caption: fmt.caption } : {}), createdAt: t, updatedAt: t };
   commit((d) => d.reels.unshift(reel));
@@ -173,6 +376,20 @@ export function createReel(presetId: string, title?: string, fields: Fields = {}
 }
 
 /** Patch a reel. `fields` merge into the existing ones (validated against the preset). */
+/** These reels' rendered files went to the Recycle Bin: they no longer point at them. */
+export function filesCleaned(ids: string[]): void {
+  const set = new Set(ids);
+  const t = new Date().toISOString();
+  commit((d) => {
+    for (const r of d.reels)
+      if (set.has(r.id)) {
+        delete r.renderPath;
+        delete r.squarePath;
+        r.filesCleaned = t;
+      }
+  });
+}
+
 export function updateReel(id: string, patch: Partial<Reel>): { reel: Reel; warnings: string[] } {
   const r = findReel(id);
   let warnings: string[] = [];
@@ -190,6 +407,20 @@ export function updateReel(id: string, patch: Partial<Reel>): { reel: Reel; warn
     d.reels = d.reels.map((x) => (x.id === id ? next : x));
   });
   return { reel: next, warnings };
+}
+
+/** A campaign's banner changed: its reels rendered but not yet posted go back to draft (their file lacks it). */
+export function campaignReelsToRedo(campaignId: string): number {
+  let n = 0;
+  commit((d) => {
+    for (const r of d.reels)
+      if (r.campaignId === campaignId && r.status === 'rendered') {
+        r.status = 'draft';
+        r.updatedAt = now();
+        n++;
+      }
+  });
+  return n;
 }
 
 export function duplicateReel(id: string): Reel {
@@ -224,7 +455,7 @@ export function makeVariants(id: string, variants: VariantInput[], originalHook?
   const created: Reel[] = variants.map((v) => {
     let given: Fields = { ...(v.fields ?? {}) };
     if (v.firstBeat !== undefined) {
-      if (r.preset !== 'story') throw new Error('first_beat only works on story reels; pass fields (e.g. headline) instead.');
+      if (!isVoiced(r.preset)) throw new Error('first_beat only works on story, narrated and meme reels; pass fields (e.g. headline) instead.');
       const lines = String(given.beats ?? r.fields.beats ?? '').split('\n');
       const at = lines.findIndex((l) => l.trim());
       lines[at < 0 ? 0 : at] = v.firstBeat.trim();
@@ -357,6 +588,54 @@ export function recentTexts(kind: 'comment' | 'message', limit = 40): string[] {
   return out;
 }
 
+/**
+ * Keep detailed activity for N days (Setup > Performance; never under 30, the reply cap's window): older sessions'
+ * per-item lists move to activity-archive/sessions-YYYY-MM.jsonl and only their counts stay in the database, so the
+ * warm-up math, Calendar and Dashboard read the same numbers. Returns how many sessions were trimmed.
+ */
+export function archiveActivity(days: number): number {
+  if (!(days > 0) || !file) return 0;
+  const keep = Math.max(days, 30);
+  const before = Date.now() - keep * 86_400_000;
+  const old = db.sessions.filter((s) => !s.live && s.items.length > 0 && Date.parse(s.endedAt ?? s.startedAt) < before);
+  if (!old.length) return 0;
+  const dir = path.join(path.dirname(file), 'activity-archive');
+  fs.mkdirSync(dir, { recursive: true });
+  const byMonth = new Map<string, string[]>();
+  for (const s of old) {
+    const m = (s.startedAt || '').slice(0, 7) || 'unknown';
+    byMonth.set(m, [...(byMonth.get(m) ?? []), JSON.stringify({ id: s.id, handle: s.handle, site: s.site ?? 'instagram', startedAt: s.startedAt, items: s.items })]);
+  }
+  // Written first: the database only loses the lists once they are safely in the archive.
+  for (const [m, lines] of byMonth) fs.appendFileSync(path.join(dir, `sessions-${m}.jsonl`), `${lines.join('\n')}\n`, 'utf8');
+  commit(() => {
+    for (const s of old) {
+      s.itemsArchived = (s.itemsArchived ?? 0) + s.items.length;
+      s.items = [];
+    }
+  });
+  return old.length;
+}
+
+/** The per-thread cap: the user's number, else the recommended 2. */
+export const PER_THREAD_DEFAULT = 2;
+export const perThreadCap = (): number => {
+  const n = db.settings.perThread;
+  return typeof n === 'number' && Number.isFinite(n) && n >= 1 ? Math.floor(n) : PER_THREAD_DEFAULT;
+};
+
+/** How many comments, replies and messages this account sent into that thread on that platform (the last 30 days). */
+export function threadSends(handle: string, site: Site, thread: string): number {
+  const key = canonicalUrl(thread);
+  const since = Date.now() - 30 * 86_400_000;
+  let n = 0;
+  for (const s of db.sessions) {
+    if ((s.site ?? 'instagram') !== site || !sameHandle(s.handle, handle) || Date.parse(s.startedAt) < since) continue;
+    for (const it of s.items) if ((it.thread ?? it.url) === key) n += it.actions.filter((x) => x === 'comment' || x === 'message').length;
+  }
+  return n;
+}
+
 /** The session the browser is recording for this account on this network right now, if any. */
 export function liveSession(handle: string, site: Site = 'instagram'): Session | undefined {
   const t = Date.now();
@@ -441,7 +720,7 @@ export function releasePost(handle: string, site: Site, confirmedSince: (t: numb
 }
 
 /** The browser did something on a post. Counted here, so no AI has to be trusted to report it. */
-export function recordAction(handle: string, url: string, action: SessionAction | 'post', meta: { creator?: string; title?: string; note?: string } = {}, site: Site = 'instagram'): Session {
+export function recordAction(handle: string, url: string, action: SessionAction | 'post', meta: { creator?: string; title?: string; note?: string; thread?: string } = {}, site: Site = 'instagram'): Session {
   const s = openLive(handle, site);
   tick(s);
   if (action === 'post') {
@@ -449,13 +728,15 @@ export function recordAction(handle: string, url: string, action: SessionAction 
     s.postClicks = [...(s.postClicks ?? []), new Date(Date.now()).toISOString()];
   } else {
     const key = canonicalUrl(url);
+    const { thread, ...rest } = meta;
     let item = s.items.find((i) => i.url === key);
     if (!item) {
-      item = { url: key, actions: [], ...meta };
+      item = { url: key, actions: [], ...rest };
       s.items.push(item);
     }
     if (action !== 'watch' || !item.actions.includes('watch')) item.actions.push(action);
     if (meta.note) item.note = meta.note;
+    if (thread && canonicalUrl(thread) !== key) item.thread = canonicalUrl(thread);
     const n = (a: SessionAction): number => s.items.reduce((sum, i) => sum + i.actions.filter((x) => x === a).length, 0);
     s.likes = n('like');
     s.saves = n('save');
@@ -465,7 +746,13 @@ export function recordAction(handle: string, url: string, action: SessionAction 
     s.messages = n('message');
     s.watched = s.items.filter((i) => !i.actions.includes('message')).length;
   }
-  saveLive(true);
+  if (batchSec > 0 && action !== 'post' && action !== 'comment' && action !== 'message') {
+    if (!batchTimer)
+      batchTimer = setTimeout(() => {
+        batchTimer = null;
+        saveLive(true);
+      }, batchSec * 1000);
+  } else saveLive(true);
   return s;
 }
 
@@ -876,10 +1163,11 @@ export function saveAccount(input: AccountInput): IgAccount {
   const handle = input.handle ? normalizeHandle(input.handle) : existing!.handle;
   if (db.igAccounts.some((x) => x.id !== existing?.id && sameHandle(x.handle, handle))) throw new Error(`${handle} already exists.`);
   for (const k of ['createdOn', 'warmupStart'] as const) if (input[k] !== undefined && !ymd.test(input[k]!)) throw new Error(`${k} must be YYYY-MM-DD.`);
+  if (input.browser) input = { ...input, browser: 'chrome' };
   const base: IgAccount = existing ?? {
     id: newId('acct'),
     handle,
-    browser: 'hub',
+    browser: 'chrome',
     status: 'warming',
     createdOn: input.createdOn ?? localDate(),
     warmupStart: input.warmupStart ?? input.createdOn ?? localDate(),
@@ -896,6 +1184,13 @@ export function saveAccount(input: AccountInput): IgAccount {
     else delete next.styleMix;
   }
   if (next.clipping) next.clipping = cleanClipping(next.clipping);
+  if (next.tone && !['clean', 'edgy', 'raw'].includes(next.tone)) delete next.tone;
+  if (next.goals) {
+    const goals = Object.fromEntries(Object.entries(next.goals).filter(([s, g]) => (['instagram', 'youtube', 'x', 'tiktok', 'facebook', 'threads', 'pinterest'] as string[]).includes(s) && (g === 'grow' || g === 'product')));
+    if (Object.keys(goals).length) next.goals = goals;
+    else delete next.goals;
+  }
+  if (next.pushProduct !== undefined && !next.pushProduct.trim()) delete next.pushProduct;
   // The user's own limits: whole numbers from 0 up, no upper bound. An empty set means "all recommended".
   if (next.limits) {
     const limits = cleanLimits(next.limits);
@@ -910,6 +1205,7 @@ export function saveAccount(input: AccountInput): IgAccount {
     // A renamed handle carries its history and the active selection with it.
     if (oldHandle && oldHandle !== handle) {
       d.sessions.forEach((s) => sameHandle(s.handle, oldHandle) && (s.handle = handle));
+      forgetDayIndex(d.sessions);
       d.accounts.forEach((s) => sameHandle(s.handle, oldHandle) && (s.handle = handle));
       if (sameHandle(d.settings.handle, oldHandle)) d.settings.handle = handle;
     }

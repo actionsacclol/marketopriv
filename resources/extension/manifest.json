@@ -1,13 +1,50 @@
 {
   "manifest_version": 3,
   "name": "Krypt Marketo",
-  "version": "0.8.0",
-  "description": "Lets the Krypt Marketo app on this computer use Instagram, X, TikTok, Facebook, Threads, Pinterest, and YouTube Studio for uploading Shorts, in this Chrome profile, under Marketo's limits. Works only on those sites.",
+  "version": "1.1.1",
+  "description": "Lets the Krypt Marketo app on this computer use Instagram, X, TikTok, Facebook, Threads, Pinterest, YouTube Studio for uploading Shorts, and Content Rewards for campaign submissions, in this Chrome profile, under Marketo's limits. Works only on those sites.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAl2NyArykQPBdYRTzBdUKCai1LE5RQAzgK+29HFGzDBnYT7YQxofl4UrZm+dNb+H20QbjxhzKbV1dD4W798s2yNFvLiKqEBD2katiKP8pPTX76YKd2qXS++siZRM1WNgqVOds+EUzgL2Em5xBBSUJfBHOQV3LrIEIKxfCwL4Tu2WdNwgMSzy0sJMDEPrcg5wD7cH9Awnl5d0yNncQjGhsateOGapRtJkLjvlBgs6p+uP9oyy7rgm+THFm6eG2KNAx6AMOEcMAlWiKoH3if3jP5PhnYl6Wn82TRwRIq3/ApUpOPHMpdX/omNdmvzLhhVhiuL4ik43vMpklUhFB9a6rxQIDAQAB",
   "minimum_chrome_version": "116",
-  "icons": { "128": "icon.png" },
-  "action": { "default_title": "Krypt Marketo", "default_popup": "popup.html", "default_icon": "icon.png" },
-  "background": { "service_worker": "background.js" },
-  "permissions": ["debugger", "nativeMessaging", "cookies", "alarms", "storage"],
-  "host_permissions": ["https://*.instagram.com/*", "https://*.youtube.com/*", "https://x.com/*", "https://*.x.com/*", "https://*.twitter.com/*", "https://*.tiktok.com/*", "https://*.facebook.com/*", "https://*.threads.com/*", "https://*.threads.net/*", "https://*.pinterest.com/*", "https://*.pinterest.co.uk/*", "https://*.pinterest.ca/*", "https://*.pinterest.com.au/*", "https://*.pinterest.de/*", "https://*.pinterest.fr/*"]
+  "icons": {
+    "128": "icon.png"
+  },
+  "action": {
+    "default_title": "Krypt Marketo",
+    "default_popup": "popup.html",
+    "default_icon": "icon.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "debugger",
+    "nativeMessaging",
+    "cookies",
+    "alarms",
+    "storage",
+    "proxy",
+    "webRequest",
+    "webRequestAuthProvider",
+    "privacy"
+  ],
+  "host_permissions": [
+    "https://*.instagram.com/*",
+    "https://*.youtube.com/*",
+    "https://x.com/*",
+    "https://*.x.com/*",
+    "https://*.twitter.com/*",
+    "https://*.tiktok.com/*",
+    "https://*.facebook.com/*",
+    "https://*.threads.com/*",
+    "https://*.threads.net/*",
+    "https://*.pinterest.com/*",
+    "https://*.pinterest.co.uk/*",
+    "https://*.pinterest.ca/*",
+    "https://*.pinterest.com.au/*",
+    "https://*.pinterest.de/*",
+    "https://*.pinterest.fr/*",
+    "https://contentrewards.com/*",
+    "https://*.contentrewards.com/*",
+    "https://ipinfo.io/*"
+  ]
 }

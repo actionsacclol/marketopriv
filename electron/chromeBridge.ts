@@ -27,7 +27,7 @@ export interface ChromeSource {
   list(fresh?: boolean): LocalChrome[];
   dirOfKey(key: string | undefined): string | null;
 }
-import type { ChromeStatus, IgAccount, Network, Site } from '../shared/types';
+import type { BrowserSite, ChromeStatus, IgAccount, Network, Site } from '../shared/types';
 
 /** An X or TikTok tab in that profile. */
 export interface NetConn {
@@ -58,7 +58,7 @@ export interface ChromeConn {
   tabOpen: boolean;
   tabUrl: string;
   /** Sites this extension version can drive (0.1 knew only Instagram). */
-  sites: Site[];
+  sites: BrowserSite[];
   /** Google / YouTube session cookies are present in that profile. */
   ytLoggedIn: boolean;
   /** Its YouTube tab. */
@@ -74,12 +74,18 @@ export interface ChromeConn {
   send<T = unknown>(cmd: string, args?: Record<string, unknown>, timeoutMs?: number): Promise<T>;
 }
 
-export type ChromeEvent = { type: 'change' } | { type: 'gone' } | { type: 'blocked'; url: string; site: Site };
+export type ChromeEvent = { type: 'change' } | { type: 'gone' } | { type: 'blocked'; url: string; site: BrowserSite };
 
 interface Deps {
   userData: string;
   /** Set for a development copy next to the installed hub: its own pipe and host name. */
   dev: boolean;
+  /** Added to the pipe name: another profile's window in multi-instance mode has its own. */
+  pipeSuffix?: string;
+  /** Tell Chrome where the helper is (the base app only; left out = yes). */
+  register?: boolean;
+  /** Listening: the pipe and the token the helper needs (multi-instance mode lists them for the helper). */
+  onListening?(pipe: string, token: string): void;
   /** The executable that runs the helper as Node (the app itself). */
   exePath: string;
   hostScript: string | null;
@@ -99,10 +105,10 @@ let regError: string | undefined;
 
 const hostName = (): string => `${CHROME_HOST_NAME}${deps?.dev ? '.dev' : ''}`;
 
-function pipePath(userData: string, dev: boolean): string {
+function pipePath(userData: string, dev: boolean, suffix = ''): string {
   if (process.platform === 'win32') {
     const user = (os.userInfo().username || 'user').replace(/[^A-Za-z0-9_.-]/g, '_');
-    return `\\\\.\\pipe\\krypt-marketo-chrome-${user}${dev ? '-dev' : ''}`;
+    return `\\\\.\\pipe\\krypt-marketo-chrome-${user}${dev ? '-dev' : ''}${suffix}`;
   }
   return path.join(userData, 'chrome.sock');
 }
@@ -256,6 +262,8 @@ function accept(sock: net.Socket, d: Deps): Live {
 
   const setTab = (t: { open?: unknown; url?: unknown; site?: unknown } | undefined): void => {
     const url = typeof t?.url === 'string' ? t.url : '';
+    // The Content Rewards tab has no status of its own on the Accounts page.
+    if (t?.site === 'rewards') return;
     if (t?.site === 'youtube') {
       conn.ytTabOpen = !!t.open;
       conn.ytTabUrl = url;
@@ -300,12 +308,13 @@ function accept(sock: net.Socket, d: Deps): Live {
       }
       switch (m.ev) {
         case 'hello':
-          conn.version = String(m.version ?? '');
+          // Never '' after the hello (that means "no hello yet"): a hello without a version is an old one.
+          conn.version = String(m.version ?? '') || '0';
           conn.stopped = !!m.stopped;
           conn.key = typeof m.key === 'string' && /^[a-f0-9]{32}$/.test(m.key) ? m.key : undefined;
           // A profile that just got the extension: read Chrome's list again.
           source().list(true);
-          if (Array.isArray(m.sites)) conn.sites = m.sites.filter((x): x is Site => ALL_SITES.includes(x as Site));
+          if (Array.isArray(m.sites)) conn.sites = m.sites.filter((x): x is BrowserSite => x === 'rewards' || ALL_SITES.includes(x as Site));
           setState(m);
           setTab(m.tab as { open?: unknown; url?: unknown });
           if (m.tabs && typeof m.tabs === 'object') {
@@ -314,6 +323,7 @@ function accept(sock: net.Socket, d: Deps): Live {
           }
           if (muteWanted) void conn.send('mute', { muted: true }, 3000).catch(() => {});
           d.log('info', `Chrome: extension ${conn.version} connected (#${conn.id}, Chrome profile ${dirOf(conn) ?? (conn.key ? 'not placed yet' : 'unknown: older extension')}, Instagram ${conn.loggedIn ? 'signed in' : 'signed out'})`);
+          reloadIfOld(conn);
           break;
         case 'state':
           setState(m);
@@ -328,7 +338,7 @@ function accept(sock: net.Socket, d: Deps): Live {
           conn.stopped = !!m.on;
           break;
         case 'blocked':
-          d.onEvent(conn, { type: 'blocked', url: String(m.url ?? ''), site: ALL_SITES.includes(m.site as Site) ? (m.site as Site) : 'instagram' });
+          d.onEvent(conn, { type: 'blocked', url: String(m.url ?? ''), site: m.site === 'rewards' ? 'rewards' : ALL_SITES.includes(m.site as Site) ? (m.site as Site) : 'instagram' });
           return;
         default:
           return;
@@ -353,7 +363,7 @@ function accept(sock: net.Socket, d: Deps): Live {
 export async function start(d: Deps): Promise<void> {
   deps = d;
   const token = crypto.randomBytes(32).toString('hex');
-  const pipe = pipePath(d.userData, d.dev);
+  const pipe = pipePath(d.userData, d.dev, d.pipeSuffix);
   const server = net.createServer((sock) => {
     let buf = '';
     let conn: Live | null = null;
@@ -413,6 +423,12 @@ export async function start(d: Deps): Promise<void> {
 
   const config = path.join(d.userData, 'chrome-bridge.json');
   fs.writeFileSync(config, `${JSON.stringify({ pipe, token, pid: process.pid, writtenAt: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+  d.onListening?.(pipe, token);
+  if (d.register === false) {
+    d.log('info', `Chrome: listening on ${pipe} (the base app's helper sends this profile's Chrome profiles here)`);
+    registered = true;
+    return emitStatus();
+  }
   try {
     await register(d, config);
     registered = true;
@@ -424,8 +440,10 @@ export async function start(d: Deps): Promise<void> {
   emitStatus();
 }
 
+// Only after the extension's hello: until then its version, sites and sign-ins are not known yet, and a run
+// that used it would see an "older extension" that is not. Every extension version sends its version there.
 export function connections(): ChromeConn[] {
-  return [...conns.values()].filter((c) => c.alive);
+  return [...conns.values()].filter((c) => c.alive && c.version !== '');
 }
 
 const NOT_CONNECTED =
@@ -467,6 +485,9 @@ export function match(a: IgAccount, all: IgAccount[]): ChromeConn | null {
 export function pick(a: IgAccount, all: IgAccount[]): ChromeConn {
   const c = match(a, all);
   if (c) return c;
+  // Another profile's own window (multi-instance mode) only gets the Chrome profiles its accounts are set to.
+  if (deps?.register === false && !a.chromeDir)
+    throw new Error(`${a.handle} has no Chrome profile picked, and this profile runs in its own window: Chrome sends this window only the Chrome profiles its accounts are set to. The user picks one for ${a.handle} on the Setup page (Chrome profile) in this window, then opens that Chrome profile.`);
   if (a.chromeDir) {
     const p = source().list().find((x) => x.dir === a.chromeDir);
     if (!p) throw new Error(`${a.handle} is set to run in a Chrome profile that Chrome no longer has. The user picks one again on the Setup page, under Chrome profile.`);
@@ -476,6 +497,31 @@ export function pick(a: IgAccount, all: IgAccount[]): ChromeConn {
   if (!connections().length) throw new Error(NOT_CONNECTED);
   const seen = connections().map((c) => (c.me ? `@${c.me}` : c.loggedIn ? 'an account Marketo has not matched' : 'signed out'));
   throw new Error(`${a.handle} is not signed in in any connected Chrome profile (connected now: ${seen.join(', ')}). The user opens the Chrome profile where ${a.handle} is signed in (with the Krypt Marketo extension), or signs in there.`);
+}
+
+/** a < b, number by number (0.10.0 is newer than 0.9.2). */
+function versionBelow(a: string, b: string): boolean {
+  const x = a.split('.').map((n) => Number.parseInt(n, 10) || 0);
+  const y = b.split('.').map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) < (y[i] ?? 0);
+  return false;
+}
+
+/** The first version with the reload command. Older ones need the user's one Reload (or a Chrome restart). */
+const SELF_RELOAD_SINCE = '1.0.0';
+/** Profile + version already asked to reload, once per hub start: if Chrome loaded the extension from another
+ *  folder, a reload brings the same version back, and it must not loop. */
+const reloadAsked = new Set<string>();
+
+/** After a hub update the extension in Chrome is the old copy until it reloads: ask it to, once. */
+function reloadIfOld(conn: ChromeConn): void {
+  const want = extensionVersion();
+  if (!want || !conn.version || !versionBelow(conn.version, want) || versionBelow(conn.version, SELF_RELOAD_SINCE)) return;
+  const k = `${conn.key ?? `#${conn.id}`}@${conn.version}`;
+  if (reloadAsked.has(k)) return;
+  reloadAsked.add(k);
+  deps?.log('info', `Chrome: extension ${conn.version} is older than ${want}, asking it to reload (#${conn.id})`);
+  void conn.send('reload', {}, 3000).catch(() => {});
 }
 
 let shippedVersion: string | undefined;
@@ -515,5 +561,5 @@ export function setMuted(m: boolean): void {
 
 /** Let go of every Chrome tab (the hub is closing); the tabs stay open. */
 export function releaseAll(): void {
-  for (const c of connections()) void c.send('release', {}, 2000).catch(() => {});
+  for (const c of conns.values()) if (c.alive) void c.send('release', {}, 2000).catch(() => {});
 }

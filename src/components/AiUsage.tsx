@@ -24,7 +24,7 @@ import {
   type TokenCount,
   type UsageTier,
 } from '@shared/aiUsage';
-import { Card, GhostButton } from './ui';
+import { Card, GhostButton, Toggle } from './ui';
 
 // Which model the autopilot runs use, what a day of runs is likely to use,
 // and what past runs did use. The numbers come from the AI app itself (Claude
@@ -169,10 +169,33 @@ export function UsageTierCard() {
       toast('ok', `${USAGE_TIERS[t].label} tier: ${tierSummary(USAGE_TIERS[t])}.`);
     } else toast('error', r.message ?? 'Could not save the tier.');
   };
+  const ai = st.ais.find((x) => x.id === st.ai);
+  const saverOn = !!st.saver && !!ai?.saves;
+  const setSaver = async (on: boolean): Promise<void> => {
+    if (busy || st.running) return;
+    setBusy(true);
+    const r = await window.marketo.autopilot.setSaver(on);
+    setBusy(false);
+    if (r.ok && r.data) {
+      useApp.setState({ autopilot: r.data });
+      toast('ok', on ? 'Token saver is on for the next run.' : 'Token saver is off.');
+    } else toast('error', r.message ?? 'Could not save that.');
+  };
   return (
     <Card>
       <TierPicker value={tier.id} rows={st.usage ?? []} onPick={(t) => void pick(t)} disabled={busy || st.running} custom={custom} />
-      {st.running && <p className="mt-2 text-xs text-krypt-muted">A run is going now; the tier can be changed when it ends.</p>}
+      <div className="mt-3 flex items-center gap-3 border-t border-white/5 pt-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium text-white">Token saver</div>
+          <p className="mt-0.5 text-xs leading-relaxed text-krypt-muted">
+            {ai?.saves
+              ? `Claude Code sums the run's conversation up and carries on from the summary much earlier: about ${Math.round((1 - SAVER_READ) * 100)}% fewer tokens re-read. The AI then remembers the gist of what it did earlier in the run, not every detail.`
+              : `Claude Code only: ${ai?.name ?? 'this AI app'} does not have it.`}
+          </p>
+        </div>
+        {ai?.saves && <Toggle on={saverOn} onChange={(v) => void setSaver(v)} />}
+      </div>
+      {st.running && <p className="mt-2 text-xs text-krypt-muted">A run is going now; the tier and the token saver can be changed when it ends.</p>}
     </Card>
   );
 }

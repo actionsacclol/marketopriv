@@ -13,6 +13,50 @@ export interface StylePage {
 }
 
 export const STYLE_PAGES: Record<string, StylePage> = {
+  reddit: {
+    length: '40-75s per part',
+    benefits: [
+      'People stay to hear how it ends: a good story holds a viewer far longer than a list or a demo.',
+      'The question at the end ("am I the jerk?") turns viewers into commenters, and the comments push the video further.',
+      'Long stories come in parts, and parts are the strongest reason to follow an account.',
+      'Nothing to film: the hub draws the background, or uses gameplay from your Backgrounds folder.',
+    ],
+    hooks: ['"AITA for eating my roommate\'s labelled leftovers after she ate mine for a month?"', '"My sister sold my car while I was on vacation."', '"I found out why my neighbour mows his lawn at 6am."', '"Part 2: she finally answered the door."'],
+    structure: ['A post card with the title: the hook', 'The setup, with one specific detail', 'It builds, line by line', 'The twist, with a zoom and a boom', 'What happened after', 'The question to the viewer, or "Part 2"'],
+  },
+  greentext: {
+    length: '20-45s',
+    benefits: [
+      'Short and absurd: people watch it twice to catch the lines, which is what the feeds reward.',
+      'A deadpan voice over a self-own is a format everyone already knows how to read.',
+      'The board fills up line by line, so there is always a reason to keep watching.',
+      'No footage needed: the board and the background are made by the hub.',
+    ],
+    hooks: ['">be me / >first day at new job"', '">be me / >decide to get my life together"', '">tfw you realise the meeting was about you"', '">be me / >24 / >still scared of the self checkout"'],
+    structure: ['">be me" and who you are', 'The setup, one tiny line at a time', 'It escalates', 'The twist or the self-own, with a hit', 'One last deadpan line'],
+  },
+  meme: {
+    length: '8-20s',
+    benefits: [
+      'Relatable memes are the content people send to friends most, and every send is reach.',
+      'Short and looping: a slideshow gets watched more than once, which the feeds count.',
+      'Uses the meme pictures you collect in your Memes folder, or the mascot when none fit.',
+      'Works for any niche: the jokes are about your audience\'s life.',
+    ],
+    hooks: ['"me when the code works and I don\'t know why"', '"nobody: / my brain at 3am:"', '"pov: you said you\'d sleep early"', '"them: are you ok? / me:"'],
+    structure: ['The most relatable meme first (it is the thumbnail)', 'Two to five more on the same feeling', 'The strongest last, with an effect', 'Hard cuts with a pop, hub-made music, loops'],
+  },
+  dumb: {
+    length: '5-15s',
+    benefits: [
+      'Absurd edits are made to be rewatched and shared, the two things that push a video furthest.',
+      'Tiny to make: one setup and one hit, so an account can post a lot of them.',
+      'The zoom, boom, shake and deep-fry effects and the sounds are built in and made by the hub, so nothing gets muted.',
+      'Works on any clip, meme picture or the mascot.',
+    ],
+    hooks: ['"bro thought..."', '"nah because why did he..."', '"the way he..."', '"me trying to act normal after..."'],
+    structure: ['The setup, played straight', 'The punchline: zoom onto the face with a boom and a shake', 'Optional: a deep-fried freeze to end on', 'Loops back to the start'],
+  },
   clipping: {
     length: '10-45s',
     benefits: [
@@ -141,6 +185,16 @@ export const STYLE_PAGES: Record<string, StylePage> = {
     hooks: ['"I got this DM yesterday."', '"My friend sent me this at 3am."', '"Read this before you reply to support."'],
     structure: ['The first message, with the setup line', 'The conversation, building tension (2-3 messages a beat)', 'The twist', 'The lesson: how to spot it (stamp or steps)', 'Follow'],
   },
+  versus: {
+    length: '15-30s',
+    benefits: [
+      'A price on screen is an instant reaction: "people pay HOW much for that?" gets comments and shares.',
+      'The free tool doing the same job right after is the proof, so the reel sells without a pitch.',
+      'Every paid app is a new part, so it runs as a series.',
+    ],
+    hooks: ['"People pay $45 a year for this."', '"Stop paying for a crosshair."', '"This costs $180 a year. This one costs $0."'],
+    structure: ['The paid app and its real price, stamped', 'What that money buys', 'The free Krypt tool doing the same thing on a real screen', '"$0" stamp with the real difference', 'Where to get it'],
+  },
   tier: {
     length: '25-35s',
     benefits: [
@@ -161,5 +215,16 @@ export const STYLE_PAGES: Record<string, StylePage> = {
     ],
     hooks: ['"Your whole PC on one screen."', '"This one click freed 20 GB."', '"Do this before your next match."'],
     structure: ['The result first', 'Each step: the recording, zoomed on the button, with a callout', 'The result again', 'Where to get it'],
+  },
+  stickman: {
+    length: '10-25s versus, 45-65s explainers',
+    benefits: [
+      'Two stick figures doing the same thing differently is one of the biggest short formats of 2026: people watch to see who wins and comment which one they are.',
+      'A narrated "why does this happen?" explainer gets watched to the end and saved.',
+      'The stickman shows the problem and a real screen recording shows the fix, so the product is the payoff, not an ad.',
+      'Nothing to film: the hub draws the figures, props and camera moves, and the mouth moves with the voice.',
+    ],
+    hooks: ['"Same game. Same PC."', '"Why does your PC get slower every year?"', '"Why your mouse feels like it\'s on ice."', '"Overthinker vs Doer: the 3 AM fix."'],
+    structure: ['Versus: two named figures in the same situation', 'Each beat: what each one does', 'The payoff: the smart one lights up, the real screen for 2-3 s', '"Which one are you?"', 'Explainer: the question, the cause in scenes, the fix on a real screen, the result'],
   },
 };

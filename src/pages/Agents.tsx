@@ -63,7 +63,7 @@ export default function Agents() {
   }, [refresh]);
 
   return (
-    <Page title="Connect" subtitle="Hook up the AI you already use. It gets tools to make reels, render them and run your Instagram accounts, in Marketo's own browser or your Chrome.">
+    <Page title="Connect" subtitle="Hook up the AI you already use. It gets tools to make reels, render them and run your accounts in your Chrome.">
       <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
         <div>
           <Section title="Status">

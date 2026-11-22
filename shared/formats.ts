@@ -1,7 +1,7 @@
 import type { Fields } from './types';
 
 // Reel formats: proven story structures to start from. A format is a preset
-// (all of these use the story engine) plus a beat skeleton, the job of each
+// (the story engine, or narrated / meme for the meme styles) plus a beat skeleton, the job of each
 // beat and hook patterns to test. The skeleton's numbers are examples: the
 // dateline says so until it is replaced, so an unedited format can't pass
 // for real data.
@@ -223,6 +223,131 @@ export const FORMATS: ReelFormat[] = [
       loop: true,
     },
     caption: 'Every time.\n\nNot financial advice.',
+  },
+  {
+    id: 'reddit-story',
+    name: 'Reddit story',
+    pitch: 'The reddit style: a post card with the title, then the story read fast over a moving background with word-by-word captions, ending on a question that starts arguments in the comments. Every line here is an example story: write your own.',
+    preset: 'narrated',
+    structure: [
+      'Post card (visual post): the title is the hook, a = "r/community · u/made-up-name · 6h", b = votes;comments.',
+      'Setup: who, where, the rule or the situation, with one specific detail.',
+      'The problem builds, two or three lines.',
+      'The twist (effects zoom boom on this line only).',
+      'What happened after, one or two lines.',
+      'The question to the viewer ("So, am I the jerk?").',
+    ],
+    hooks: ['A moral dilemma in the title ("AITA for ... after she ...?")', 'A shocking detail first ("My sister sold my car while I was on vacation")', 'A "Part 2" title that promises the payoff'],
+    fields: { bg: 'runner', captions: 'words' },
+    caption: 'Would you have done the same? #redditstories #aita #storytime',
+  },
+  {
+    id: 'greentext',
+    name: 'Greentext',
+    pitch: 'The greentext style: ">be me" lines stacking on an imageboard post, read deadpan, a hit on the punchline. Every line here is an example: write your own.',
+    preset: 'narrated',
+    structure: ['>be me, and who you are in a few words.', 'The setup, one tiny line at a time.', 'It escalates.', 'The twist or self-own (effects zoom boom or scratch).', 'One last deadpan line.'],
+    hooks: ['">be me" plus an oddly specific detail', 'A ">tfw" feeling everyone knows', 'A ridiculous goal in line one'],
+    fields: {
+      bg: 'bounce',
+      gap: 0.15,
+      beats: beats([
+        '1 | >be me / >first day at new job | green',
+        '1 | >manager says "just act like you know what you\'re doing" | green',
+        '1 | >walk into the server room with total confidence | green',
+        '1 | >it\'s the janitor\'s closet | green | | | | zoom boom',
+        '1 | >janitor is in there eating lunch | green',
+        '1 | >he nods at me / >i nod back | green',
+        '1 | >we have lunch together every day now | green | | | | scratch',
+      ]),
+    },
+    caption: 'he was the real mentor all along #greentext #storytime',
+  },
+  {
+    id: 'meme-slides',
+    name: 'Meme slideshow',
+    pitch: 'The meme style: 3-7 relatable memes in a row, hard cuts with a pop, hub-made music. Use pictures from the Memes folder (list_media), the mascot, or text panels. Every panel here is an example: write your own.',
+    preset: 'meme',
+    structure: ['The most relatable one first (it is the thumbnail).', 'Two to five more on the same feeling, each a different angle.', 'The strongest last, with one effect (zoom boom or fry bass).'],
+    hooks: ['"me when..." with a feeling everyone has', '"nobody: / me:"', '"pov:" in the viewer\'s shoes'],
+    fields: { layout: 'top', bed: 'goofy', loop: true },
+    caption: 'too real #memes #relatable',
+  },
+  {
+    id: 'dumb-edit',
+    name: 'Dumb edit',
+    pitch: 'The dumb style: a short absurd edit, a straight setup then the punchline hit with stacked effects (zoom + boom + shake, freeze + scratch, fry + bass). Every panel here is an example: write your own.',
+    preset: 'meme',
+    structure: ['The setup, played straight (1.5-4 s).', 'The punchline: the edit lands on one exact moment (zoom@s=x,y boom@s shake@s).', 'Optional: a deep-fried reaction to end on (fry bass).'],
+    hooks: ['"bro thought..."', '"nah because why did he..."', '"the way he..."'],
+    fields: {
+      layout: 'over',
+      bed: 'none',
+      loop: true,
+      beats: beats([
+        '2.2 | me explaining my 47 step plan to get rich | char | present',
+        '2.4 | step one: | char | think | | | zoom@0.9=0.5,0.38 boom@0.9 shake@0.9',
+        '2.0 | | char | facepalm | | | fry sad',
+      ]),
+    },
+    caption: 'step two was a nap #memes #funny',
+  },
+  {
+    id: 'stick-explainer',
+    name: 'Stickman explainer',
+    pitch: 'The stickman style, narrated: a "why / how" question, the cause acted out in quick scenes, the fix on a real screen, the result. 45-65 s. Every line here is an example: write your own, with real facts.',
+    preset: 'stickman',
+    structure: [
+      'The question the viewer can\'t answer (cam=close, a big word like WHY?).',
+      'The cause, one scene per sentence: a new pose or prop every beat.',
+      'The turn: "here\'s the fix" (bulb or exclaim).',
+      'The fix on a real screen (screen=second or laptop=second with the recording).',
+      'The result (cheer or thumbsup, win), then one line to save or follow.',
+    ],
+    hooks: ['"Why does your PC get slower every year?"', '"Nobody tells you this setting is on by default."', '"Why your mouse feels like it\'s on ice."'],
+    fields: {
+      beats: beats([
+        '1 | Nobody touched your PC. So why is it slower every year? | shrug | WHY? | desk;monitor | | cam=close',
+        '1 | Every app you install asks to start with Windows. | point | | sign=START ME',
+        '1 | Launchers, updaters, chat apps. One by one, they pile up. | type | | sweat',
+        '1 | Now your PC starts twenty things before it starts you. | sleep | | clock | | push',
+        '1 | Open Task Manager, go to Startup apps, and turn off what you never use. | point | | screen=0',
+        '1 | Same PC. Faster start. | cheer | FAST | | | win',
+        '1 | Save this for your next fresh install. | thumbsup',
+      ]),
+    },
+    caption: 'why your PC gets slower every year (and the 1 minute fix) #windows11 #pctips #techtips',
+  },
+  {
+    id: 'stick-versus',
+    name: 'Stickman versus',
+    pitch: 'The stickman style, wordless: two named figures in the same situation, one doing it the hard way, one the smart way; the winner lights up. 10-25 s, music only, loops. Every line here is an example: write your own.',
+    preset: 'stickman',
+    structure: [
+      'The setup line for both (captions title): "Same game. *Same PC.*"',
+      'What goes wrong, both react (poseA/poseB).',
+      'What each one does about it: the hard way vs the smart way (the smart one on a laptop or screen prop with the real recording).',
+      'The payoff: win=a or win=b and a big word.',
+      'The post caption ends "Which one are you?"',
+    ],
+    hooks: ['"Same game. Same PC."', '"Same deadline. Same tools."', '"Overthinker vs Doer"'],
+    fields: {
+      labels: 'Default guy;Tweaked guy',
+      voiceover: false,
+      captions: 'title',
+      bed: 'phonk',
+      bed_volume: 0.5,
+      sfx_volume: 0.6,
+      gear: 'B:headphones',
+      beats: beats([
+        '2.2 | Same game. *Same PC.* | idle',
+        '2.2 | The game starts stuttering. | shock/think',
+        '2.6 | He blames the PC. | angry/type | | B:laptop=0',
+        '2.4 | He shops for a new graphics card. | phone/type | | B:laptop=4',
+        '2.8 | He changed *three settings*. | sad/cheer | SMOOTH | | | win=b',
+      ]),
+    },
+    caption: 'which one are you? #pcgaming #gamingsetup #windows11',
   },
 ];
 

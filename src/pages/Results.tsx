@@ -4,6 +4,7 @@ import { hookGroups, hookLine, pct, resultOf, type ReelResult } from '@shared/sc
 import { SITES, SITE_LABEL, linkOn, localDate, netOf, postTarget, sameHandle, siteOn } from '@shared/warmup';
 import { formatById } from '@shared/formats';
 import { Card, Empty, Page, Section, Stat } from '../components/ui';
+import { useShowMore } from '../components/ShowMore';
 import { useApp } from '../state/store';
 import { cls, fmtDate, fmtNum } from '../lib/format';
 
@@ -26,6 +27,7 @@ function PlatformCard({ site }: { site: Site }) {
   const accts = db.igAccounts.filter((a) => onSite(a, site));
   const single = db.igAccounts.length === 1;
   const weekAgo = Date.now() - 7 * 86_400_000;
+  const page = useShowMore(accts);
   return (
     <Card className="space-y-3">
       <div className="flex items-center gap-2 text-sm font-semibold">
@@ -35,7 +37,7 @@ function PlatformCard({ site }: { site: Site }) {
         </span>
       </div>
       {accts.length === 0 && <div className="text-xs text-krypt-muted">No account runs here yet (Accounts page).</div>}
-      {accts.map((a) => {
+      {page.shown.map((a) => {
         const snaps = db.accounts.filter((x) => (x.site ?? 'instagram') === site && sameHandle(x.handle, a.handle)).sort((x, y) => x.at.localeCompare(y.at));
         const last = snaps[snaps.length - 1];
         const before = [...snaps].reverse().find((x) => Date.parse(x.at) <= weekAgo) ?? snaps[0];
@@ -69,6 +71,7 @@ function PlatformCard({ site }: { site: Site }) {
           </div>
         );
       })}
+      {page.more}
     </Card>
   );
 }
@@ -114,6 +117,10 @@ export default function Results() {
     const v = results.map(f).filter((n): n is number => n !== null);
     return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
   };
+  // Long lists 50 at a time (Setup > Performance). Ranks and averages still count every reel.
+  const ranked = useShowMore(results);
+  const hookPage = useShowMore(groups);
+  const learnPage = useShowMore(db.learnings);
 
   return (
     <Page title="Results" subtitle="What worked: every posted reel ranked, hook tests side by side, and the lessons we keep.">
@@ -152,11 +159,12 @@ export default function Results() {
                   </tr>
                 </thead>
                 <tbody>
-                  {results.map((x, i) => (
+                  {ranked.shown.map((x, i) => (
                     <Row key={x.reel.id} x={x} rank={i + 1} />
                   ))}
                 </tbody>
               </table>
+              {ranked.more && <div className="border-t border-white/5">{ranked.more}</div>}
             </Card>
           ) : (
             <Empty icon={<TrendingUp className="h-6 w-6" />} title="No numbers yet">
@@ -168,7 +176,7 @@ export default function Results() {
         {groups.length > 0 && (
           <Section title="Hook tests" description="Same reel, different openings. The leader is the best score once two versions have numbers.">
             <div className="grid grid-cols-2 gap-4">
-              {groups.map((g) => {
+              {hookPage.shown.map((g) => {
                 const measured = g.reels.filter((x) => x.result).length;
                 return (
                   <Card key={g.group} className="space-y-2">
@@ -195,6 +203,7 @@ export default function Results() {
                   </Card>
                 );
               })}
+              {hookPage.more && <div className="col-span-2">{hookPage.more}</div>}
             </div>
           </Section>
         )}
@@ -202,7 +211,7 @@ export default function Results() {
         <Section title="Learnings" description="Lessons from the numbers. Your AI reads these before writing the next reel.">
           {db.learnings.length ? (
             <div className="space-y-2">
-              {db.learnings.map((l) => (
+              {learnPage.shown.map((l) => (
                 <Card key={l.id} className="flex items-start gap-3">
                   <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
                   <div className="min-w-0 flex-1">
@@ -218,6 +227,7 @@ export default function Results() {
                   </button>
                 </Card>
               ))}
+              {learnPage.more}
             </div>
           ) : (
             <div className="text-sm text-krypt-muted">None yet. After a hook test or a few posts, Claude saves what the numbers show (add_learning).</div>

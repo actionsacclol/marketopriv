@@ -1,6 +1,6 @@
 import { ALL_FORMATS, BufferSource, BufferTarget, CanvasSink, Conversion, Input, Mp4OutputFormat, Output } from 'mediabunny';
-import type { ClipSite } from '@shared/types';
-import { parseClipUrl } from '@shared/clipping';
+import type { ClipOrigin } from '@shared/types';
+import { clock, parseClipUrl, parseYouTube } from '@shared/clipping';
 import { captionLines, transcribeFile } from './transcribe';
 
 const blobToDataUrl = (b: Blob): Promise<string> =>
@@ -11,13 +11,14 @@ const blobToDataUrl = (b: Blob): Promise<string> =>
     r.readAsDataURL(b);
   });
 
-// save_clip: one Twitch / Kick clip downloaded (main reads it off the clip page), made into an H.264 MP4 the reel
+// save_clip: one Twitch / Kick clip downloaded (main reads it off the clip page), or a part of a YouTube video
+// recorded off its page, made into an H.264 MP4 the reel
 // pipeline can always decode, saved in the output folder, captioned on this computer, and a few whole frames so the
 // AI can find the facecam for the split layout.
 
 export interface SavedClip {
   path: string;
-  site: ClipSite;
+  site: ClipOrigin;
   channel: string;
   url: string;
   title: string;
@@ -31,8 +32,8 @@ export interface SavedClip {
   repeats: string[];
 }
 
-/** An MP4 with H.264 video: Kick's MPEG-TS repackaged as it is, Twitch's AV1 (or anything else) re-encoded once. */
-async function toMp4(bytes: Uint8Array, kind: 'mp4' | 'ts'): Promise<Uint8Array> {
+/** An MP4 with H.264 video: Kick's MPEG-TS and YouTube recordings repackaged as they are, Twitch's AV1 (or anything else) re-encoded once. */
+async function toMp4(bytes: Uint8Array, kind: 'mp4' | 'ts' | 'rec'): Promise<Uint8Array> {
   const input = new Input({ source: new BufferSource(bytes), formats: ALL_FORMATS });
   const track = await input.getPrimaryVideoTrack();
   if (!track) throw new Error('The clip has no video in it.');
@@ -47,16 +48,22 @@ async function toMp4(bytes: Uint8Array, kind: 'mp4' | 'ts'): Promise<Uint8Array>
   return new Uint8Array(buf);
 }
 
-export async function saveClip(url: string, progress: (fraction: number, message: string) => void): Promise<SavedClip> {
-  const id = parseClipUrl(url);
-  if (!id) throw new Error(`"${url}" is not a Twitch or Kick clip address.`);
-  progress(0.02, 'Opening the clip page');
-  const got = await window.marketo.clips.fetch(url);
+export async function saveClip(url: string, progress: (fraction: number, message: string) => void, span: { start?: number; seconds?: number } = {}): Promise<SavedClip> {
+  const yt = parseYouTube(url);
+  if (!yt && !parseClipUrl(url)) throw new Error(`"${url}" is not a Twitch / Kick clip or a YouTube video address.`);
+  if (yt) {
+    const from = span.start ?? yt.start ?? 0;
+    progress(0.02, span.seconds ? `Recording ${clock(from)}-${clock(from + span.seconds)} off YouTube (takes as long as the part)` : `Recording from ${clock(from)} off YouTube (takes as long as the part)`);
+  } else progress(0.02, 'Opening the clip page');
+  const got = await window.marketo.clips.fetch(url, span);
   if (!got.ok || !got.data) throw new Error(got.message ?? 'Could not download the clip.');
   const c = got.data;
-  progress(0.25, c.kind === 'ts' ? 'Making it an MP4' : 'Checking the video');
+  const id = parseClipUrl(c.url) ?? { id: 'clip' };
+  progress(0.25, c.kind === 'mp4' ? 'Checking the video' : 'Making it an MP4');
   const mp4 = await toMp4(c.bytes, c.kind);
-  const saved = await window.marketo.clips.save(mp4, `${c.site} ${c.channel} ${c.title.slice(0, 40)} ${id.id.slice(-10)}`);
+  // The id (and a YouTube part's start) before the title: the name is cut at 70 characters, and two parts of one video must not share a file.
+  const tag = c.site === 'youtube' ? id.id.replace(/@(\d+)$/, ' $1s') : id.id.slice(-10);
+  const saved = await window.marketo.clips.save(mp4, `${c.site} ${c.channel.slice(0, 24)} ${tag} ${c.title.slice(0, 40)}`);
   if (!saved.ok || !saved.data) throw new Error(saved.message ?? 'Could not save the clip.');
   const path = saved.data;
 

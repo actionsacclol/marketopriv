@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { ACTIONS, type Action, type Art } from '@shared/character';
+import { perfNow } from '../lib/perf';
 
 // The reel mascot: one original character built from simple shapes, drawn in
 // three art styles. Every frame is a pure function of the beat time, so the
@@ -379,6 +380,8 @@ interface Stage {
   /** ps2: the low-res frame after dithering. */
   post?: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D };
   world?: THREE.Object3D[];
+  /** 3d: built with fast3d (Setup > Performance); a stage built under the other setting is rebuilt. */
+  fast?: boolean;
 }
 
 const stages = new Map<Art, Stage>();
@@ -435,7 +438,7 @@ function blobShadow(opacity: number): THREE.Mesh {
   return m;
 }
 
-function buildStage(art: Art): Stage {
+function buildStage(art: Art, fast = false): Stage {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(32, 9 / 16, 0.1, 200);
   if (art === 'cartoon') {
@@ -505,9 +508,10 @@ function buildStage(art: Art): Stage {
     return { renderer, scene, camera, rig, w, h, post: { canvas: post, ctx: post.getContext('2d', { willReadFrequently: true })! }, world };
   }
   // 3d: soft studio light, glossy toy plastic, real shadows.
-  const renderer = makeRenderer(810, 1440, true);
+  // fast3d: no antialias, plain PCF shadows at 512, standard material (no clearcoat / sheen).
+  const renderer = makeRenderer(810, 1440, !fast);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = fast ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
   const pm = new THREE.PMREMGenerator(renderer);
@@ -516,7 +520,10 @@ function buildStage(art: Art): Stage {
   const rig = buildRig({
     seg: 24,
     shadows: true,
-    mat: (color, o) => new THREE.MeshPhysicalMaterial({ color, roughness: o?.glossy ? 0.18 : 0.42, clearcoat: o?.glossy ? 1 : 0.35, clearcoatRoughness: 0.25, sheen: o?.glossy ? 0 : 0.4, sheenColor: new THREE.Color('#ffffff') }),
+    mat: (color, o) =>
+      fast
+        ? new THREE.MeshStandardMaterial({ color, roughness: o?.glossy ? 0.18 : 0.42 })
+        : new THREE.MeshPhysicalMaterial({ color, roughness: o?.glossy ? 0.18 : 0.42, clearcoat: o?.glossy ? 1 : 0.35, clearcoatRoughness: 0.25, sheen: o?.glossy ? 0 : 0.4, sheenColor: new THREE.Color('#ffffff') }),
   });
   rig.glow.forEach((m) => (m.color = m.color.clone().multiplyScalar(1.6)));
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), new THREE.ShadowMaterial({ opacity: 0.22 }));
@@ -525,7 +532,7 @@ function buildStage(art: Art): Stage {
   const key = new THREE.DirectionalLight(0xffffff, 2.4);
   key.position.set(-3, 6, 5);
   key.castShadow = true;
-  key.shadow.mapSize.set(1024, 1024);
+  key.shadow.mapSize.set(fast ? 512 : 1024, fast ? 512 : 1024);
   key.shadow.radius = 6;
   key.shadow.camera.left = -3;
   key.shadow.camera.right = 3;
@@ -535,13 +542,22 @@ function buildStage(art: Art): Stage {
   const rim = new THREE.DirectionalLight(0xc4b5fd, 3);
   rim.position.set(3, 4, -5);
   scene.add(rig.root, ground, key, rim, new THREE.HemisphereLight(0xffffff, 0xd9d2f0, 0.8));
-  return { renderer, scene, camera, rig, w: 810, h: 1440 };
+  return { renderer, scene, camera, rig, w: 810, h: 1440, fast };
 }
 
 function stageFor(art: Art): Stage {
+  // Only the 3d stage depends on fast3d; the others are always built the same.
+  const fast = art === '3d' && perfNow().fast3d;
   let st = stages.get(art);
+  if (st && art === '3d' && !!st.fast !== fast) {
+    // Built under the other setting: let its WebGL context go and build it again.
+    st.renderer.dispose();
+    st.renderer.forceContextLoss();
+    stages.delete(art);
+    st = undefined;
+  }
   if (!st) {
-    st = buildStage(art);
+    st = buildStage(art, fast);
     stages.set(art, st);
   }
   return st;

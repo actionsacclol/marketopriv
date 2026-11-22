@@ -1,7 +1,10 @@
-import { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, QUALITY_HIGH } from 'mediabunny';
-import { clipSound, num, storyBeats, storyVideoTime, storyVoiceTrack, str, timingFor } from '@shared/presets';
+import { perfNow } from '../lib/perf';
+import { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, QUALITY_HIGH, QUALITY_MEDIUM } from 'mediabunny';
+import { clipSound, isVoiced, num, storyBeats, storyVideoTime, storyVoiceTrack, str, timingFor } from '@shared/presets';
 import type { Reel, RenderShape } from '@shared/types';
-import { H, W, drawReel, loadFonts, loadLogo } from './engine';
+import { H, W, drawReel, loadBanner, loadFonts, loadLogo, preloadImages } from './engine';
+import { bannerOf } from '@shared/campaigns';
+import { useApp } from '../state/store';
 import { seekingSource, sequentialSource, soundtrack, type FrameSource } from './media';
 import './presets';
 
@@ -19,24 +22,41 @@ export interface RenderOpts {
 async function frameSource(reel: Reel, sequential: boolean): Promise<FrameSource | null> {
   const path = str(reel.fields, 'video');
   if (!path) return null;
-  // Story reels jump around the recording (each screen beat picks its own second), so they seek.
-  if (reel.preset === 'story') return seekingSource(path);
+  // A narrated reel's background plays straight through (looping): decode it in order.
+  if (reel.preset === 'narrated' && str(reel.fields, 'bg') === 'video') return sequential ? sequentialSource(path, num(reel.fields, 'bg_start', 0)) : seekingSource(path);
+  // Story and meme reels jump around the recording (each screen beat picks its own second), so they seek.
+  if (isVoiced(reel.preset)) return seekingSource(path);
   if (reel.preset !== 'clip') return null;
   return sequential ? sequentialSource(path, num(reel.fields, 'start', 0)) : seekingSource(path);
 }
 
+/** The campaign's ad banner. A banner that is set but can't be read is left out, and the user is told. */
+async function bannerFor(reel: Reel): Promise<{ path: string; img: HTMLImageElement | null }> {
+  const path = (bannerOf(reel, useApp.getState().db?.campaigns) ?? '').trim();
+  const img = await loadBanner(path);
+  if (path && !img) {
+    const text = `"${reel.title}": the campaign's ad banner could not be read (${path}), so it was left out. Set it again on Create > Campaigns, then render again.`;
+    console.warn(text);
+    useApp.getState().toast('warn', text);
+  }
+  return { path, img };
+}
+
 /** The source second to show at reel time t (null = no video in this frame). */
-function sourceTime(reel: Reel, t: number, beats: ReturnType<typeof storyBeats> | null): number | null {
-  if (reel.preset === 'story') return beats ? storyVideoTime(reel.fields, t, beats) : null;
+function sourceTime(reel: Reel, t: number, beats: ReturnType<typeof storyBeats> | null, duration = 0): number | null {
+  if (isVoiced(reel.preset)) return beats ? storyVideoTime(reel.fields, t, beats, duration) : null;
   return num(reel.fields, 'start', 0) + Math.min(t, num(reel.fields, 'seconds', 12));
 }
 
-export async function renderMp4(reel: Reel, opts: RenderOpts): Promise<{ data: Uint8Array; seconds: number }> {
+/** bannerPath: the campaign banner this render was drawn with ('' = none), to tell when it changed meanwhile. */
+export async function renderMp4(reel: Reel, opts: RenderOpts): Promise<{ data: Uint8Array; seconds: number; bannerPath: string }> {
   const fps = opts.fps;
   const timing = timingFor(reel.preset, reel.fields);
   const total = timing.total;
   await loadFonts();
+  await preloadImages(reel.fields);
   const logo = await loadLogo(reel.fields.logo);
+  const { path: bannerPath, img: banner } = await bannerFor(reel);
 
   const canvas = document.createElement('canvas');
   canvas.width = W;
@@ -47,42 +67,59 @@ export async function renderMp4(reel: Reel, opts: RenderOpts): Promise<{ data: U
   const encoded = square ? square.canvas : canvas;
 
   const music = str(reel.fields, 'music');
-  const voice = reel.preset === 'story' ? storyVoiceTrack(reel.fields) : null;
+  const voice = isVoiced(reel.preset) ? storyVoiceTrack(reel.fields) : null;
   const own = reel.preset === 'clip' && clipSound(reel.fields) ? { path: str(reel.fields, 'video'), start: num(reel.fields, 'start', 0), seconds: timing.body } : null;
   if (music || voice || own) opts.onProgress?.(0, 'audio');
   const audio = await soundtrack(total, music ? { path: music, volume: num(reel.fields, 'music_volume', 0.8) } : null, voice, own);
 
-  const build = async (hw: 'prefer-hardware' | 'no-preference') => {
+  const build = async (hw: 'prefer-hardware' | 'prefer-software' | 'no-preference') => {
     const out = new Output({ format: new Mp4OutputFormat({ fastStart: 'in-memory' }), target: new BufferTarget() });
-    const video = new CanvasSource(encoded, { codec: 'avc', bitrate: QUALITY_HIGH, hardwareAcceleration: hw });
+    // Smaller files (Setup > Performance) use mediabunny's medium bitrate.
+    const quality = perfNow().mediumQuality ? QUALITY_MEDIUM : QUALITY_HIGH;
+    const video = new CanvasSource(encoded, { codec: 'avc', bitrate: quality, hardwareAcceleration: hw });
     out.addVideoTrack(video, { frameRate: fps });
     let a: AudioBufferSource | null = null;
     if (audio) {
-      a = new AudioBufferSource({ codec: 'aac', bitrate: QUALITY_HIGH });
+      a = new AudioBufferSource({ codec: 'aac', bitrate: quality });
       out.addAudioTrack(a);
     }
     await out.start();
     return { out, video, a };
   };
   let pipe: Awaited<ReturnType<typeof build>>;
+  // Setup > Performance: auto tries the graphics card first; software leaves it free (many profiles rendering).
+  const enc = perfNow().encoder;
+  let hw: 'prefer-hardware' | 'prefer-software' | 'no-preference' = enc === 'software' ? 'prefer-software' : 'prefer-hardware';
   try {
-    pipe = await build('prefer-hardware');
+    pipe = await build(hw);
   } catch {
-    pipe = await build('no-preference');
+    hw = 'no-preference';
+    pipe = await build(hw);
   }
 
   const frames = Math.max(1, Math.round(total * fps));
   const src = await frameSource(reel, true);
-  const beats = reel.preset === 'story' && src ? storyBeats(reel.fields) : null;
+  const beats = isVoiced(reel.preset) && src ? storyBeats(reel.fields) : null;
   try {
     for (let i = 0; i < frames; i++) {
       if (opts.cancelled?.()) throw new Error('Render cancelled.');
       const t = i / fps;
-      const st = src ? sourceTime(reel, t, beats) : null;
+      const st = src ? sourceTime(reel, t, beats, src.duration) : null;
       const frame = src && st !== null ? await src.frameAt(st) : null;
-      drawReel(ctx, { preset: reel.preset, fields: reel.fields, t, frame: i, logo, video: frame, videoSize: src?.size ?? null });
+      drawReel(ctx, { preset: reel.preset, fields: reel.fields, t, frame: i, logo, banner, video: frame, videoSize: src?.size ?? null });
       square?.draw();
-      await pipe.video.add(t, 1 / fps);
+      if (i === 0 && hw === 'prefer-hardware') {
+        // The encoder is only set up on the first frame: a graphics card that turns the settings down fails here, not
+        // at start. Start over in software then (the frame is still on the canvas).
+        try {
+          await pipe.video.add(t, 1 / fps);
+        } catch {
+          await pipe.out.cancel().catch(() => {});
+          hw = 'no-preference';
+          pipe = await build(hw);
+          await pipe.video.add(t, 1 / fps);
+        }
+      } else await pipe.video.add(t, 1 / fps);
       if (i % 5 === 0) opts.onProgress?.((i + 1) / frames * (audio ? 0.95 : 0.98), 'video');
     }
     if (pipe.a && audio) {
@@ -100,7 +137,7 @@ export async function renderMp4(reel: Reel, opts: RenderOpts): Promise<{ data: U
   const buf = (pipe.out.target as BufferTarget).buffer;
   if (!buf) throw new Error('The encoder produced no data.');
   opts.onProgress?.(1, 'done');
-  return { data: new Uint8Array(buf), seconds: total };
+  return { data: new Uint8Array(buf), seconds: total, bannerPath };
 }
 
 // ── Square (X) ────────────────────────────────────────────────────────────
@@ -147,7 +184,9 @@ export async function renderStills(reel: Reel, times: number[] | undefined, scal
   const timing = timingFor(reel.preset, reel.fields);
   const ts = (times?.length ? times : defaultTimes(timing.body, timing.cta)).map((t) => Math.max(0, Math.min(t, timing.total - 0.01)));
   await loadFonts();
+  await preloadImages(reel.fields);
   const logo = await loadLogo(reel.fields.logo);
+  const { img: banner } = await bannerFor(reel);
   const full = document.createElement('canvas');
   full.width = W;
   full.height = H;
@@ -159,13 +198,13 @@ export async function renderStills(reel: Reel, times: number[] | undefined, scal
   small.height = Math.round(shown.height * scale);
   const sctx = small.getContext('2d')!;
   const src = await frameSource(reel, false);
-  const beats = reel.preset === 'story' && src ? storyBeats(reel.fields) : null;
+  const beats = isVoiced(reel.preset) && src ? storyBeats(reel.fields) : null;
   const out: Array<{ t: number; data: string }> = [];
   try {
     for (const t of ts) {
-      const st = src ? sourceTime(reel, t, beats) : null;
+      const st = src ? sourceTime(reel, t, beats, src.duration) : null;
       const frame = src && st !== null ? await src.frameAt(st) : null;
-      drawReel(ctx, { preset: reel.preset, fields: reel.fields, t, frame: Math.round(t * 30), logo, video: frame, videoSize: src?.size ?? null });
+      drawReel(ctx, { preset: reel.preset, fields: reel.fields, t, frame: Math.round(t * 30), logo, banner, video: frame, videoSize: src?.size ?? null });
       sq?.draw();
       sctx.drawImage(shown, 0, 0, small.width, small.height);
       out.push({ t, data: small.toDataURL('image/png').split(',')[1] });

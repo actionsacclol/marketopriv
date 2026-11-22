@@ -14,7 +14,19 @@ export default defineConfig({
     electron([
       {
         entry: 'electron/main.ts',
-        vite: { build: { outDir: 'dist-electron', sourcemap: true } },
+        vite: {
+          build: {
+            outDir: 'dist-electron',
+            sourcemap: true,
+            rollupOptions: {
+              // zod ships comments Rollup can't place ("contains an annotation that Rollup cannot interpret"): harmless, not ours.
+              onwarn(w, warn) {
+                if (w.code === 'INVALID_ANNOTATION' && w.id?.includes('node_modules')) return;
+                warn(w);
+              },
+            },
+          },
+        },
       },
       {
         entry: 'electron/preload.ts',

@@ -1,6 +1,6 @@
 // Krypt Marketo's MCP server (Model Context Protocol), so any AI app that
 // speaks MCP (Claude, Codex, Cursor, Windsurf, Gemini CLI, …) can drive the
-// hub: make reels, render them, use Instagram in the built-in browser, log
+// hub: make reels, render them, use Instagram in the user's Chrome, log
 // sessions and stats. The built-in chat agent calls the same tools through
 // invoke(). Same transport as Krypt Editor.
 //
@@ -64,6 +64,29 @@ export interface McpDeps {
   log(level: 'info' | 'warn' | 'error', message: string): void;
 }
 
+// ── Slimmer tool list ──────────────────────────────────────────────────────
+/**
+ * The AI re-reads the tool list on every turn, so drop what the schema library adds that tells it nothing:
+ * the $schema URL and the ±2^53 bounds every integer gets.
+ */
+function slimSchema(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(slimSchema);
+  if (!v || typeof v !== 'object') return v;
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    if (k === '$schema') continue;
+    if ((k === 'maximum' && x === Number.MAX_SAFE_INTEGER) || (k === 'minimum' && x === Number.MIN_SAFE_INTEGER)) continue;
+    out[k] = slimSchema(x);
+  }
+  return out;
+}
+function slimMessage<T>(m: T): T {
+  const tools = (m as { result?: { tools?: Array<Record<string, unknown>> } }).result?.tools;
+  if (!Array.isArray(tools)) return m;
+  const r = (m as { result: Record<string, unknown> }).result;
+  return { ...m, result: { ...r, tools: tools.map((t) => ({ ...t, ...(t.inputSchema ? { inputSchema: slimSchema(t.inputSchema) } : {}) })) } };
+}
+
 // ── Pipe transport ─────────────────────────────────────────────────────────
 /** Newline-delimited JSON-RPC over one socket (the stdio framing, as the spec recommends for custom streams). */
 class LineTransport implements Transport {
@@ -113,7 +136,7 @@ class LineTransport implements Transport {
 
   async send(message: JSONRPCMessage): Promise<void> {
     if (this.closed || this.socket.destroyed) return;
-    await new Promise<void>((resolve) => this.socket.write(`${JSON.stringify(message)}\n`, () => resolve()));
+    await new Promise<void>((resolve) => this.socket.write(`${JSON.stringify(slimMessage(message))}\n`, () => resolve()));
   }
 
   private finish(): void {
@@ -179,7 +202,7 @@ async function captureManifest(version: string): Promise<Record<string, unknown>
     const want = msgs.filter((m) => 'id' in m).length;
     const done = new Promise<void>((resolve) => {
       client.onmessage = (m) => {
-        const mm = m as { id?: number; result?: unknown; error?: unknown };
+        const mm = slimMessage(m) as { id?: number; result?: unknown; error?: unknown };
         if (typeof mm.id === 'number') answers.set(mm.id, mm.result ?? { error: mm.error });
         if (answers.size >= want) resolve();
       };

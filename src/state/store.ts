@@ -1,10 +1,12 @@
 import { create } from 'zustand';
+import { perfNow } from '../lib/perf';
 import { setCustomStyles } from '@shared/styles';
 import type { Approval, AutopilotStatus, BrowserStatus, ChatState, ChromeStatus, Db, KipState, McpStatus, PageId, ProfileInfo, Reel, RenderShape } from '@shared/types';
 import { renderMp4 } from '../render/export';
 import { ensureVoiceover } from '../render/voice';
 import { setSayAs } from '@shared/pronounce';
 import { setElevenNames } from '@shared/voice';
+import { bannerOf } from '@shared/campaigns';
 
 // Renderer state: a live mirror of the main-process DB, navigation, the render
 // job and toasts. The DB is never edited here directly; changes go through
@@ -31,7 +33,7 @@ interface State {
   openStyle: (id: string | null) => void;
   /** Account shown on the Warming page (null = the active one). */
   selectedAccount: string | null;
-  /** Each account's Instagram session (built-in browser or the user's Chrome). */
+  /** Each account's Instagram session (in the user's Chrome). */
   browser: BrowserStatus[];
   /** The Chrome extension: which Chrome profiles are connected. */
   chrome: ChromeStatus | null;
@@ -161,7 +163,23 @@ export async function renderReel(reel: Reel, onProgress?: (ratio: number, phase:
   cancelRender = false;
   const fps = useApp.getState().db?.settings.fps ?? 30;
   useApp.setState({ job: { reelId: reel.id, ratio: 0, phase: 'starting' } });
+  // Low-priority rendering (Setup > Performance): the hub's own processes step back while this runs.
+  let turn = false;
   try {
+    // One render at a time across profiles (Setup > Performance): wait for another profile's render to end.
+    if (perfNow().oneRenderAtATime && window.marketo.perf) {
+      for (;;) {
+        if (cancelRender) throw new Error('Render cancelled.');
+        const t = await window.marketo.perf.renderTurn();
+        if (t.ok) break;
+        const phase = `waiting for ${t.holder ?? 'another profile'}'s render`;
+        useApp.setState({ job: { reelId: reel.id, ratio: 0, phase } });
+        onProgress?.(0, phase);
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      turn = true;
+    }
+    if (perfNow().lowPriorityRender) void window.marketo.perf?.rendering(true).catch(() => {});
     // The final render is when paid voices (ElevenLabs) are bought (previews have no narration); if they can't be, it stops here.
     reel = await ensureVoiceover(
       reel,
@@ -171,7 +189,7 @@ export async function renderReel(reel: Reel, onProgress?: (ratio: number, phase:
       },
       { final: true },
     );
-    const { data, seconds } = await renderMp4(reel, {
+    const { data, seconds, bannerPath } = await renderMp4(reel, {
       fps,
       shape,
       cancelled: () => cancelRender,
@@ -182,8 +200,19 @@ export async function renderReel(reel: Reel, onProgress?: (ratio: number, phase:
     });
     const r = await window.marketo.render.save(reel.id, data, seconds, shape);
     if (!r.ok || !r.data) throw new Error(r.message ?? 'Saving the render failed.');
+    // The campaign's banner was set or changed while this ran: the file has the old one (or none), so it is
+    // not ready to post. Back to draft (the banner change only sent back reels already rendered), render again.
+    const db = useApp.getState().db;
+    const now = db?.reels.find((x) => x.id === reel.id);
+    if (now && (bannerOf(now, db?.campaigns) ?? '').trim() !== bannerPath) {
+      // (This copy of the db may not show the save's 'rendered' yet: anything not posted goes back.)
+      if (now.status !== 'posted') await window.marketo.db.updateReel(reel.id, { status: 'draft' }).catch(() => undefined);
+      throw new Error(`The campaign's ad banner changed while "${reel.title}" was rendering, so this file has the old one. Render it again.`);
+    }
     return { path: r.data, seconds, bytes: data.byteLength };
   } finally {
     useApp.setState({ job: null });
+    void window.marketo.perf?.rendering(false).catch(() => {});
+    if (turn) void window.marketo.perf?.renderDone().catch(() => {});
   }
 }

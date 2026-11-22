@@ -4,6 +4,7 @@ import { DEFAULT_TUNE, FEATURED_VOICES, TUNE_RANGE, VOICES, cleanTune, describeT
 import { ElevenCard } from '../components/ElevenCard';
 import { TopVoices } from '../components/TopVoices';
 import { BUILTIN_SAY, cleanSayAs, setSayAs, type SayAs } from '@shared/pronounce';
+import { isVoiced } from '@shared/presets';
 import { Card, GhostButton, Page, PrimaryButton } from '../components/ui';
 import { VoiceInstall, useVoiceStatus } from '../components/VoiceInstall';
 import { useApp } from '../state/store';
@@ -174,7 +175,7 @@ export default function Voices() {
   };
 
   // Put the tuned voice on an existing reel.
-  const story = db.reels.filter((r) => r.preset === 'story');
+  const story = db.reels.filter((r) => isVoiced(r.preset));
   const [target, setTarget] = useState('');
   const targetId = story.some((r) => r.id === target) ? target : story.some((r) => r.id === selectedReel) ? selectedReel! : (story[0]?.id ?? '');
   const applyToReel = async (): Promise<void> => {

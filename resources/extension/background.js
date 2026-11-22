@@ -51,8 +51,14 @@ const SITES = {
     host: /(^|\.)pinterest\.(com|co\.uk|ca|com\.au|de|fr)$/i,
     cookieUrl: 'https://www.pinterest.com/',
   },
+  // Content Rewards: where post links are submitted to the campaigns the user joined (0.10).
+  rewards: {
+    home: 'https://contentrewards.com/c/home',
+    host: /(^|\.)contentrewards\.com$/i,
+    cookieUrl: 'https://contentrewards.com/',
+  },
 };
-const DOMAIN = { instagram: 'instagram.com', youtube: 'youtube.com', x: 'x.com', tiktok: 'tiktok.com', facebook: 'facebook.com', threads: 'threads.com', pinterest: 'pinterest.com' };
+const DOMAIN = { instagram: 'instagram.com', youtube: 'youtube.com', x: 'x.com', tiktok: 'tiktok.com', facebook: 'facebook.com', threads: 'threads.com', pinterest: 'pinterest.com', rewards: 'contentrewards.com' };
 /** Everything the app may ask Chrome's debugger to do; nothing else is passed on. */
 const CDP_ALLOWED = new Set([
   'Input.dispatchMouseEvent',
@@ -75,7 +81,7 @@ let port = null;
 let hubUp = false;
 let hostError = '';
 /** The tab the app drives, per site. */
-const tabIds = { instagram: null, youtube: null, x: null, tiktok: null, facebook: null, threads: null, pinterest: null };
+const tabIds = { instagram: null, youtube: null, x: null, tiktok: null, facebook: null, threads: null, pinterest: null, rewards: null };
 let tabsLoaded = false;
 const attached = new Set();
 const idleTimers = new Map();
@@ -345,6 +351,13 @@ async function applyMute() {
 const COMMANDS = {
   state: () => state(),
 
+  /** Since 1.0: the hub was updated and ships a newer copy of this extension. Reload from disk to pick it up
+   *  (the same as the Reload button in chrome://extensions). The reply goes out first. */
+  reload() {
+    setTimeout(() => chrome.runtime.reload(), 300);
+    return { reloading: chrome.runtime.getManifest().version };
+  },
+
   /** Mute or unmute the tabs Marketo drives (the app's sound button). */
   async mute({ muted: m }) {
     muted = !!m;
@@ -353,15 +366,44 @@ const COMMANDS = {
   },
   info: ({ site }) => info(siteOf(site)),
 
-  /** Open the site's tab (its own window the first time), or point it at another page of that site. */
-  async open({ url, focus, site: name }) {
+  /**
+   * Open the site's tab (its own window the first time), or point it at another page of that site. Since 1.1 the app
+   * may say how big a new window is, and (oneWindow) to open the tab in the window of one of our other tabs.
+   */
+  async open({ url, focus, site: name, width, height, oneWindow }) {
     const site = siteOf(name);
     const home = SITES[site].home;
     if (url && !onSite(site, url)) throw new Error(`Only ${DOMAIN[site]} pages open here.`);
     let t = await getTab(site);
+    if (!t && oneWindow) {
+      // A tab in the window one of our other tabs is in (the user's own windows are never used).
+      for (const other of Object.keys(tabIds)) {
+        if (other === site) continue;
+        const o = await getTab(other);
+        if (!o) continue;
+        try {
+          t = await chrome.tabs.create({ windowId: o.windowId, url: url || home, active: true });
+        } catch {
+          t = null;
+        }
+        if (t) break;
+      }
+      if (t) {
+        await setTab(site, t.id);
+        if (muted) await chrome.tabs.update(t.id, { muted: true }).catch(() => {});
+        // That window may be minimized, and a minimized window does not draw: nothing in it loads or plays.
+        const w = await chrome.windows.get(t.windowId).catch(() => null);
+        if (w && w.state === 'minimized') await chrome.windows.update(t.windowId, { state: 'normal' }).catch(() => {});
+        if (focus) await chrome.windows.update(t.windowId, { focused: true }).catch(() => {});
+        await waitLoaded(t.id, 20000);
+        return info(site);
+      }
+    }
     if (!t) {
-      const w = await chrome.windows.create({ url: url || home, type: 'normal', focused: !!focus, width: 1320, height: 920 });
-      t = w.tabs && w.tabs[0];
+      const w = Math.round(Number(width)) >= 800 && Math.round(Number(width)) <= 3840 ? Math.round(Number(width)) : 1320;
+      const h = Math.round(Number(height)) >= 600 && Math.round(Number(height)) <= 2160 ? Math.round(Number(height)) : 920;
+      const win = await chrome.windows.create({ url: url || home, type: 'normal', focused: !!focus, width: w, height: h });
+      t = win.tabs && win.tabs[0];
       if (!t) throw new Error('Chrome did not open a window.');
       await setTab(site, t.id);
       if (muted) await chrome.tabs.update(t.id, { muted: true }).catch(() => {});
@@ -402,6 +444,16 @@ const COMMANDS = {
     const t = await getTab(site);
     if (!t) throw new Error('NO_TAB');
     if (!onSite(site, urlOf(t))) throw new Error(`NOT_${site.toUpperCase()}`);
+    // Our tabs sharing one window: the one being driven must be the one showing (a background tab is hidden, and
+    // a hidden page pauses its videos and drops clicks). Only ever switches between our own tabs.
+    if (!t.active) {
+      try {
+        const [shown] = await chrome.tabs.query({ windowId: t.windowId, active: true });
+        if (shown && siteOfTab(shown.id)) await chrome.tabs.update(t.id, { active: true });
+      } catch {
+        /* the window is closing */
+      }
+    }
     await attach(t.id);
     touchIdle(t.id);
     try {
@@ -462,6 +514,13 @@ const COMMANDS = {
     return true;
   },
 
+  /** Since 1.1: stop controlling one site's tab (the AI moved on to another platform); it stays open. */
+  async detachSite({ site: name }) {
+    const t = await getTab(siteOf(name));
+    if (t) await detach(t.id);
+    return true;
+  },
+
   async close({ site: name }) {
     const site = siteOf(name);
     const t = await getTab(site);
@@ -472,7 +531,92 @@ const COMMANDS = {
     await setTab(site, null);
     return true;
   },
+
+  /**
+   * The Marketo profile's proxy for this whole Chrome profile ({on:false} takes ours away). It stays set while
+   * Marketo is closed and after Chrome restarts, so pages never load from this computer's own IP in between.
+   */
+  async proxy(args) {
+    if (!args || !args.on) {
+      const cur = await chrome.proxy.settings.get({ incognito: false });
+      if (cur.levelOfControl === 'controlled_by_this_extension') await chrome.proxy.settings.clear({ scope: 'regular' });
+      await chrome.storage.local.remove('proxyAuth');
+      await chrome.privacy.network.webRTCIPHandlingPolicy.clear({ scope: 'regular' }).catch(() => {});
+      return { on: false, control: cur.levelOfControl };
+    }
+    const scheme = ['http', 'https', 'socks5'].includes(args.scheme) ? args.scheme : 'http';
+    const host = String(args.host || '');
+    const port = Number(args.port);
+    if (!/^[A-Za-z0-9.-]{1,253}$/.test(host) || !(port >= 1 && port <= 65535)) throw new Error('NOT_ALLOWED: proxy');
+    const cur = await chrome.proxy.settings.get({ incognito: false });
+    if (cur.levelOfControl === 'controlled_by_other_extensions' || cur.levelOfControl === 'not_controllable') return { on: false, control: cur.levelOfControl };
+    if (args.username) await chrome.storage.local.set({ proxyAuth: { host: host.toLowerCase(), username: String(args.username), password: String(args.password || '') } });
+    else await chrome.storage.local.remove('proxyAuth');
+    await chrome.proxy.settings.set({ value: { mode: 'fixed_servers', rules: { singleProxy: { scheme, host, port }, bypassList: [] } }, scope: 'regular' });
+    // WebRTC would otherwise reach out around the proxy and show the real IP to the page.
+    await chrome.privacy.network.webRTCIPHandlingPolicy.set({ value: 'disable_non_proxied_udp', scope: 'regular' }).catch(() => {});
+    const after = await chrome.proxy.settings.get({ incognito: false });
+    await chrome.storage.session.remove('proxyWarm').catch(() => {});
+    void warmProxy();
+    return { on: true, control: after.levelOfControl };
+  },
+
+  /** The exit IP this Chrome profile shows to sites (through its proxy, if any). */
+  async ipcheck() {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 20000);
+    try {
+      const r = await fetch('https://ipinfo.io/json', { cache: 'no-store', credentials: 'omit', signal: ctl.signal });
+      if (r.status === 407) throw new Error('the proxy refused the user name and password');
+      if (!r.ok) throw new Error(`the check answered ${r.status}`);
+      const j = await r.json();
+      return { ip: String(j.ip || ''), country: j.country ? String(j.country) : undefined, city: j.city ? String(j.city) : undefined };
+    } catch (e) {
+      const m = String((e && e.message) || e);
+      throw new Error(e && e.name === 'AbortError' ? 'the proxy did not answer in 20s' : /failed to fetch/i.test(m) ? 'nothing came back through the proxy (check its host, port, user name and password)' : m);
+    } finally {
+      clearTimeout(timer);
+    }
+  },
 };
+
+// Chrome asks this extension for the proxy's password only for its own sites. One request through the proxy to a
+// site it may use signs Chrome in, and Chrome then reuses that sign-in for every other site in this Chrome profile
+// (so the user never gets Chrome's own password box). Done once per Chrome start, and whenever the proxy changes.
+async function warmProxy() {
+  try {
+    const { proxyAuth } = await chrome.storage.local.get('proxyAuth');
+    if (!proxyAuth) return;
+    const { proxyWarm } = await chrome.storage.session.get('proxyWarm');
+    if (proxyWarm) return;
+    const cur = await chrome.proxy.settings.get({ incognito: false });
+    if (cur.levelOfControl !== 'controlled_by_this_extension') return;
+    await COMMANDS.ipcheck();
+    await chrome.storage.session.set({ proxyWarm: Date.now() });
+  } catch {
+    /* the proxy is down: tried again the next time this worker starts */
+  }
+}
+chrome.runtime.onStartup.addListener(() => void warmProxy());
+void warmProxy();
+
+// The proxy's sign-in, from what the app gave us (registered at the top level so Chrome finds it after a restart).
+// A wrong password is tried twice, then Chrome is left to fail rather than ask forever.
+const authTries = new Map();
+chrome.webRequest.onAuthRequired.addListener(
+  (details, callback) => {
+    if (!details.isProxy) return callback({});
+    chrome.storage.local.get('proxyAuth').then(({ proxyAuth }) => {
+      const n = (authTries.get(details.requestId) || 0) + 1;
+      authTries.set(details.requestId, n);
+      setTimeout(() => authTries.delete(details.requestId), 60000);
+      if (!proxyAuth || n > 2 || (details.challenger && details.challenger.host && details.challenger.host.toLowerCase() !== proxyAuth.host)) return callback({ cancel: n > 2 });
+      callback({ authCredentials: { username: proxyAuth.username, password: proxyAuth.password } });
+    }, () => callback({}));
+  },
+  { urls: ['<all_urls>'] },
+  ['asyncBlocking'],
+);
 
 async function hello() {
   // `tab` is the Instagram tab (what version 0.1 sent); `tabs` has every site.
@@ -561,7 +705,8 @@ chrome.tabs.onUpdated.addListener((id, change, tab) => {
   if (attached.has(id) && change.status === 'loading' && !onSite(site, url)) {
     void state().then((s) => {
       // Signing in may pass through other Meta / Google / Apple pages.
-      const signedIn = site === 'youtube' ? s.ytLoggedIn : site === 'x' ? s.xLoggedIn : site === 'tiktok' ? s.ttLoggedIn : s.nets[site] ? s.nets[site].loggedIn : s.loggedIn;
+      // Content Rewards: signing in there is the user's, done while no AI session holds the tab.
+      const signedIn = site === 'rewards' ? true : site === 'youtube' ? s.ytLoggedIn : site === 'x' ? s.xLoggedIn : site === 'tiktok' ? s.ttLoggedIn : s.nets[site] ? s.nets[site].loggedIn : s.loggedIn;
       if (!signedIn) return;
       post({ ev: 'blocked', site, url: url || `a page outside ${DOMAIN[site]}` });
       chrome.tabs.goBack(id).catch(() => chrome.tabs.update(id, { url: SITES[site].home }).catch(() => {}));

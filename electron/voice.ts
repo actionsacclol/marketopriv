@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { VoiceStatus } from '../shared/types';
 import { KOKORO_BYTES, KOKORO_FILES } from './kokoroFiles';
 import * as profiles from './profiles';
+import * as instance from './instance';
 
 // Voice-over: the on-device Kokoro-82M model. Krypt Editor and Krypt Studio
 // install the same files under <appData>/<app>/models/kokoro, so a copy from
@@ -12,7 +13,7 @@ import * as profiles from './profiles';
 // into <userData>/models/kokoro, checking every file's SHA-256. Generated
 // clips live in <userData>/voice.
 
-const ownDir = (): string => path.join(app.getPath('userData'), 'models', 'kokoro');
+const ownDir = (): string => path.join(instance.ROOT, 'models', 'kokoro');
 const CANDIDATES = (): string[] => [ownDir(), ...['Krypt Editor', 'Krypt Studio'].map((a) => path.join(app.getPath('appData'), a, 'models', 'kokoro'))];
 
 export interface VoiceModel {
@@ -123,7 +124,17 @@ export async function save(name: string, data: Uint8Array): Promise<string> {
   const file = path.join(voiceDir(), name);
   const tmp = `${file}.part`;
   await fs.promises.writeFile(tmp, data);
-  await fs.promises.rename(tmp, file);
+  // Windows: an antivirus scan or the hub playing the old clip can hold the file for a moment (EPERM / EBUSY).
+  for (let i = 0; ; i++) {
+    try {
+      await fs.promises.rename(tmp, file);
+      break;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (i >= 8 || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) throw e;
+      await new Promise((r) => setTimeout(r, 250 * (i + 1)));
+    }
+  }
   return file;
 }
 

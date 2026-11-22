@@ -9,6 +9,32 @@
 
 export const KRYPT_PACK_READ = '2026-11-13';
 
+/** A paid product that does the same job as a Krypt tool, for "free vs paid" reels. */
+export interface KryptRival {
+  name: string;
+  /** What it is, in a few words. */
+  what: string;
+  /** Its price as seen on its own page or recent listings (RIVALS_CHECKED), with how sure we are. */
+  price: string;
+  /** Where the price and facts come from. */
+  source: string;
+  /** Other facts a reel may use, each with its source in the text. */
+  facts?: string[];
+}
+
+/** When the rivals' prices were looked up. */
+export const RIVALS_CHECKED = '2026-11-20';
+
+/** How a reel compares a Krypt tool with paid ones (the versus style, or any reel that names a rival). */
+export const VERSUS_RULES = [
+  "A rival's price and facts come only from its rivals entry here or from its own official page read that day. Prices change: check the rival's own store page the day you make the reel (web search or fetch) and use what it says, labelled as it is (\"$44.95/yr\", \"list price\"). If you could not check it, say \"paid\" or \"a subscription\" without a number.",
+  'Compare like with like: a thing the Krypt tool really does (its krypt_tools entry, shown on its real screen) next to what the paid one charges for it. Never say a rival lacks something unless its own page shows that.',
+  '"Better" always comes with its reason in the same line ("does the same cleanup, $0", "no account, no background service"). Opinions read as opinions in the viewer\'s voice ("why would you pay for this"); never call a rival a scam, malware, a virus, spyware or say it steals data. The only incident to mention is one listed in its facts, said exactly as written there, with its year.',
+  "Name rivals in text only: no rival logos, screenshots or recordings of their app, and nothing that looks like their ad.",
+  'The price contrast is the point: "free" and "$0" are fine for a tool whose price line says free (never for Krypto Bot or Krypto Mirror, which take a fee per trade). Still never "open source".',
+  'Not for the trading tools: no free-vs-paid bots, signals or profit comparisons.',
+];
+
 export interface KryptTool {
   id: string;
   name: string;
@@ -37,9 +63,15 @@ export interface KryptTool {
   released?: boolean;
   /** A longer catalog in the playbook (get_playbook doc), when one ships with this build. */
   doc?: string;
+  /** Paid products that do the same job, for free-vs-paid reels (the versus style). */
+  rivals?: KryptRival[];
 }
 
 const TRADING_AVOID = ['Profit promises, win rates as a pitch, or a "proven edge"', 'Anything that reads as financial advice; keep "Not financial advice." on screen'];
+// The prediction-market bots' reels (the user, 2026-11-19: "not the visual bs"): the hook is what it does for the
+// viewer, an AI that trades Polymarket / Kalshi for you, set up in a minute. Never a tour of the 3D scenes, the look or
+// the screens; the screen only shows the AI doing the trading.
+const PREDICTION_AVOID = ['Talking about the visuals: the Agent Hub scenes (casino, poker room, race track, penthouse, spaceship, council, orbital), the 3D look, themes or how the screens look. Show the screen only as the AI trading'];
 const PREDICTION_SAFETY = ['Starts on Paper, and every engine ships switched off', 'Caps, a daily loss stop, approvals for live orders and a stop-all', 'Every trade and signal is logged locally', 'No Krypt account, no telemetry; your exchange key is encrypted on your machine'];
 
 export const KRYPT_TOOLS: KryptTool[] = [
@@ -107,8 +139,8 @@ export const KRYPT_TOOLS: KryptTool[] = [
       { title: 'Its own test', points: ['Across 3,106 fifteen-minute windows, its own model was not a better forecast than the market price; it says so in its changelog'] },
       { title: 'Good to know', points: ['The macOS build is unsigned: its page explains the one-time fix when macOS says the app is "damaged"'] },
     ],
-    angles: ['Agent Hub Casino: AI agents playing blackjack and roulette between jobs, leaving the table when a real task comes in (play chips only)', "An AI agent's forecast vs the market price on a 15-minute BTC window, as the clock runs out", '"We tested our own model on 3,106 windows. The market won." An honest test story'],
-    avoid: [...TRADING_AVOID, 'Whale tracking, copy trading or perps (not in this version)', 'Saying any preset, model or agent has an edge; its own changelog says the model did not beat the price'],
+    angles: ['"Your AI can trade Polymarket for you now." Hook on that, then the setup in seconds: API key in, Claude connected, the AI picks a market and places the trade by itself', '"Polymarket is legal in the US now, and your AI does the trading": the regulated exchange, an API key, the AI trading it', '"I let Claude trade Polymarket for me": the AI reading a market, calling it and putting the order in on its own; any result shown as it really went', '15-minute BTC up or down: the AI makes the call every 15 minutes while you do nothing'],
+    avoid: [...TRADING_AVOID, ...PREDICTION_AVOID, 'Whale tracking, copy trading or perps (not in this version)', 'Saying any preset, model or agent has an edge; its own changelog says the model did not beat the price'],
   },
   {
     id: 'polybot',
@@ -128,8 +160,8 @@ export const KRYPT_TOOLS: KryptTool[] = [
       { title: 'Its own words', points: ['No preset has a proven, fee-adjusted edge; live trades are real USDC'] },
       { title: 'Good to know', points: ['The macOS build is unsigned: its page explains the one-time fix when macOS says the app is "damaged"'] },
     ],
-    angles: ['Agent Hub Casino: AI agents playing blackjack, roulette and slots between jobs, leaving the table when a real task comes in (play chips only)', 'High Stakes poker room: forecasts placed as chip bets, then the "WHO CALLED IT?" board', 'Race Track: every trade a horse in its own price lane, a live event as a race', "An agent's order refused on screen by the rail it tried to break"],
-    avoid: [...TRADING_AVOID, 'Saying paper mode "simulates" the bot (paper sends no orders; it fills against the real book with imaginary money)', 'Saying any preset or agent has an edge; its own README says none is proven'],
+    angles: ['"Let AI trade Polymarket for you." Hook on that, then how easy: connect Claude (or Cursor, Codex), it researches the market, makes its call and trades', '"I gave Claude a Polymarket account": what it bet on, why, and how it went, shown as it really went', 'A $2.5k+ whale order hits a market and the bot sees it the second it lands', 'Copy the big Polymarket traders automatically: pick one, the bot follows their trades'],
+    avoid: [...TRADING_AVOID, ...PREDICTION_AVOID, 'Saying paper mode "simulates" the bot (paper sends no orders; it fills against the real book with imaginary money)', 'Saying any preset or agent has an edge; its own README says none is proven'],
   },
   {
     id: 'trader',
@@ -148,8 +180,8 @@ export const KRYPT_TOOLS: KryptTool[] = [
       { title: 'Safe by design', points: [...PREDICTION_SAFETY, 'The source is public and inspectable'] },
       { title: 'Its own words', points: ['"Nothing here has a proven edge. That includes your AI." The market price is usually the better forecast'] },
     ],
-    angles: ['Orbital: signals arrive as comets, trades orbit in their price lane, settlements go nova or fall into the losses well', 'The Council: trading personas argue over a signal, then the gavel shows what the bot actually did', 'Spaceship: a crew carries each signal and order room to room, in first-person walk mode', '"I gave an AI a Kalshi account. With fake money." The scoreboard filling up to 30 settled markets'],
-    avoid: [...TRADING_AVOID, 'Calling the perps farmer a way to make money', 'A "simulation" or "demo exchange" (Kalshi\'s demo is gone; it is paper on the real books)'],
+    angles: ['"Let AI trade Kalshi for you." Hook on that, then how easy: connect your AI (Claude, ChatGPT, Gemini, even a local one), it picks the market and places the trade', '"I gave Claude a Kalshi account": what it bet on and why, and how it went, shown as it really went', '15-minute BTC, ETH and SOL markets: the AI calls up or down every 15 minutes on its own', 'Kalshi and Polymarket side by side: the bot sees both prices for the same question'],
+    avoid: [...TRADING_AVOID, ...PREDICTION_AVOID, 'Calling the perps farmer a way to make money', 'A "simulation" or "demo exchange" (Kalshi\'s demo is gone; it is paper on the real books)'],
   },
   {
     id: 'studio',
@@ -174,6 +206,7 @@ export const KRYPT_TOOLS: KryptTool[] = [
   },
   {
     id: 'editor',
+    rivals: [{name: "CapCut Pro",what: "the paid tier of the CapCut editor",price: "$19.99 a month or $179.99 a year on capcut.com (prices vary by region and platform)",source: "capcut.com/pricing"}],
     name: 'Krypt Editor',
     tagline: 'Free Video Editor',
     category: 'Utility',
@@ -223,6 +256,7 @@ export const KRYPT_TOOLS: KryptTool[] = [
   },
   {
     id: 'ghost',
+    rivals: [{name: "iMyFone AnyTo and Wondershare Dr.Fone Virtual Location",what: "paid iPhone location changers",price: "subscriptions: read the amount off their own store pages the day you use it",source: "imyfone.com, drfone.wondershare.com"}],
     name: 'Krypt Ghost',
     tagline: 'Spoof your location',
     category: 'Utility',
@@ -230,11 +264,11 @@ export const KRYPT_TOOLS: KryptTool[] = [
     platforms: 'Windows (macOS and Linux builds exist but are not yet tested with a device); for an iPhone',
     price: 'Free, per its page',
     version: '1.0.0',
-    about: "An iPhone location spoofer run from a computer over USB, no jailbreak: change the device's GPS location quickly from a map. Its page says it is for development, testing, privacy and entertainment, and that some apps verify location in other ways, so compatibility varies.",
-    features: ['Pick any location on a map, or search worldwide', 'Routes at walk, cycle or drive speed, with distance and ETA', 'Bookmarks and a history of places you have spoofed to', 'Turns on iPhone Developer Mode without a Mac; a setup walkthrough that ticks steps off as they happen', 'Tray icon with one-click "Reset to real GPS"; on iOS 17.4 and later the location stays after unplugging', 'Diagnostics and a live console'],
-    details: [{ title: 'Limits it states', points: ['Some apps use additional methods to verify real location, so compatibility may vary', 'Apple Find My is not affected', 'Only on devices you own; spoofing may break some apps\' terms, and some games detect it and ban'] }],
-    angles: ['The pin drops on Tokyo and the iPhone\'s Maps jumps there, split screen', 'A drive route playing out along a road, ETA counting down', 'Testing a geofence in your own app without leaving the desk'],
-    avoid: ['Pitching it for cheating in games or dodging app rules (some games detect it and ban)', 'Promising it works with every app (the page says compatibility varies)', 'Fooling Find My or location sharing', 'Use on someone else\'s device'],
+    about: "An iPhone location spoofer run from a computer over USB, no jailbreak: change the device's GPS location quickly from a map. The new location is used everywhere on the phone, every app and Find My included, and it stays (also after unplugging) until you reset it or pick a new spot. Its page says it is for development, testing, privacy and entertainment.",
+    features: ['Pick any location on a map, or search worldwide', 'Routes at walk, cycle or drive speed, with distance and ETA', 'Bookmarks and a history of places you have spoofed to', 'Turns on iPhone Developer Mode without a Mac; a setup walkthrough that ticks steps off as they happen', 'Changes the location everywhere on the phone, Find My included', 'The location stays, even unplugged, until you reset it or pick a new spot', 'Tray icon with one-click "Reset to real GPS"', 'Diagnostics and a live console'],
+    details: [{ title: 'Limits it states', points: ['Some apps use additional methods to verify real location, so compatibility may vary', 'Only on devices you own; spoofing may break some apps\' terms, and some games detect it and ban'] }],
+    angles: ['The pin drops on Tokyo and the iPhone\'s Maps jumps there, split screen', 'A drive route playing out along a road, ETA counting down', 'Testing a geofence in your own app without leaving the desk', 'Find My on a second device shows the phone in another city, then one click brings it home'],
+    avoid: ['Pitching it for cheating in games or dodging app rules (some games detect it and ban)', 'Promising it works with every app (the page says compatibility varies)', 'Saying Find My is not affected (it is: the location changes everywhere, Find My included)', 'Use on someone else\'s device'],
   },
   {
     id: 'poker',
@@ -282,6 +316,7 @@ export const KRYPT_TOOLS: KryptTool[] = [
   },
   {
     id: 'macro',
+    rivals: [{name: "Jitbit Macro Recorder",what: "a paid macro recorder for Windows",price: "$38 (Basic) or $69 (Pro), each with one year of free upgrades",source: "jitbit.com/macro-recorder/purchase"}],
     name: 'Krypt Macro',
     tagline: 'Automate Everything',
     category: 'Utility',
@@ -302,6 +337,7 @@ export const KRYPT_TOOLS: KryptTool[] = [
   },
   {
     id: 'tweaker',
+    rivals: [{name: "Advanced SystemCare Pro (IObit)",what: "a paid PC optimizer suite",price: "$29.99 a year for one PC at list price, often discounted the first year",source: "iobit.com/en/advancedsystemcarepro.php"},{name: "Hone Premium (hone.gg)",what: "a game FPS optimizer with a limited free tier and a paid monthly or yearly plan",price: "a subscription: read the amount off hone.gg/premium the day you use it",source: "hone.gg/premium",facts: ["Its own support page says it cannot guarantee an amount of FPS (support.hone.gg, 'recommended optimizations')"]},{name: "Paid \"FPS boost\" packs",what: "tweak packs sold as .bat / .reg files or \"optimization services\" on Discord, Gumroad and YouTube",price: "varies: never name a seller or a price you did not see",source: "none: talk about the kind of product, never a named seller",facts: ["A generic kind, not one product: the point is paying for registry and service changes Windows already exposes"]}],
     name: 'Krypt Tweaker',
     tagline: "Free Tweaker - Don't pay for one.",
     category: 'Utility',
@@ -324,6 +360,7 @@ export const KRYPT_TOOLS: KryptTool[] = [
   },
   {
     id: 'cleaner',
+    rivals: [{name: "CCleaner Professional (Piriform, owned by Gen Digital)",what: "the best-known paid PC cleaner",price: "about $44.95 a year for one PC at list price per recent listings, cheaper first-year deals",source: "ccleaner.com (check the price there the day you use it)",facts: ["September 2017: the official CCleaner 5.33 download carried a backdoor after attackers got into the company's build servers; Cisco Talos found it and Avast (the owner then) estimated 2.27 million downloads. Say it exactly like that, with the year; it was fixed, so never present it as current."]},{name: "Advanced SystemCare Pro (IObit)",what: "a paid optimizer and cleaner suite",price: "$29.99 a year for one PC at list price, often discounted the first year",source: "iobit.com/en/advancedsystemcarepro.php"}],
     name: 'Krypt Cleaner',
     tagline: 'Best PC Cleaner in the world',
     category: 'Utility',
@@ -343,6 +380,7 @@ export const KRYPT_TOOLS: KryptTool[] = [
   },
   {
     id: 'cursor',
+    rivals: [{name: "CursorFX (Stardock)",what: "a paid cursor customizer",price: "$4.99 on Steam (one-time), sales vary",source: "store.steampowered.com/app/1299980"}],
     name: 'Krypt Cursor',
     tagline: 'Best Cursor Customizer',
     category: 'Utility',
@@ -364,6 +402,7 @@ export const KRYPT_TOOLS: KryptTool[] = [
   },
   {
     id: 'crosshair',
+    rivals: [{name: "Crosshair X",what: "a paid crosshair overlay on Steam",price: "a one-time Steam purchase whose price swings with sales: read it off the Steam page the day you use it",source: "store.steampowered.com/app/1366800"}],
     name: 'Krypt Crosshair',
     tagline: 'Free Crosshair Overlay',
     category: 'Utility',
@@ -410,21 +449,44 @@ export const KRYPT_TOOLS: KryptTool[] = [
   {
     id: 'marketo',
     name: 'Krypt Marketo',
-    tagline: 'Reels and Instagram accounts, run by your AI',
+    tagline: 'Auto grow social media',
     category: 'Utility',
-    url: 'krypt.cc/tools',
-    platforms: 'Windows',
-    price: 'Not stated yet',
-    released: false,
-    about: 'This app. A desktop hub that makes Instagram reels and runs Instagram accounts, driven by the AI you already use. It does not have its own page on krypt.cc yet, so the end card link is the tools list for now.',
-    features: ['Ask your AI for a reel and watch it get written, previewed and rendered to an MP4', 'Reel styles: story (narrated), list, post card, stats, versus, terminal and clip', 'Narration made on your computer; nothing is sent anywhere', 'Reference videos: add a reel whose edit you like and say "like this one"', 'Hook tests: 2-4 openings of the same reel to post as Trial Reels', 'Account warm-up with daily limits the AI cannot pass, and your approval on every comment and post', 'Results: record each reel\'s numbers and keep what was learned'],
-    details: [
-      { title: 'Works with', points: ['Claude Code, Claude Desktop, Codex, Cursor, Windsurf, Gemini CLI and VS Code over MCP', 'A built-in chat for people with their own API key (Grok, GPT, OpenRouter or a local model)'] },
-      { title: 'Instagram', points: ["Each account stays signed in where it already lives: the hub's own browser, or your own Chrome through the Marketo extension", 'You sign in yourself; the AI never sees a password'] },
-      { title: 'Built in', points: ['A playbook of hook rules, formats, caption template and checklist', 'This catalog of Krypt tools'] },
+    url: 'krypt.cc/tools/marketo',
+    platforms: 'Windows and macOS (Apple silicon build)',
+    price: 'No price on its page',
+    version: '1.0.0',
+    read: '2026-11-22',
+    about: 'This app. A desktop hub that makes short videos and runs social accounts, driven by the AI you already use: the AI does the work, the hub is where you watch it, set the rules and collect the files. It posts to Instagram, TikTok, YouTube Shorts, X, Facebook, Threads and Pinterest, each account signed in in your own Chrome.',
+    features: [
+      'Ask your AI for a reel and watch it get written, previewed and rendered to a 1080x1920 MP4',
+      'Reel styles you switch on per account: narrated stories, lists, stats, quizzes, would-you-rather, tier lists, memes, Reddit and greentext stories, stickman explainers, stream clips and screen-recorded tool demos',
+      'Seven platforms: Instagram, TikTok, YouTube Shorts, X, Facebook, Threads and Pinterest, each with its own warm-up',
+      'Autopilot: scheduled runs do the day\'s posts, likes, follows, comments, replies and DMs, then report back',
+      'Stream clipping: top Twitch and Kick clips, or the most replayed part of a YouTube video, cut vertical with captions',
+      'Learns from results: reads each post\'s numbers and keeps what worked for the next reels',
+      'Kip: a chat tab in the hub that runs everything through your own Claude Code',
     ],
-    angles: ['"This reel was made by an AI. Here is the prompt."', 'One sentence in, a finished reel out, screen recorded', 'A new account\'s first two weeks, done slowly on purpose'],
-    avoid: ['Promising views, followers or growth', 'Showing or suggesting spam, mass accounts or bot farms', 'Saying it keeps an account safe from Instagram restrictions', 'Calling it "free to use" or "open source"'],
+    details: [
+      { title: 'Works with', points: ['Claude Code, Claude Desktop, Codex, Cursor, Windsurf, Gemini CLI, VS Code or any MCP app', 'A built-in chat for people with only an API key: xAI (Grok), OpenAI, OpenRouter, Ollama or any OpenAI-compatible URL'] },
+      { title: 'Accounts', points: ["Each account stays signed in where it already lives: a profile of your own Chrome, through the Krypt Marketo extension", 'You sign in yourself; the AI never sees a password', 'Profiles: separate sets of accounts, each with its own optional proxy, and each can run in its own window'] },
+      { title: 'Your rules', points: ['Daily limits and the gap between posts are your own numbers; the recommended ones are a starting point, and the hub warns when you go over them', 'Optional: approve each post, comment and message before it goes out', 'A Training page and a written brief the AI reads every run'] },
+      { title: 'Making videos', points: ['Narration through your own ElevenLabs account', 'Long YouTube videos (16:9) edited in Krypt Editor', 'Hook tests: several openings of the same reel'] },
+      { title: 'Built in', points: ['A playbook of hook rules, formats and captions', 'This catalog of Krypt tools'] },
+    ],
+    angles: [
+      '"This reel was made by an AI. Here is the prompt."',
+      'One sentence in, a finished reel out, screen recorded',
+      'The same video going up on seven platforms from one run',
+      'A new account\'s first week, done slowly on purpose (warm-up)',
+      'Pick a style, get a reel: the same idea made as a stickman explainer, a quiz and a meme',
+    ],
+    avoid: [
+      'Promising views, followers, growth or income',
+      'Showing or suggesting spam, mass accounts or bot farms',
+      'Saying it keeps accounts safe from restrictions or bans, or that platforms cannot tell',
+      'Calling it "free to use" or "open source"',
+      'Showing the hub or Chrome with real accounts open: handles, emails, DMs, numbers. Record only a demo profile with nothing private in it, and check every frame',
+    ],
   },
 ];
 
@@ -461,6 +523,9 @@ export function kryptToolDetail(t: KryptTool): string {
     ...t.details.map((d) => `${d.title}:\n${bullets(d.points)}`),
     `Reel angles:\n${bullets(t.angles)}`,
     t.avoid.length ? `Never:\n${bullets(t.avoid)}` : '',
+    t.rivals?.length
+      ? `Paid rivals, for free-vs-paid reels (looked up ${RIVALS_CHECKED}):\n${bullets(t.rivals.map((r) => `${r.name}: ${r.what}. Price: ${r.price}. Source: ${r.source}.${r.facts?.length ? ` Facts: ${r.facts.join(' ')}` : ''}`))}\nRules for comparing:\n${bullets(VERSUS_RULES)}`
+      : '',
   ]
     .filter(Boolean)
     .join('\n\n');

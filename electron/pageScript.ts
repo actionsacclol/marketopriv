@@ -94,7 +94,13 @@ const RAW = String.raw`
     const x = Math.min(innerWidth - 1, Math.max(0, r.left + r.width / 2));
     const y = Math.min(innerHeight - 1, Math.max(0, r.top + r.height / 2));
     const t = deepAt(x, y);
-    return !t || within(el, t) || within(t, el);
+    if (!t || within(el, t) || within(t, el)) return true;
+    // A suggestion list (hashtags, mentions, search) floats over the box being typed in and its layer catches the
+    // hit test across the dialog: what is under it is still there and still clickable, so it is not hidden from the list.
+    const lb = [...document.querySelectorAll('[role=listbox]')].find((l) => !within(l, el) && !hidden(l));
+    if (!lb) return false;
+    const layer = lb.closest('#layers > div') || lb;
+    return within(layer, t) && !within(layer, el);
   }
 
   /** The handle Instagram shows as signed in (the "Profile" link in its own navigation). */
@@ -191,6 +197,19 @@ const RAW = String.raw`
   const onFb = () => /(^|\.)facebook\.com$/i.test(location.hostname);
   const onTh = () => /(^|\.)threads\.(com|net)$/i.test(location.hostname);
   const onPin = () => /(^|\.)pinterest\.(com|co\.uk|ca|com\.au|de|fr)$/i.test(location.hostname);
+  const onYt = () => /(^|\.)youtube\.com$/i.test(location.hostname) && !/^studio\./i.test(location.hostname);
+
+  /** youtube.com: a Short's channel is the /@handle link in the channel bar nearest the element (none when unclear). */
+  function postOfYt(el) {
+    for (let e = el, i = 0; e && i < 14; e = e.parentElement, i++) {
+      if (!e.querySelectorAll) continue;
+      const bars = [...e.querySelectorAll('yt-reel-channel-bar-view-model a[href^="/@"]')];
+      if (!bars.length) continue;
+      const handles = [...new Set(bars.map((a) => (/^\/@([\w.-]+)/.exec(a.getAttribute('href') || '') || [])[1]).filter(Boolean))];
+      return { url: location.href, creator: handles.length === 1 ? '@' + handles[0] : '' };
+    }
+    return { url: location.href, creator: '' };
+  }
 
   /** Threads: the handle signed in (its own Profile link in the side navigation). */
   function whoamiTh() {
@@ -258,6 +277,53 @@ const RAW = String.raw`
     return el.getAttribute('data-testid') || (el.closest('[data-testid]') || { getAttribute: () => '' }).getAttribute('data-testid') || '';
   }
 
+  /**
+   * The thread a comment, reply or message from this element goes into (the per-thread cap counts by it): a DM page's
+   * chat; on X and Threads the post at the top of the conversation on screen (a back-and-forth is many posts, one
+   * conversation); elsewhere the post itself.
+   */
+  function threadOf(el, post) {
+    const p = location.pathname;
+    // Direct messages: the chat open on the page.
+    if (/^\/(direct|messages|i\/chat|inbox|latest\/inbox)(\/|$)/i.test(p) || /(^|\.)messenger\.com$/i.test(location.hostname)) {
+      const q = new URLSearchParams(location.search);
+      const id = q.get('u') || q.get('selected_item_id') || q.get('thread_id') || q.get('asset_id') || '';
+      const tt = onTt() ? document.querySelector('[data-e2e=chat-uniqueid],[data-e2e=chat-nickname]') : null;
+      return location.origin + p.replace(/\/$/, '') + (id ? '#' + id : '') + (tt ? '#@' + clean(tt.textContent).replace(/^@/, '') : '');
+    }
+    // On the account's own post every commenter is their own thread (2 each), so it can still answer many people.
+    const mine = (root, rootBy, who, me) => (me && rootBy && rootBy.toLowerCase() === me.toLowerCase() && who && who.toLowerCase() !== rootBy.toLowerCase() ? root + '#' + who.toLowerCase() : root);
+    if (onX()) {
+      const dlg = el.closest('[role=dialog]');
+      if (dlg || /^\/[A-Za-z0-9_]{1,15}\/status\/\d+/.test(p)) {
+        const scope = dlg || document.querySelector('[data-testid=primaryColumn]') || document;
+        const arts = [...scope.querySelectorAll('article')].filter((a) => a.querySelector('a[href*="/status/"] time'));
+        const by = (a) => { const w = a && a.querySelector('[data-testid=User-Name] a[href^="/"]'); const m = w && /^\/([A-Za-z0-9_]{1,15})$/.exec(w.getAttribute('href') || ''); return m ? m[1] : ''; };
+        if (arts.length) {
+          const root = arts[0].querySelector('a[href*="/status/"] time').closest('a').href.replace(/^(https:\/\/[^/]+\/[^/]+\/status\/\d+).*$/, '$1');
+          // Who is being answered: the post this element sits in, else the last one in the reply dialog, else the page's.
+          const who = el.closest('article') ? by(el.closest('article')) : dlg ? by(arts[arts.length - 1]) : (post.creator || '').replace(/^@/, '');
+          return mine(root, by(arts[0]), who, whoamiX());
+        }
+      }
+      return post.url;
+    }
+    if (onTh() && /^\/@[^/]+\/post\//.test(p)) {
+      for (const a of document.querySelectorAll('[data-pressable-container] a[href*="/post/"]')) {
+        const m = /^\/@([A-Za-z0-9._]+)\/post\/([A-Za-z0-9_-]+)/.exec(a.getAttribute('href') || '');
+        if (m) return mine(location.origin + '/@' + m[1] + '/post/' + m[2], m[1], (post.creator || '').replace(/^@/, ''), whoamiTh());
+      }
+    }
+    return post.url;
+  }
+
+  /** How many words the post around an element has (its reading time; 0 when no post is found). */
+  function postWords(el) {
+    const box = el.closest('article, [role=article], [data-pressable-container="true"], [data-test-id="pin"], [data-grid-item="true"]');
+    const text = box ? clean(box.innerText || '') : '';
+    return text ? Math.min(400, text.split(' ').length) : 0;
+  }
+
   /** The post an element belongs to (for the session log): its link and creator. */
   function postOf(el) {
     if (onX()) return postOfX(el);
@@ -265,6 +331,7 @@ const RAW = String.raw`
     if (onTh()) return postOfTh(el);
     if (onPin()) return postOfPin(el);
     if (onFb()) return { url: location.href, creator: '' };
+    if (onYt()) return postOfYt(el);
     const art = el.closest('article') || el.closest('[role=dialog]') || document;
     let url = '';
     const link = art.querySelector('a[href*="/p/"],a[href*="/reel/"],a[href*="/reels/"]');
@@ -288,7 +355,9 @@ const RAW = String.raw`
     const push = (s) => { if (lines.length >= maxLines || chars > maxChars) { more++; return; } lines.push(s); chars += s.length + 1; };
 
     let root = document.body, modal = null;
-    const dialogs = [...document.querySelectorAll('[role=dialog],dialog[open]')].filter((d) => { const r = d.getBoundingClientRect(); return r.width > 40 && r.height > 40 && !hidden(d); });
+    // An alert dialog ("Save post?", "Discard?") can be a zero-size wrapper around its visible box: its contents decide.
+    const sized = (d) => { const r = d.getBoundingClientRect(); return r.width > 40 && r.height > 40; };
+    const dialogs = [...document.querySelectorAll('[role=dialog],[role=alertdialog],dialog[open]')].filter((d) => !hidden(d) && (sized(d) || (d.getAttribute('role') === 'alertdialog' && [...d.querySelectorAll('div')].some(sized))));
     if (dialogs.length) {
       const top = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
       modal = dialogs.reverse().find((d) => d.getAttribute('aria-modal') === 'true' || (top && d.contains(top))) || null;
@@ -477,6 +546,7 @@ const RAW = String.raw`
       dialog: dlg ? clean(dlg.getAttribute('aria-label') || (dlg.querySelector('h1,h2,[role=heading]') || {}).textContent || '') : '',
       dialogText: dlg ? cut(clean(dlg.innerText), 400) : '',
       testid: idOf(el),
+      words: postWords(el),
       pressed: el.getAttribute('aria-pressed') === 'true',
       texts,
       editable: role === 'textbox' || role === 'searchbox' || role === 'combobox',
@@ -485,6 +555,7 @@ const RAW = String.raw`
       url: location.href,
       postUrl: post.url,
       creator: post.creator,
+      thread: threadOf(el, post),
     };
   }
 
@@ -560,6 +631,7 @@ const RAW = String.raw`
       url: location.href,
       postUrl: post.url,
       creator: post.creator,
+      thread: threadOf(el, post),
       lang: document.documentElement.lang || '',
     };
   }

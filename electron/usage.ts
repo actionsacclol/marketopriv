@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
 import type { RunUsage } from '../shared/aiUsage';
+import * as instance from './instance';
 
 // The usage ledger: one row per autopilot run (what the AI app reported when
 // it finished) and one per day and model for the built-in chat. It belongs to
@@ -9,7 +10,7 @@ import type { RunUsage } from '../shared/aiUsage';
 // their own AI app over MCP are not in it: the hub never sees their tokens.
 
 const KEEP = 600;
-const file = (): string => path.join(app.getPath('userData'), 'autopilot', 'usage.json');
+const file = (): string => path.join(instance.ROOT, 'autopilot', 'usage.json');
 
 let rows: RunUsage[] | null = null;
 

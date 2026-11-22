@@ -1,9 +1,10 @@
-import { app, net } from 'electron';
+import { net } from 'electron';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { WhisperStatus } from '../shared/types';
 import { WHISPER_BYTES, WHISPER_FILES, WHISPER_MARKER } from './whisperFiles';
+import * as instance from './instance';
 
 // Speech to text for stream clips: the on-device Whisper model, downloaded
 // on first use into <userData>/models/whisper the same way as the Kokoro
@@ -11,7 +12,7 @@ import { WHISPER_BYTES, WHISPER_FILES, WHISPER_MARKER } from './whisperFiles';
 // written as .part and renamed. The renderer runs it (src/render/transcribe)
 // and reads the files through the media protocol (electron/media.ts).
 
-export const whisperDir = (): string => path.join(app.getPath('userData'), 'models', 'whisper');
+export const whisperDir = (): string => path.join(instance.ROOT, 'models', 'whisper');
 
 const sizeOf = (p: string): number => {
   try {

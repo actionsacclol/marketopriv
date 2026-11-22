@@ -1,7 +1,7 @@
 {
   "name": "krypt-marketo",
   "productName": "Krypt Marketo",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Make Instagram reels and run Instagram accounts with any AI: preset reel generator, built-in Instagram browser with enforced limits, stats, and an MCP server.",
   "main": "dist-electron/main.js",
   "author": {
@@ -83,6 +83,9 @@
       }
     ],
     "asar": true,
+    "electronLanguages": [
+      "en-US"
+    ],
     "electronFuses": {
       "runAsNode": true,
       "enableNodeOptionsEnvironmentVariable": false,

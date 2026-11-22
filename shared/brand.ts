@@ -43,6 +43,24 @@ export const GUIDE_VIDEO_ID = 'yLFVUZtf1Gs';
 export const GUIDE_VIDEO_URL = `https://www.youtube.com/watch?v=${GUIDE_VIDEO_ID}`;
 export const GUIDE_VIDEO_THUMB = `https://i.ytimg.com/vi/${GUIDE_VIDEO_ID}/mqdefault.jpg`;
 
+/** Krypt's clipping guide (Content Rewards + Marketo), shown on the wizard's clipping plan step and on Resources. */
+export const CLIPPING_GUIDE_ID = '_ns-K2quLUk';
+export const CLIPPING_GUIDE_URL = `https://www.youtube.com/watch?v=${CLIPPING_GUIDE_ID}`;
+export const CLIPPING_GUIDE_THUMB = `https://i.ytimg.com/vi/${CLIPPING_GUIDE_ID}/mqdefault.jpg`;
+
+/** Krypt's Multi run + proxy setup guide, shown on the Multi run page and on Resources. */
+export const PROXY_GUIDE_ID = '0QUr1TP2UmY';
+export const PROXY_GUIDE_URL = `https://www.youtube.com/watch?v=${PROXY_GUIDE_ID}`;
+export const PROXY_GUIDE_THUMB = `https://i.ytimg.com/vi/${PROXY_GUIDE_ID}/mqdefault.jpg`;
+
+/** Krypt's SMM panel guide, shown on Resources next to the SMM panel. */
+export const SMM_GUIDE_ID = 'jG5Ni65WD_o';
+export const SMM_GUIDE_URL = `https://www.youtube.com/watch?v=${SMM_GUIDE_ID}`;
+
+/** Proxy-Cheap, Krypt's referral link for static residential (ISP) proxies. Always shown with the note. */
+export const PROXY_CHEAP_URL = 'https://app.proxy-cheap.com/r/rTEBUUXW';
+export const PROXY_CHEAP_NOTE = 'Krypt may earn a commission if you buy through it';
+
 /** Krypt's own Discord invite: creators join through it, then make their own invite. */
 export const KRYPT_DISCORD = 'https://discord.com/invite/muzFKR657F';
 const KRYPT_INVITE_CODE = 'muzFKR657F';

@@ -9,6 +9,7 @@ import { pct, resultOf } from '@shared/score';
 import { Card, Empty, GhostButton, Page, PrimaryButton, StatusChip } from '../components/ui';
 import { ReelThumb } from '../components/ReelThumb';
 import { DeleteReelsDialog } from '../components/DeleteReels';
+import { useShowMore } from '../components/ShowMore';
 import { useApp } from '../state/store';
 import { cls, fmtDate, fmtNum, shortUrl } from '../lib/format';
 
@@ -59,22 +60,22 @@ function Detail({ reel, onDelete }: { reel: Reel; onDelete: () => void }) {
   const result = resultOf(reel);
   const markPosted = async (): Promise<void> => {
     if (!/^https?:\/\//.test(url)) return toast('warn', 'Paste the Instagram URL of the live reel.');
-    const r = await window.marketo.db.updateReel(reel.id, { status: 'posted', postedUrl: url, postedAt: reel.postedAt ?? new Date().toISOString() });
+    const r = await window.marketo.db.markPosted(reel.id, 'instagram', url);
     if (r.ok) toast('ok', 'Marked as posted.');
   };
   const markX = async (): Promise<void> => {
     if (!/^https?:\/\/([a-z0-9-]+\.)?(x|twitter)\.com\//i.test(xUrl)) return toast('warn', 'Paste the link of the post on X.');
-    const r = await window.marketo.db.updateReel(reel.id, { status: 'posted', xUrl, xPostedAt: reel.xPostedAt ?? new Date().toISOString() });
+    const r = await window.marketo.db.markPosted(reel.id, 'x', xUrl);
     if (r.ok) toast('ok', 'X post saved.');
   };
   const markTt = async (): Promise<void> => {
     if (!/^https?:\/\/([a-z0-9-]+\.)?tiktok\.com\//i.test(ttUrl)) return toast('warn', 'Paste the link of the video on TikTok.');
-    const r = await window.marketo.db.updateReel(reel.id, { status: 'posted', tiktokUrl: ttUrl, tiktokPostedAt: reel.tiktokPostedAt ?? new Date().toISOString() });
+    const r = await window.marketo.db.markPosted(reel.id, 'tiktok', ttUrl);
     if (r.ok) toast('ok', 'TikTok link saved.');
   };
   const markShort = async (): Promise<void> => {
     if (!/^https?:\/\/([a-z0-9-]+\.)?(youtube\.com|youtu\.be)\//i.test(shorts)) return toast('warn', 'Paste the YouTube link of the live Short.');
-    const r = await window.marketo.db.updateReel(reel.id, { status: 'posted', shortsUrl: shorts, shortsPostedAt: reel.shortsPostedAt ?? new Date().toISOString() });
+    const r = await window.marketo.db.markPosted(reel.id, 'youtube', shorts);
     if (r.ok) toast('ok', 'Short saved.');
   };
   return (
@@ -226,6 +227,8 @@ export default function Library() {
   const select = useApp((s) => s.select);
   const [filter, setFilter] = useState<ReelStatus | 'all'>('all');
   const reels = db.reels.filter((r) => filter === 'all' || r.status === filter);
+  // Long lists 50 at a time (Setup > Performance): only the grid pages; Select all still takes every reel in `reels`.
+  const page = useShowMore(reels, filter);
   const current = db.reels.find((r) => r.id === selected) ?? reels[0];
   // Ticked reels (for deleting several at once) and the ones the dialog is asking about.
   const [picked, setPicked] = useState<string[]>([]);
@@ -282,7 +285,7 @@ export default function Library() {
       ) : (
         <div className="grid grid-cols-[1fr_400px] gap-6">
           <div className="grid grid-cols-3 content-start gap-4 xl:grid-cols-4 2xl:grid-cols-5">
-            {reels.map((r) => {
+            {page.shown.map((r) => {
               const ticked = picked.includes(r.id);
               return (
                 <div key={r.id} className="group relative" data-reel={r.id}>
@@ -308,6 +311,7 @@ export default function Library() {
                 </div>
               );
             })}
+            {page.more && <div className="col-span-full">{page.more}</div>}
             {reels.length === 0 && (
               <div className="col-span-full flex items-center gap-2 py-10 text-sm text-krypt-muted">
                 <X className="h-4 w-4" /> No {filter} reels.

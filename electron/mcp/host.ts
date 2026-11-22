@@ -9,6 +9,7 @@ import type { McpStatus, McpToolResult, UiFocus } from '../../shared/types';
 import { startMcp, type McpHandle, type ToolOutcome } from './index';
 import { MAIN_HANDLERS, TOOLS, checkRendererArgs } from './tools';
 import { connectClient, disconnectClient, genericConfig, installCommand, listClients } from './clients';
+import * as instance from '../instance';
 
 interface HostDeps {
   getMainWindow: () => BrowserWindow | null;
@@ -87,7 +88,8 @@ export async function startAgentHost(deps: HostDeps): Promise<McpHandle | null> 
   // dev-server mode there's nothing standalone to launch.
   const devServer = !!process.env.VITE_DEV_SERVER_URL;
   const appExePath = app.isPackaged ? exe : devServer ? null : exe;
-  const appArgs = app.isPackaged || devServer ? [] : [app.getAppPath()];
+  // Another profile's window (multi-instance mode) is started again as itself.
+  const appArgs = [...(app.isPackaged || devServer ? [] : [app.getAppPath()]), ...(instance.INSTANCE ? [`--profile=${instance.INSTANCE}`] : [])];
   const cmd = installCommand(exe, shim);
 
   const broadcast = (s: McpStatus): void => {

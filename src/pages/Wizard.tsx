@@ -1,10 +1,12 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { ArrowLeft, ArrowRight, AtSign, Boxes, Briefcase, Check, Chrome, CircleAlert, CircleCheck, Copy, ExternalLink, Facebook, ImageIcon, Instagram, MessageCircle, Monitor, Music2, Pin, Play, Scissors, X, Youtube } from 'lucide-react';
-import type { Brand, ClientInfo, ClipSettings, IgAccount, NetProfile, Network, Site } from '@shared/types';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { ArrowLeft, ArrowRight, AtSign, RefreshCw, Boxes, Briefcase, Check, Chrome, CircleAlert, CircleCheck, Copy, ExternalLink, Facebook, ImageIcon, Instagram, MessageCircle, Music2, Pin, Play, Scissors, X, Youtube } from 'lucide-react';
+import type { Brand, ClientInfo, ClipSettings, IgAccount, NetProfile, Network, ProfileScan, Site } from '@shared/types';
 import { DEFAULT_TARGETS, SITES, SITE_LABEL, YT_UPLOADS_PER_DAY, localDate, sameHandle, sitesOf } from '@shared/warmup';
-import { CREATOR_PITCH, EMPTY_BRAND, GUIDE_VIDEO_THUMB, GUIDE_VIDEO_URL, creatorProblem } from '@shared/brand';
+import { CLIPPING_GUIDE_THUMB, CLIPPING_GUIDE_URL, CREATOR_PITCH, EMPTY_BRAND, GUIDE_VIDEO_THUMB, GUIDE_VIDEO_URL, creatorProblem } from '@shared/brand';
+import { REWARDS_REFERRAL_NOTE, REWARDS_REFERRAL_URL } from '@shared/campaigns';
 import { brandFor, modeOf, savePromoting } from '../lib/promoteMode';
 import { ClipSourcesEditor, EMPTY_CLIPPING } from '../components/ClipSourcesEditor';
+import { YtChannelPicker } from '../components/YtChannelPicker';
 import { ELEVEN_AFFILIATE_NOTE, ELEVEN_SIGNUP_URL } from '@shared/voice';
 import { CreatorCard } from '../components/CreatorCard';
 import { ElevenCard } from '../components/ElevenCard';
@@ -16,6 +18,8 @@ import { useApp } from '../state/store';
 import { cls } from '../lib/format';
 import { FIELDS } from './Setup';
 import { ClientRow } from './Agents';
+import { GoalButtons, ProductField } from '../components/GoalPicker';
+import type { GoalId } from '@shared/goals';
 
 // First-run setup: what you promote, which platforms, where the accounts are
 // signed in, signing in, connecting an AI, and the daily rules. Every step
@@ -23,12 +27,15 @@ import { ClientRow } from './Agents';
 
 /** What the install is for: Krypt's tools, the user's own brand, or a clip channel (clipping style only). */
 type Mode = 'krypt' | 'own' | 'clips';
-type StepId = 'start' | 'brand' | 'platforms' | 'where' | 'signin' | 'ai' | 'voice' | 'rules';
+type StepId = 'start' | 'plan' | 'brand' | 'platforms' | 'where' | 'signin' | 'ai' | 'voice' | 'rules';
+/** The clip channel's extra step after Start: the short plan and the clipping guide video. */
+const PLAN_STEP: { id: StepId; label: string } = { id: 'plan', label: 'The plan' };
 const STEPS: Array<{ id: StepId; label: string }> = [
   { id: 'start', label: 'Start' },
   { id: 'brand', label: 'Brand' },
-  { id: 'platforms', label: 'Platforms' },
+  // Accounts (the Chrome profile) comes first, so Platforms can list that profile's YouTube channels.
   { id: 'where', label: 'Accounts' },
+  { id: 'platforms', label: 'Platforms' },
   { id: 'signin', label: 'Sign in' },
   { id: 'ai', label: 'Your AI' },
   { id: 'voice', label: 'Voice' },
@@ -72,6 +79,31 @@ function Choice({ on, onClick, icon, title, children }: { on: boolean; onClick: 
   );
 }
 
+/** A YouTube video as a card: thumbnail with a play button, opens in the browser. */
+function VideoCard({ url, thumb, title, children }: { url: string; thumb: string; title: string; children: ReactNode }) {
+  return (
+    <button
+      onClick={() => void window.marketo.app.openExternal(url)}
+      title="Opens on YouTube in your browser"
+      className="group mt-5 flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-krypt-purple/50 hover:bg-krypt-purple/10"
+    >
+      <span className="relative flex aspect-video w-44 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/40">
+        {/* No internet: the picture hides and the play button stays. */}
+        <img src={thumb} alt="" className="absolute inset-0 h-full w-full object-cover" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
+        <span className="relative flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white ring-1 ring-white/30 transition group-hover:bg-krypt-purple">
+          <Play className="h-4 w-4 translate-x-px fill-current" />
+        </span>
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-xs font-semibold uppercase tracking-[0.18em] text-krypt-muted">Video guide</span>
+        <span className="mt-1 block text-sm font-semibold text-white">{title}</span>
+        <span className="mt-0.5 block text-sm text-krypt-muted">{children}</span>
+      </span>
+      <ExternalLink className="mr-1 h-4 w-4 shrink-0 text-krypt-muted transition group-hover:text-white" />
+    </button>
+  );
+}
+
 function Status({ ok, children }: { ok: boolean; children: ReactNode }) {
   return (
     <div className={cls('flex items-center gap-1.5 text-xs', ok ? 'text-emerald-300' : 'text-amber-300')}>
@@ -99,7 +131,8 @@ export default function Wizard() {
   const [clipping, setClipping] = useState<ClipSettings>(existing?.clipping ?? EMPTY_CLIPPING);
   const [brand, setBrand] = useState<Brand>(db.brand.name ? db.brand : { ...EMPTY_BRAND });
   const [sites, setSites] = useState<Set<Site>>(() => new Set(existing ? sitesOf(existing) : []));
-  const [where, setWhere] = useState<'chrome' | 'hub'>(existing?.browser ?? 'chrome');
+  // Accounts always run in the user's Chrome (the built-in browser was removed).
+  const where = 'chrome' as 'chrome' | 'hub';
   const [name, setName] = useState(existing?.handle ?? '');
   /** The Chrome profile this account is kept to ('' = automatic: the one signed in as it). */
   const [chromeDir, setChromeDir] = useState(existing?.chromeDir ?? '');
@@ -110,6 +143,9 @@ export default function Wizard() {
   const [pinHandle, setPinHandle] = useState(existing?.pinterest?.handle ?? '');
   const [fresh, setFresh] = useState(existing ? existing.status === 'warming' : true);
   const [targets, setTargets] = useState<Partial<Record<Site, number>>>(existing?.targets ?? {});
+  /** What the account is for (every platform it runs; Home > a platform changes one). */
+  const [goal, setGoal] = useState<GoalId>(existing?.goals?.instagram ?? 'grow');
+  const [pushProduct, setPushProduct] = useState(existing?.pushProduct ?? '');
   const [accountId, setAccountId] = useState<string | null>(existing?.id ?? null);
   const [clients, setClients] = useState<ClientInfo[]>([]);
   const [auto, setAuto] = useState(false);
@@ -132,13 +168,57 @@ export default function Wizard() {
   const [busy, setBusy] = useState(false);
   const [allApps, setAllApps] = useState(false);
 
+  // ── What the picked Chrome profile is signed in to (read once it is connected; fills in the handles) ──
+  const [scan, setScan] = useState<ProfileScan | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanErr, setScanErr] = useState('');
+  const scannedFor = useRef<string | null>(null);
+  const runScan = async (dir: string): Promise<void> => {
+    setScanning(true);
+    setScanErr('');
+    const r = await window.marketo.chrome.scan(dir);
+    setScanning(false);
+    if (!r.ok || !r.data) {
+      setScan(null);
+      setScanErr(r.message ?? 'Could not read the Chrome profile.');
+      return;
+    }
+    const found = r.data.sites;
+    setScan(r.data);
+    const at = (s: Site): string => (found[s]?.handle ? `@${found[s]!.handle}` : '');
+    setName((v) => v.trim() || at('instagram') || at('x') || at('tiktok') || at('threads') || at('pinterest') || v);
+    setXHandle((v) => v.trim() || at('x'));
+    setTtHandle((v) => v.trim() || at('tiktok'));
+    setThHandle((v) => v.trim() || at('threads'));
+    setPinHandle((v) => v.trim() || at('pinterest'));
+  };
+  const scanReady = extensionCheck(chrome, chromeDir).ready && (!!chromeDir || (chrome?.profiles.length ?? 0) === 1);
+  useEffect(() => {
+    if (step !== 'where' || !scanReady || scannedFor.current === chromeDir) return;
+    scannedFor.current = chromeDir;
+    setScan(null);
+    void runScan(chromeDir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, chromeDir, scanReady]);
+
   const refreshClients = (): void => void window.marketo.mcp.clients().then(setClients);
   useEffect(refreshClients, []);
 
-  const at = STEPS.findIndex((s) => s.id === step);
-  const next = (): void => setStep(STEPS[Math.min(STEPS.length - 1, at + 1)].id);
-  const back = (): void => setStep(STEPS[Math.max(0, at - 1)].id);
+  const steps = mode === 'clips' ? [STEPS[0], PLAN_STEP, ...STEPS.slice(1)] : STEPS;
+  const at = Math.max(0, steps.findIndex((s) => s.id === step));
+  const next = (): void => setStep(steps[Math.min(steps.length - 1, at + 1)].id);
+  const back = (): void => setStep(steps[Math.max(0, at - 1)].id);
   const close = (): void => setWizard(false);
+  /** Leave the wizard without finishing it: what is saved stays, the rest is on the Setup and Accounts pages. */
+  const skipAll = async (): Promise<void> => {
+    setBusy(true);
+    const r = await window.marketo.brand.save({ setupDone: true });
+    setBusy(false);
+    if (!r.ok) return toast('error', r.message ?? 'Could not skip.');
+    toast('ok', 'Setup skipped. The Setup page and Accounts have everything when you want it.');
+    setWizard(false);
+    go('dashboard');
+  };
 
   /** Each mode's form, as typed here, so going back and forth between the cards loses nothing. */
   const [drafts, setDrafts] = useState<Partial<Record<Mode, Brand>>>({});
@@ -179,8 +259,10 @@ export default function Wizard() {
     const today = localDate();
     // An account people have used for a while skips the warm-up ramp: day 1 a month back puts every platform in its Active phase.
     const start = fresh ? today : localDate(new Date(Date.now() - 30 * 86_400_000));
+    // The account as saved now (the Accounts step saves it before Platforms, and a channel picked there is kept).
+    const cur = (accountId ? db.igAccounts.find((x) => x.id === accountId) : undefined) ?? existing;
     const net = (n: Network, h: string): NetProfile | undefined => {
-      const old = existing?.[n];
+      const old = cur?.[n];
       if (!sites.has(n)) return old ? { ...old, enabled: false } : undefined;
       // A Facebook Page goes by its name, not a handle.
       const handleNow = n === 'facebook' ? h.trim() || undefined : cleanHandle(h);
@@ -195,12 +277,15 @@ export default function Wizard() {
       instagram: sites.has('instagram'),
       status: fresh ? 'warming' : 'active',
       niche: existing?.niche || brand.niche,
-      youtube: sites.has('youtube') || existing?.youtube ? { ...(existing?.youtube ?? {}), enabled: sites.has('youtube') } : undefined,
+      // A channel turned on here warms up for a week when the accounts are new; one already on keeps its own start.
+      youtube: sites.has('youtube') || cur?.youtube ? { ...(cur?.youtube ?? {}), enabled: sites.has('youtube'), warmupStart: cur?.youtube?.enabled ? cur.youtube.warmupStart : fresh ? start : undefined } : undefined,
       x: net('x', xHandle),
       tiktok: net('tiktok', ttHandle),
       facebook: net('facebook', fbPage),
       threads: net('threads', thHandle),
       pinterest: net('pinterest', pinHandle),
+      goals: Object.fromEntries([...sites].map((s) => [s, mode === 'clips' ? 'grow' : goal])) as Partial<Record<Site, GoalId>>,
+      pushProduct: goal === 'product' ? pushProduct : '',
       // A clip channel runs the clipping style only, on the streamers picked at the brand step.
       ...(mode === 'clips' ? { styles: ['clipping'], clipping } : {}),
     });
@@ -240,7 +325,7 @@ export default function Wizard() {
     if (!accountId) return;
     const r = await window.marketo.browser.open(accountId, undefined, s);
     if (r.ok) return;
-    // The Chrome profile picked on the last step is not open: open it, so the next press lands there.
+    // The Chrome profile picked on the Accounts step is not open: open it, so the next press lands there.
     if (where === 'chrome' && chromeDir && /not open or not connected/.test(r.message ?? '')) {
       await window.marketo.chrome.open(chromeDir);
       toast('warn', 'The Chrome profile you picked was not open. Marketo is opening it now: press the button again in a few seconds.');
@@ -264,25 +349,9 @@ export default function Wizard() {
         <p className="mt-2 max-w-2xl text-sm text-krypt-muted">
           Marketo makes short videos and runs your social accounts with the AI you already use: posting, warming up new accounts, replying to comments and messages, and learning what works. Setup takes about five minutes, and you can skip anything and finish it later.
         </p>
-        <button
-          onClick={() => void window.marketo.app.openExternal(GUIDE_VIDEO_URL)}
-          title="Opens on YouTube in your browser"
-          className="group mt-5 flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-krypt-purple/50 hover:bg-krypt-purple/10"
-        >
-          <span className="relative flex aspect-video w-44 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/40">
-            {/* No internet: the picture hides and the play button stays. */}
-            <img src={GUIDE_VIDEO_THUMB} alt="" className="absolute inset-0 h-full w-full object-cover" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
-            <span className="relative flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white ring-1 ring-white/30 transition group-hover:bg-krypt-purple">
-              <Play className="h-4 w-4 translate-x-px fill-current" />
-            </span>
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-xs font-semibold uppercase tracking-[0.18em] text-krypt-muted">Video guide</span>
-            <span className="mt-1 block text-sm font-semibold text-white">New here? Watch the guide first</span>
-            <span className="mt-0.5 block text-sm text-krypt-muted">Krypt walks through what Marketo does and how to set it up. Opens on YouTube in your browser.</span>
-          </span>
-          <ExternalLink className="mr-1 h-4 w-4 shrink-0 text-krypt-muted transition group-hover:text-white" />
-        </button>
+        <VideoCard url={GUIDE_VIDEO_URL} thumb={GUIDE_VIDEO_THUMB} title="New here? Watch the guide first">
+          Krypt walks through what Marketo does and how to set it up. Opens on YouTube in your browser.
+        </VideoCard>
         <div className="mt-6 text-xs font-semibold uppercase tracking-[0.18em] text-krypt-muted">What are you promoting?</div>
         <div className="mt-3 grid gap-3 lg:grid-cols-3">
           <Choice on={mode === 'krypt'} onClick={() => pickMode('krypt')} icon={<Boxes className="h-4 w-4" />} title="Promote Krypt and get paid">
@@ -295,6 +364,50 @@ export default function Wizard() {
             A clip channel. Pick Twitch or Kick streamers, and every day their most-viewed clips become captioned videos that name the streamer.
           </Choice>
         </div>
+      </>
+    );
+  } else if (step === 'plan') {
+    const planSteps: Array<{ title: string; about: ReactNode }> = [
+      {
+        title: 'Sign up for Content Rewards through Marketo',
+        about: (
+          <>
+            Do this first, with the button below (it is also in Create → Campaigns), then connect your accounts in Content Rewards under Settings → Accounts.
+            <span className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <GhostButton small onClick={() => void window.marketo.app.openExternal(REWARDS_REFERRAL_URL)}>
+                <ExternalLink className="h-3.5 w-3.5" /> Sign up for Content Rewards
+              </GhostButton>
+              <span className="text-xs text-krypt-muted">Referral link: {REWARDS_REFERRAL_NOTE}.</span>
+            </span>
+          </>
+        ),
+      },
+      { title: 'Pick the streamers to clip', about: 'On the next page. Kick or Twitch, as many as you like; you can change them later on the Styles page.' },
+      { title: 'Add the Marketo Chrome extension and sign in', about: 'Your accounts run in your own Chrome. New accounts warm up for about a week before they post.' },
+      { title: 'Connect your AI', about: 'Claude Code or another AI you already use. Kip, Marketo’s AI manager, runs on it.' },
+      {
+        title: 'Join a campaign and let Kip clip',
+        about: 'Join a campaign on Content Rewards, then add it in Create → Campaigns. Kip makes clips to its rules, posts them and submits each link within the 30-minute window.',
+      },
+    ];
+    body = (
+      <>
+        <h1 className="text-2xl font-bold text-white">Your clipping plan</h1>
+        <p className="mt-1 text-sm text-krypt-muted">Five steps from here to clips that post and submit themselves. The guide shows every one of them.</p>
+        <VideoCard url={CLIPPING_GUIDE_URL} thumb={CLIPPING_GUIDE_THUMB} title="Watch the clipping guide">
+          Signing up, picking a streamer, joining a campaign, and Kip posting and submitting a clip. Opens on YouTube in your browser.
+        </VideoCard>
+        <ol className="mt-6 space-y-3">
+          {planSteps.map((s, i) => (
+            <li key={s.title} className="flex gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <span className={cls('flex h-7 w-7 shrink-0 items-center justify-center rounded-full font-mono text-xs font-semibold', i === 0 ? 'bg-krypt-purple text-white' : 'bg-white/10 text-krypt-muted')}>{i + 1}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-white">{s.title}</span>
+                <span className="mt-0.5 block text-sm text-krypt-muted">{s.about}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
       </>
     );
   } else if (step === 'brand') {
@@ -353,6 +466,17 @@ export default function Wizard() {
     );
   } else if (step === 'platforms') {
     canNext = sites.size > 0;
+    onNext = saveAccount;
+    const ytOn = sites.has('youtube');
+    const acct = accountId ? db.igAccounts.find((x) => x.id === accountId) : undefined;
+    const moreYt = acct?.chromeDir ? db.igAccounts.filter((x) => x.id !== acct.id && x.youtube?.enabled && x.chromeDir === acct.chromeDir).length : 0;
+    const handleFields: Array<{ s: Site; label: string; placeholder: string; value: string; set: (v: string) => void; mono?: boolean }> = [
+      { s: 'x', label: 'X handle (optional)', placeholder: 'Read from X when you sign in', value: xHandle, set: setXHandle, mono: true },
+      { s: 'tiktok', label: 'TikTok handle (optional)', placeholder: 'Read from TikTok when you sign in', value: ttHandle, set: setTtHandle, mono: true },
+      { s: 'facebook', label: 'Facebook Page name', placeholder: 'The Page your reels go up on', value: fbPage, set: setFbPage },
+      { s: 'threads', label: 'Threads handle (optional)', placeholder: 'Read from Threads when you sign in', value: thHandle, set: setThHandle, mono: true },
+      { s: 'pinterest', label: 'Pinterest username (optional)', placeholder: 'Read from Pinterest when you sign in', value: pinHandle, set: setPinHandle, mono: true },
+    ].filter((f) => sites.has(f.s as Site)) as Array<{ s: Site; label: string; placeholder: string; value: string; set: (v: string) => void; mono?: boolean }>;
     body = (
       <>
         <h1 className="text-2xl font-bold text-white">Where do you want to post?</h1>
@@ -376,10 +500,41 @@ export default function Wizard() {
                 title={SITE_LABEL[s]}
               >
                 {SITE_ABOUT[s]}
+                {scan?.sites[s]?.signedIn && (
+                  <span className="mt-1 block font-mono text-xs text-emerald-300">
+                    {s === 'youtube' ? `Signed in${scan.sites.youtube?.channels?.length ? ` · ${scan.sites.youtube.channels.length} channels` : ''}` : scan.sites[s]?.handle ? `Signed in as @${scan.sites[s]!.handle}` : 'Signed in'}
+                  </span>
+                )}
               </Choice>
             );
           })}
+          <div className={cls('rounded-2xl border p-4 transition', ytOn ? 'border-white/10 bg-white/[0.03]' : 'border-white/5 bg-white/[0.015]')}>
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 text-krypt-muted">
+                <Youtube className="h-4 w-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-white">More YouTube channels</span>
+                <span className="mt-0.5 block text-sm text-krypt-muted">
+                  {ytOn
+                    ? `One Google sign-in can own many channels. Pick them from your Chrome profile; each runs as its own account.${moreYt ? ` ${moreYt} added so far.` : ''}`
+                    : 'Turn on YouTube Shorts to run more than one channel from your Chrome profile.'}
+                </span>
+              </span>
+            </div>
+            {ytOn && accountId && <YtChannelPicker accountId={accountId} initial={scan?.sites.youtube?.channels} className="mt-3" />}
+          </div>
         </div>
+        {handleFields.length > 0 && (
+          <Card className="mt-4 grid gap-3 md:grid-cols-2">
+            {handleFields.map((f) => (
+              <div key={f.s}>
+                <label className="label">{f.label}</label>
+                <input className={cls('input', f.mono && 'font-mono')} placeholder={f.placeholder} value={f.value} onChange={(e) => f.set(e.target.value)} />
+              </div>
+            ))}
+          </Card>
+        )}
       </>
     );
   } else if (step === 'where') {
@@ -393,16 +548,9 @@ export default function Wizard() {
       <>
         <h1 className="text-2xl font-bold text-white">Your accounts</h1>
         <p className="mt-1 text-sm text-krypt-muted">
-          {existing ? `Updating ${existing.handle}. More accounts can be added on the Accounts page.` : 'Marketo never sees your passwords: you sign in yourself, in the next step.'}
+          {existing ? `Updating ${existing.handle}. More accounts can be added on the Accounts page.` : 'Marketo never sees your passwords: you sign in yourself, after picking your platforms.'}
         </p>
-        <div className="mt-5 grid gap-3 md:grid-cols-2">
-          <Choice on={where === 'chrome'} onClick={() => setWhere('chrome')} icon={<Chrome className="h-4 w-4" />} title="My Chrome (recommended)">
-            Your AI works in a tab of the Chrome you already use, so the platforms see the same device as always. Needs a small extension.
-          </Choice>
-          <Choice on={where === 'hub'} onClick={() => setWhere('hub')} icon={<Monitor className="h-4 w-4" />} title="Marketo's own browser">
-            A private window inside Marketo. Nothing to install. Best for brand-new accounts{sites.has('youtube') ? '; Google sometimes refuses sign-in in apps, so YouTube works best in Chrome' : ''}.
-          </Choice>
-        </div>
+        <p className="mt-4 text-sm text-white/80">Your AI works in a tab of your real Chrome, so the platforms see the same device as always. It needs a small extension, once.</p>
 
         {where === 'chrome' && (
           <Card className="mt-4 space-y-2 text-sm text-white/80">
@@ -431,48 +579,81 @@ export default function Wizard() {
           </Card>
         )}
 
+        {(scanning || scan || scanErr) && (
+          <Card className="mt-4">
+            <div className="flex items-center gap-2">
+              <div className="flex-1 text-sm font-semibold text-white">What this Chrome profile is signed in to</div>
+              {!scanning && (
+                <GhostButton small onClick={() => void runScan(chromeDir)}>
+                  <RefreshCw className="h-3.5 w-3.5" /> Check again
+                </GhostButton>
+              )}
+            </div>
+            {scanning ? (
+              <p className="mt-2 text-xs text-krypt-muted">Reading who you are signed in as on each platform. Chrome opens each one for a moment and closes it again.</p>
+            ) : scanErr ? (
+              <p className="mt-2 text-xs text-amber-300">{scanErr}</p>
+            ) : (
+              <>
+                <div className="mt-3 grid gap-x-4 gap-y-2 sm:grid-cols-2">
+                  {SITES.map((s) => {
+                    const r = scan!.sites[s];
+                    const Icon = SITE_ICON[s];
+                    const n = r?.channels?.length ?? 0;
+                    const what = !r?.signedIn ? 'Not signed in' : s === 'youtube' ? (n ? `${n} channel${n === 1 ? '' : 's'}` : 'Signed in') : r.handle ? `@${r.handle}` : 'Signed in';
+                    return (
+                      <div key={s} className="flex items-center gap-2 text-sm">
+                        <Icon className="h-4 w-4 shrink-0 text-krypt-muted" />
+                        <span className="w-28 shrink-0 text-white/80">{SITE_LABEL[s]}</span>
+                        <span className={cls('min-w-0 truncate', r?.signedIn ? 'font-mono text-emerald-300' : 'text-krypt-muted')}>{what}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="mt-3 text-[11px] text-krypt-muted">The handles below and on the next page are filled in from this. You pick the platforms next; YouTube channels are picked there too.</p>
+              </>
+            )}
+          </Card>
+        )}
+
         <Card className="mt-4 grid gap-3 md:grid-cols-2">
           <div className="md:col-span-2">
-            <label className="label">{sites.has('instagram') ? 'Instagram handle' : 'Account name'}</label>
-            <input className="input font-mono" placeholder={sites.has('instagram') ? '@yourhandle' : '@yourbrand'} value={name} onChange={(e) => setName(e.target.value)} />
-            {!sites.has('instagram') && <p className="mt-1 text-[11px] text-krypt-muted">Just a name for this account in Marketo.</p>}
+            <label className="label">Account name</label>
+            <input className="input font-mono" placeholder="@yourhandle" value={name} onChange={(e) => setName(e.target.value)} />
+            <p className="mt-1 text-[11px] text-krypt-muted">Your Instagram handle if this account will post on Instagram; otherwise any name for it in Marketo.</p>
           </div>
-          {sites.has('x') && (
-            <div>
-              <label className="label">X handle (optional)</label>
-              <input className="input font-mono" placeholder="Read from X when you sign in" value={xHandle} onChange={(e) => setXHandle(e.target.value)} />
-            </div>
-          )}
-          {sites.has('tiktok') && (
-            <div>
-              <label className="label">TikTok handle (optional)</label>
-              <input className="input font-mono" placeholder="Read from TikTok when you sign in" value={ttHandle} onChange={(e) => setTtHandle(e.target.value)} />
-            </div>
-          )}
-          {sites.has('facebook') && (
-            <div>
-              <label className="label">Facebook Page name</label>
-              <input className="input" placeholder="The Page your reels go up on" value={fbPage} onChange={(e) => setFbPage(e.target.value)} />
-            </div>
-          )}
-          {sites.has('threads') && (
-            <div>
-              <label className="label">Threads handle (optional)</label>
-              <input className="input font-mono" placeholder="Read from Threads when you sign in" value={thHandle} onChange={(e) => setThHandle(e.target.value)} />
-            </div>
-          )}
-          {sites.has('pinterest') && (
-            <div>
-              <label className="label">Pinterest username (optional)</label>
-              <input className="input font-mono" placeholder="Read from Pinterest when you sign in" value={pinHandle} onChange={(e) => setPinHandle(e.target.value)} />
-            </div>
-          )}
           <div className="md:col-span-2">
-            <Toggle on={fresh} onChange={setFresh} label="These accounts are new (made in the last month)" />
-            <p className="mt-1 text-[11px] text-krypt-muted">
-              {fresh ? 'New accounts start with a slow warm-up: mostly watching, few likes and follows, posting after a few days. Platforms flag new accounts that go fast.' : 'Accounts you have used for a while skip the warm-up and start at the normal daily limits.'}
-            </p>
+            <label className="label">Warm-up</label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {([
+                [true, 'Warm up for 1 week', 'For new accounts: the first days only watch and read, then a few likes, follows and comments. First post: Instagram day 7; YouTube, X, TikTok and Facebook day 5; Threads day 3; Pinterest Pins from day 2 with links from day 4. Normal limits from day 8 (X from day 15).'],
+                [false, 'Already warmed up', 'For accounts you have used for a while: normal daily limits from today. Still raise activity step by step; sudden jumps get flagged.'],
+              ] as const).map(([v, title, about]) => (
+                <button
+                  key={title}
+                  onClick={() => setFresh(v)}
+                  className={cls('rounded-xl border p-3 text-left transition', fresh === v ? 'border-krypt-purple/60 bg-krypt-purple/10' : 'border-white/10 bg-white/[0.02] hover:border-white/20')}
+                >
+                  <div className="text-sm font-semibold text-white">{title}</div>
+                  <p className="mt-1 text-xs leading-relaxed text-krypt-muted">{about}</p>
+                </button>
+              ))}
+            </div>
+            {fresh && <p className="mt-1 text-[11px] text-krypt-muted">On a brand-new account the link in bio waits until about day 30; an early link can get it restricted.</p>}
           </div>
+          {mode !== 'clips' && (
+            <div className="space-y-2 md:col-span-2">
+              <label className="label">Goal</label>
+              <GoalButtons value={goal} onChange={setGoal} />
+              {goal === 'product' && (
+                <div className="space-y-1">
+                  <label className="label">What to push</label>
+                  <ProductField value={pushProduct} onChange={setPushProduct} />
+                </div>
+              )}
+              <p className="text-[11px] text-krypt-muted">Applies to every platform here; Home &gt; a platform changes it for one. Every platform has its researched playbook.</p>
+            </div>
+          )}
         </Card>
       </>
     );
@@ -484,7 +665,7 @@ export default function Wizard() {
         <p className="mt-1 text-sm text-krypt-muted">
           {where === 'chrome'
             ? chromeDir
-              ? 'Each button opens the platform in the Chrome profile you picked on the last step, and the marks below are read from that profile. Sign in there as you normally would (skip any you are already signed in to). '
+              ? 'Each button opens the platform in the Chrome profile you picked on the Accounts step, and the marks below are read from that profile. Sign in there as you normally would (skip any you are already signed in to). '
               : 'Sign in to each one in your Chrome as you normally would (skip any you are already signed in to). '
             : 'Each button opens the platform in Marketo\'s browser. '}
           You type your own passwords and solve any security checks; Marketo and your AI never see them.
@@ -622,7 +803,7 @@ export default function Wizard() {
         <Card className="mt-4 space-y-1">
           <Toggle on={auto} onChange={(v) => (claudeReady ? setAuto(v) : toast('warn', 'Autopilot needs Claude Code installed and connected (the "Your AI" step).'))} label="Or let it run by itself: autopilot, 3 times a day with Claude Code" />
           <p className="text-[11px] text-krypt-muted">
-            {claudeReady ? 'Your computer starts Claude Code at about 9:00, 15:00 and 21:00 to do the daily work. Keep the computer on. Change or stop it on the Autopilot page.' : 'Needs Claude Code installed and connected to Marketo. You can turn it on later on the Autopilot page.'}
+            {claudeReady ? 'Your computer starts Claude Code at about 9:00, 15:00 and 21:00 to do the daily work. Keep the computer on. Change or stop it on the Autopilot page. Later, Create > Campaigns can get your posts paid per view (Content Rewards).' :'Needs Claude Code installed and connected to Marketo. You can turn it on later on the Autopilot page.'}
           </p>
         </Card>
       </>
@@ -641,12 +822,12 @@ export default function Wizard() {
       <div className="flex items-center gap-4 border-b border-white/5 px-8 py-4">
         <img src="./krypt.png" alt="" className="h-8 w-8 rounded-md" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
-          {STEPS.map((s, i) => (
+          {steps.map((s, i) => (
             <div key={s.id} className="flex items-center gap-1.5">
               <span className={cls('flex h-6 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium', i === at ? 'bg-krypt-purple/25 text-white' : i < at ? 'text-emerald-300' : 'text-krypt-muted')}>
                 {i < at ? <Check className="h-3 w-3" /> : <span className="font-mono">{i + 1}</span>} {s.label}
               </span>
-              {i < STEPS.length - 1 && <span className="h-px w-4 bg-white/10" />}
+              {i < steps.length - 1 && <span className="h-px w-4 bg-white/10" />}
             </div>
           ))}
         </div>
@@ -673,6 +854,11 @@ export default function Wizard() {
             </div>
           ) : (
             <div className="flex-1" />
+          )}
+          {!db.brand.setupDone && (
+            <GhostButton onClick={() => void skipAll()} disabled={busy}>
+              Skip setup
+            </GhostButton>
           )}
           {skippable && (
             <GhostButton onClick={next} disabled={busy}>

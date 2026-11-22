@@ -6,7 +6,7 @@
 // The key is encrypted with the OS keychain (safeStorage) and never leaves
 // this process except as the Authorization header to the chosen provider.
 
-import { app, safeStorage } from 'electron';
+import { app } from 'electron';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,6 +17,8 @@ import type { McpHandle, ToolOutcome } from './mcp/index';
 import { TOOLS, serverInstructions } from './mcp/tools';
 import * as store from './store';
 import * as usage from './usage';
+import * as instance from './instance';
+import { SecretFile } from './secret';
 
 const MAX_ROUNDS = 60;
 const KEEP_FULL_RESULTS = 6;
@@ -46,35 +48,22 @@ let messages: Msg[] = [];
 let steps: ChatStep[] = [];
 let busy = false;
 let abort: AbortController | null = null;
-let memoryKey = '';
 
 export function init(d: Deps): void {
   deps = d;
 }
 
 // ── Key ────────────────────────────────────────────────────────────────────
-const keyFile = (): string => path.join(app.getPath('userData'), 'agent-key.bin');
+const keyFile = (): string => path.join(instance.ROOT, 'agent-key.bin');
 
-function readKey(): string {
-  if (memoryKey) return memoryKey;
-  try {
-    if (!safeStorage.isEncryptionAvailable()) return '';
-    return safeStorage.decryptString(fs.readFileSync(keyFile()));
-  } catch {
-    return '';
-  }
-}
+const key = new SecretFile(keyFile);
+const readKey = (): string => key.get();
+/** Read the saved key (at start, after secret.init). */
+export const loadKey = (): Promise<string> => key.load();
 
-function writeKey(key: string): void {
-  const k = key.trim();
-  memoryKey = k;
-  try {
-    if (!k) fs.rmSync(keyFile(), { force: true });
-    else if (safeStorage.isEncryptionAvailable()) fs.writeFileSync(keyFile(), safeStorage.encryptString(k));
-    // No OS encryption available: the key stays in memory for this run only, never on disk in the clear.
-  } catch (e) {
-    deps.log('warn', `agent: could not store the key: ${(e as Error).message}`);
-  }
+function writeKey(k: string): void {
+  // No OS encryption available: the key stays in memory for this run only, never on disk in the clear.
+  key.set(k.trim()).catch((e) => deps.log('warn', `agent: could not store the key: ${(e as Error).message}`));
 }
 
 const config = (): AgentConfig => store.get().agent;

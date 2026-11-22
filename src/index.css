@@ -379,3 +379,21 @@
   outline: 2px solid rgba(168, 85, 247, 0.7);
   outline-offset: 3px;
 }
+
+/* Flat visuals (Setup > Performance): no glass blur anywhere and no moving or textured backdrop. The lightest look
+   for weak graphics cards and for many profile windows at once; layout and colours stay the same. */
+html.perf-flat *,
+html.perf-flat *::before,
+html.perf-flat *::after {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+html.perf-flat .glass-aurora,
+html.perf-flat .glass-grid,
+html.perf-flat .glass-grain {
+  display: none;
+}
+html.perf-flat .animate-pulse,
+html.perf-flat .animate-ping {
+  animation: none;
+}

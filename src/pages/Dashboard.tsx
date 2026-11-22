@@ -9,6 +9,7 @@ import { GlassButton } from '../components/glass/GlassButton';
 import { GLASS_RINGS, GLASS_TINTS } from '../components/glass/glassPresets';
 import { ReelThumb } from '../components/ReelThumb';
 import { PlatformTile } from '../components/Platforms';
+import { PlatformPanel } from '../components/PlatformPanel';
 import { accountSites, openSite, SITE_COLOR, SITE_ICON } from '../lib/platforms';
 import { refreshAutopilot, useApp } from '../state/store';
 import { cls, fmtDate, fmtNum, timeAgo } from '../lib/format';
@@ -344,6 +345,8 @@ export default function Dashboard() {
   const account = db.igAccounts.find((a) => sameHandle(a.handle, handle)) ?? db.igAccounts[0];
   const st = account ? browser.find((b) => b.accountId === account.id) : undefined;
   const sites = account ? accountSites(account, st, db) : [];
+  const [panel, setPanel] = useState<Site | null>(null);
+  const panelSite = panel ? sites.find((x) => x.site === panel) : undefined;
   const posted = db.reels.filter((r) => r.status === 'posted');
   const postsDone = sites.reduce((n, s) => n + s.posts.done, 0);
   const postsTarget = sites.reduce((n, s) => n + s.posts.target, 0);
@@ -370,6 +373,7 @@ export default function Dashboard() {
 
   return (
     <div className="h-full overflow-auto px-8 pb-10 pt-7">
+      {panelSite && account && <PlatformPanel a={account} s={panelSite} onClose={() => setPanel(null)} />}
       {/* Hero */}
       <GlassPanel preset="hero" tint={GLASS_TINTS.hero} className="relative mb-6 overflow-hidden rounded-3xl p-7">
         <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full bg-krypt-pink/25 blur-3xl" />
@@ -428,11 +432,11 @@ export default function Dashboard() {
 
       {/* Platforms + live feed */}
       <div className="mb-8 grid gap-6 xl:grid-cols-[1fr_360px]">
-        <Section title="Today on every platform" description="Posts against today's target, and warm-up actions against the phase's limits. Click a platform to open it." className="mb-0">
+        <Section title="Today on every platform" description="Posts against today's target, and warm-up actions against the phase's limits. Click a platform for its breakdown, your AI instructions for it, and (YouTube) more channels." className="mb-0">
           {sites.length ? (
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-4">
               {sites.map((s) => (
-                <PlatformTile key={s.site} s={s} accountId={account!.id} />
+                <PlatformTile key={s.site} s={s} accountId={account!.id} onSelect={() => setPanel(s.site)} />
               ))}
             </div>
           ) : (

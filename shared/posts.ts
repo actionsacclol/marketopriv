@@ -100,6 +100,21 @@ export function similarPosts(text: string, posts: PostLog[], limit = 5): PostLog
 
 const LABEL: Record<Site, string> = { instagram: 'Instagram', youtube: 'YouTube', x: 'X', tiktok: 'TikTok', facebook: 'Facebook', threads: 'Threads', pinterest: 'Pinterest' };
 
+/** Recent posts grouped by story (one reel on six platforms is one line), short, for get_today. list_posts has them in full. */
+export function postGroups(posts: PostLog[], max: number): string[] {
+  const groups = new Map<string, PostLog[]>();
+  for (const p of posts) {
+    const key = p.reelId ?? `${p.title}|${p.topic ?? ''}`;
+    groups.set(key, [...(groups.get(key) ?? []), p]);
+  }
+  const cut = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
+  return [...groups.values()].slice(0, max).map((g) => {
+    const p = g[0];
+    const sites = [...new Set(g.map((x) => LABEL[x.site]))].join(', ');
+    return [p.postedAt ? dayOf(p.postedAt) : 'date unknown', `"${cut(p.title, 90)}"`, p.topic ? `story: ${cut(p.topic, 110)}` : '', p.kind && p.kind !== 'video' ? p.kind : '', `on ${sites}`].filter(Boolean).join(' · ');
+  });
+}
+
 /** One line per post for the AI. */
 export function postLine(p: PostLog): string {
   const stats = [p.views !== undefined ? `${p.views} views` : '', p.likes !== undefined ? `${p.likes} likes` : '', p.comments !== undefined ? `${p.comments} comments` : ''].filter(Boolean).join(', ');

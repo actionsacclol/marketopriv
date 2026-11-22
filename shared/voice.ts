@@ -159,7 +159,8 @@ export function clipKey(t: VoiceTune, speed: number, say: string): string {
 
 /** The voice cache field: generated clips by key, and the mixed track for the current timing. */
 export interface VoiceCache {
-  clips: Record<string, { file: string; dur: number }>;
+  /** words = when each spoken word starts in the clip (ElevenLabs lines, from its timings). */
+  clips: Record<string, { file: string; dur: number; words?: number[] }>;
   track?: string;
   sig?: string;
 }

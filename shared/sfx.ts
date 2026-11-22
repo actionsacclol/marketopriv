@@ -6,8 +6,12 @@ import type { StoryBeat } from './presets';
 // clicks). The times here mirror the animation timings in
 // src/render/presets/story.ts; change both together.
 import { isAction } from './character';
+// The beat-flag sounds (FX_SOUNDS in presets.ts; kept here too so the two files don't import each other).
+// Stickman poses that are not mascot actions (their big word pops like a mascot's label).
+const STICK_WORD_POSES = ['idle', 'thumbsup', 'angry', 'walk', 'run', 'sit', 'type', 'phone', 'sleep', 'fall'];
+const isFxSound = (k: string): boolean => ['boom', 'horn', 'scratch', 'ding', 'buzzer', 'boing', 'honk', 'sad', 'bass', 'whoosh', 'pop', 'impact', 'riser'].includes(k);
 
-export type SfxKind = 'tick' | 'pop' | 'click' | 'whoosh' | 'riser' | 'impact' | 'whirr';
+export type SfxKind = 'tick' | 'pop' | 'click' | 'whoosh' | 'riser' | 'impact' | 'whirr' | 'boom' | 'horn' | 'scratch' | 'ding' | 'buzzer' | 'boing' | 'honk' | 'sad' | 'bass';
 
 export interface SfxEvent {
   /** Reel time, seconds. */
@@ -142,7 +146,9 @@ export function storySfx(beats: StoryBeat[]): SfxEvent[] {
     if (b.wipe) at(0, 'whoosh', { gain: 1 });
     // Kinetic cuts zoom through, so every cut gets a soft whoosh.
     else if (b.kinetic && i > 0) at(0, 'whoosh', { dur: 0.3, gain: 0.4 });
-    switch (b.visual) {
+    // Stickman versus beats name two poses ("think/type"): the first one's cue plays.
+    const vis = b.visual.split('/')[0].trim();
+    switch (vis) {
       case 'title':
         at(0.06, 'impact', { gain: i === 0 ? 0.9 : 0.6 });
         break;
@@ -250,6 +256,19 @@ export function storySfx(beats: StoryBeat[]): SfxEvent[] {
       case 'screen':
         at(0.02, 'whoosh', { dur: 0.25, gain: 0.45 });
         break;
+      // Narrated reels: the post card pops up; each greentext line ticks onto the board.
+      case 'post':
+        at(0.08, 'pop', { gain: 0.8 });
+        break;
+      case 'green':
+        at(0.04, 'tick', { gain: 0.7 });
+        break;
+      // Meme panels cut hard, each with a pop.
+      case 'image':
+      case 'char':
+      case 'text':
+        if (i > 0) at(0, 'pop', { gain: 0.55 });
+        break;
       case 'stamp':
         at(STAMP_AT - 0.12, 'whoosh', { dur: 0.15, gain: 0.5 });
         at(STAMP_AT + 0.14, 'impact', { gain: 1 });
@@ -283,12 +302,29 @@ export function storySfx(beats: StoryBeat[]): SfxEvent[] {
       case 'sad':
       case 'shrug':
       case 'laugh':
+      case 'thumbsup':
         at(0.15, 'pop', { gain: 0.45 });
+        break;
+      // Stickman poses (shared/stickman.ts): the times match the move in src/render/presets/stickman.ts.
+      case 'fall':
+        at(0.05, 'whoosh', { dur: 0.25, gain: 0.5 });
+        at(0.3, 'impact', { gain: 0.8 });
+        break;
+      case 'run':
+        at(0.05, 'whoosh', { dur: 0.3, gain: 0.45 });
+        break;
+      case 'angry':
+        at(0.1, 'impact', { gain: 0.4 });
+        break;
+      case 'type':
+        for (let k = 0; k < 4; k++) at(0.2 + k * 0.17, 'tick', { gain: 0.35 });
         break;
       default:
         break;
     }
-    if (isAction(b.visual) && b.a) at(LABEL_AT, 'pop', { gain: 0.7 });
+    if ((isAction(vis) || STICK_WORD_POSES.includes(vis)) && b.a) at(LABEL_AT, 'pop', { gain: 0.7 });
+    // Meme sounds from the beat's flags (boom, horn, scratch...).
+    for (const f of b.fx) if (isFxSound(f.kind)) at(f.at, f.kind as SfxKind, { gain: 1 });
   });
   return ev;
 }

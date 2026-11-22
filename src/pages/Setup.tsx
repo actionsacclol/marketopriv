@@ -4,6 +4,7 @@ import type { Brand, PromoteMode } from '@shared/types';
 import { brandFor, clipsOnly, modeOf, savePromoting } from '../lib/promoteMode';
 import { ClipSources } from '../components/ClipSourcesEditor';
 import { UsageTierCard } from '../components/AiUsage';
+import { PerformanceCard } from '../components/PerformanceCard';
 
 const MODE_TITLE: Record<PromoteMode, string> = { krypt: 'Krypt tools, and get paid', own: 'My own business or product', clips: 'Clip streamers' };
 import { KRYPT_TOOLS } from '@shared/kryptPack';
@@ -15,8 +16,8 @@ import { VoiceInstall, useVoiceStatus } from '../components/VoiceInstall';
 import { DEFAULT_TUNE, describeTune } from '@shared/voice';
 import { creatorProblem } from '@shared/brand';
 import { CreatorCard } from '../components/CreatorCard';
-import { ProfilesSection } from '../components/Profiles';
 import { ChromeProfilesSection } from '../components/ChromeProfiles';
+import { ExportLogsSection } from '../components/ExportLogs';
 import { KRYPT_FOLLOW_LIST } from '@shared/kryptFollow';
 
 // What the reels are for. Everything here is turned into the instructions
@@ -206,6 +207,10 @@ export default function Setup() {
             </Card>
           </Section>
 
+          <Section title="Performance" description="For a slower PC, or for running many accounts on one PC. Normal is how Marketo has always run; every number is yours to set.">
+            <PerformanceCard />
+          </Section>
+
           <Section title="Krypt tools" description={`All ${KRYPT_TOOLS.length} krypt.cc tools are built in: what each does in full, reel angles and what never to claim. Your AI always has them.`}>
             <p className="mb-3 text-[11px] text-krypt-muted">Each of your accounts follows Krypt once on the platforms it runs ({KRYPT_FOLLOW_LIST}). Unfollow whenever you like; it is not done again.</p>
             <Card className="flex items-center gap-3">
@@ -233,7 +238,7 @@ export default function Setup() {
                 </GhostButton>
               }
             >
-              {hasAccount ? (signedIn ? 'Signed in.' : 'Added. Sign it in: the Accounts page shows where.') : "Pick its platforms (Instagram, TikTok, YouTube Shorts, X, Facebook, Threads, Pinterest). In Marketo's own browser, or in your own Chrome. Your passwords stay with the platforms."}
+              {hasAccount ? (signedIn ? 'Signed in.' : 'Added. Sign it in: the Accounts page shows where.') : "Pick its platforms (Instagram, TikTok, YouTube Shorts, X, Facebook, Threads, Pinterest). In your own Chrome. Your passwords stay with the platforms."}
             </Step>
             <Step
               n={3}
@@ -253,7 +258,7 @@ export default function Setup() {
           </Card>
         </Section>
         <ChromeProfilesSection />
-        <ProfilesSection />
+        <ExportLogsSection />
         </div>
       </div>
     </Page>

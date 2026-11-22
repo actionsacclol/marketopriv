@@ -44,8 +44,22 @@ function userDataDir() {
   if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', name);
   return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), name);
 }
-const CONFIG = flag('--config') || process.env.KRYPT_MARKETO_MCP_CONFIG || path.join(userDataDir(), 'mcp.json');
-const MANIFEST = path.join(path.dirname(CONFIG), 'mcp-manifest.json');
+/** The base app's connection file; its folder holds the profile list and the profiles. */
+const BASE_CONFIG = flag('--config') || process.env.KRYPT_MARKETO_MCP_CONFIG || path.join(userDataDir(), 'mcp.json');
+const ROOT = path.dirname(BASE_CONFIG);
+const PROFILE_ID = /^(main|p_[a-z0-9]+)$/;
+/**
+ * Multi-instance mode (each profile in its own window): the profile this bridge works in. --profile picks it (the
+ * autopilot gives each profile's run its own); use_profile moves it. Left out: the base app (Main).
+ */
+let profile = PROFILE_ID.test(flag('--profile') || '') ? flag('--profile') : null;
+const configFor = (id) => (id && id !== 'main' ? path.join(ROOT, 'profiles', id, 'app', 'mcp.json') : BASE_CONFIG);
+let CONFIG = configFor(profile);
+/** The tool list the app saved at its last start (a profile's window that never ran yet answers from the base app's). */
+const manifestFile = () => {
+  const own = path.join(path.dirname(CONFIG), 'mcp-manifest.json');
+  return fs.existsSync(own) ? own : path.join(ROOT, 'mcp-manifest.json');
+};
 
 if (argv.includes('--print-config-path')) {
   process.stdout.write(`${CONFIG}\n`);
@@ -169,12 +183,21 @@ function send(msg) {
   conn.write(`${JSON.stringify(msg)}\n`);
 }
 
-function launchApp(cfg) {
+function launchApp(given) {
+  // A profile's window that never ran has no connection file yet: start the base app's program as that profile.
+  let cfg = given;
+  if (!cfg && profile && profile !== 'main') {
+    const base = readJson(BASE_CONFIG);
+    if (base) cfg = { ...base, appArgs: [...(base.appArgs || []).filter((a) => !String(a).startsWith('--profile=')), `--profile=${profile}`] };
+  }
   if (NO_LAUNCH || !cfg || !cfg.appExePath || !fs.existsSync(cfg.appExePath)) return false;
   try {
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE; // the app must start as an app, not as Node
-    const child = spawn(cfg.appExePath, [...(cfg.appArgs || []), `--launched-by-agent=${CLIENT}`], { detached: true, stdio: 'ignore', env, windowsHide: false });
+    // A profile set to run in the background starts without a window.
+    const entry = profile && profile !== 'main' ? (profileList() || []).find((p) => p.id === profile) : null;
+    const bg = entry && entry.background === true ? ['--background'] : [];
+    const child = spawn(cfg.appExePath, [...(cfg.appArgs || []), `--launched-by-agent=${CLIENT}`, ...bg], { detached: true, stdio: 'ignore', env, windowsHide: false });
     child.unref();
     return true;
   } catch (e) {
@@ -225,7 +248,7 @@ async function ensureConnected(launch) {
 const LIST_METHODS = new Set(['tools/list', 'prompts/list', 'resources/list', 'resources/templates/list']);
 
 function offlineAnswer(msg) {
-  const man = readJson(MANIFEST);
+  const man = readJson(manifestFile());
   if (!man) return null;
   if (msg.method === 'initialize') {
     const init = man.legacy && man.legacy.initialize;
@@ -249,10 +272,44 @@ function offlineAnswer(msg) {
 
 const notRunning = 'Krypt Marketo isn\'t running. Open Krypt Marketo, then retry.';
 
+// ── Multi-instance mode: moving this conversation to another profile's window ──
+function profileList() {
+  const j = readJson(path.join(ROOT, 'profiles.json'));
+  if (!j || j.multiInstance !== true) return null;
+  const list = Array.isArray(j.list) ? j.list.filter((p) => p && PROFILE_ID.test(String(p.id)) && typeof p.name === 'string') : [];
+  if (!list.some((p) => p.id === 'main')) list.unshift({ id: 'main', name: 'Main' });
+  return list;
+}
+
+/** use_profile in multi-instance mode: this bridge reconnects to that profile's window (started if it is closed). */
+async function moveTo(msg) {
+  const list = profileList();
+  const asked = String((msg.params && msg.params.arguments && msg.params.arguments.id) || '').trim().toLowerCase();
+  const answer = (text, isError) => out({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) } });
+  const p = list.find((x) => x.id === asked) || list.find((x) => x.name.toLowerCase() === asked);
+  if (!p) return answer(`No profile "${asked}". Profiles: ${list.map((x) => `"${x.name}" (${x.id})`).join(', ')}.`, true);
+  if ((profile || 'main') === p.id && conn) return answer(`This conversation works in the profile "${p.name}" (${p.id}) already. Nothing changed.`);
+  const from = profile || 'main';
+  profile = p.id;
+  CONFIG = configFor(p.id);
+  if (conn) {
+    const old = conn;
+    conn = null;
+    old.end();
+  }
+  if (!(await ensureConnected(true))) {
+    profile = from;
+    CONFIG = configFor(from);
+    return answer(`Could not open the profile "${p.name}" in its own window. The user opens it on the Multi run page, then you try again.`, true);
+  }
+  return answer(`This conversation now works in the profile "${p.name}" (${p.id}), in its own Krypt Marketo window. Other conversations and windows are not affected. Everything you read before belongs to the profile you left: call get_overview and get_today again before doing anything.`);
+}
+
 async function onClientMessage(msg) {
   if (!msg || typeof msg !== 'object') return;
   if (msg.method === 'initialize' && msg.id !== undefined) savedInit = msg;
   const isRequest = msg.id !== undefined && typeof msg.method === 'string';
+  if (isRequest && msg.method === 'tools/call' && msg.params && msg.params.name === 'use_profile' && profileList()) return moveTo(msg);
 
   if (conn) return send(msg);
 

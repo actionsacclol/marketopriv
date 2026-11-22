@@ -6,6 +6,7 @@ import { Card, Empty, GhostButton, Page, PrimaryButton, Section, Toggle } from '
 import { GlassSegmented } from '../components/glass/GlassSegmented';
 import { AccountStatusChip, SignInLine } from './Accounts';
 import { SITE_COLOR, SITE_ICON, SITE_SHORT, TONE_DOT, TONE_TEXT, accountSites, openSite } from '../lib/platforms';
+import { humanCheckUntil } from '@shared/humanCheck';
 import { useApp } from '../state/store';
 import { cls, fmtDate } from '../lib/format';
 
@@ -165,6 +166,8 @@ function AccountWarmup({ a }: { a: IgAccount }) {
   const start = ig ? a.warmupStart : (a[site as Exclude<Site, 'instagram' | 'youtube'>]?.warmupStart ?? localDate());
   const sessions = db.sessions.filter((s) => (s.site ?? 'instagram') === site && sameHandle(s.handle, a.handle));
   const watch = watchOnlyOn(a, site);
+  // Read-only after the platform asked for proof of a human (shared/humanCheck.ts); the user can lift it.
+  const hold = yt ? null : humanCheckUntil(a, site);
   const Icon = SITE_ICON[site];
 
   return (
@@ -224,6 +227,17 @@ function AccountWarmup({ a }: { a: IgAccount }) {
         {!yt && watch && (
           <div className="flex items-center gap-2 rounded-xl border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-sm text-sky-100">
             <AlertTriangle className="h-4 w-4 shrink-0" /> Watch only on {L}: the browser refuses likes, follows, comments and posts there. Change it on the Accounts page.
+          </div>
+        )}
+        {!yt && hold && (
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span className="min-w-0 flex-1">
+              Read-only on {L} until {new Date(hold).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })}: {L} asked this account to prove it is human, so the browser only scrolls and reads there. Clear it if that was you signing in.
+            </span>
+            <GhostButton small onClick={() => patch({ humanCheck: Object.fromEntries(Object.entries(a.humanCheck ?? {}).filter(([k]) => k !== site)) })}>
+              Clear
+            </GhostButton>
           </div>
         )}
       </Card>

@@ -4,3 +4,4 @@ dist-electron
 release
 *.log
 chrome-extension-key.pem
+privacy-extension-key.pem

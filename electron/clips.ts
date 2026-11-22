@@ -1,10 +1,11 @@
 import { BrowserWindow, session as electronSession, type Session } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ClipListing, ClipMoment, ClipRange, ClipSite, ClipSource } from '../shared/types';
-import { clipKey, clipsPageUrl, hmsSeconds, listingFromCard, parseClipUrl, sameMoment, spanOf, speechGrams, speechOverlap, type MomentSpan } from '../shared/clipping';
+import type { ClipListing, ClipMoment, ClipOrigin, ClipRange, ClipSite, ClipSource } from '../shared/types';
+import { YT_MAX_SECONDS, clipKey, clipsPageUrl, hmsSeconds, listingFromCard, parseClipUrl, parseYouTube, replayedParts, sameMoment, spanOf, speechGrams, speechOverlap, youTubeClipUrl, type HeatMarker, type MomentSpan, type ReplayedPart } from '../shared/clipping';
 import * as store from './store';
 import * as profiles from './profiles';
+import * as perf from './perf';
 
 // The clipping style's eyes and hands: Twitch and Kick clips pages read the way a person's browser reads them, in a
 // hidden, muted window of the hub's own (never the user's Chrome, never signed in). Kick sits behind Cloudflare, and
@@ -39,9 +40,10 @@ async function withPage<T>(url: string, fn: (w: BrowserWindow) => Promise<T>): P
   w.webContents.setAudioMuted(true);
   w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   try {
-    await w.loadURL(url).catch(() => {
-      // Ads and trackers failing to load make loadURL reject although the page itself loaded; the checks below decide.
-    });
+    // Ads and trackers failing to load make loadURL reject although the page itself loaded; the checks below decide.
+    // A page that never finishes loading (a video that keeps streaming, a slow PC) must not hold the call for
+    // minutes: after 20 s the checks below look at whatever has loaded.
+    await Promise.race([w.loadURL(url).catch(() => {}), sleep(20_000)]);
     return await fn(w);
   } finally {
     chatStart.delete(w.webContents.id);
@@ -188,14 +190,16 @@ async function momentOn(w: BrowserWindow, site: ClipSite, channel: string, ms: n
   return null;
 }
 
-/** Fill in each listing's moment: kept ones at once, the rest by opening their pages, three at a time. */
+/** Fill in each listing's moment: kept ones at once, the rest by opening their pages, three at a time (one with lightClips). */
 async function withMoments(list: ClipListing[]): Promise<ClipListing[]> {
   // Read once (a clip whose page shows no moment, a Twitch clip without a saved VOD, is not opened again), and at
-  // most ~45 s per streamer: the rest are read on the next look.
+  // most ~30 s per streamer: the rest are read on the next look (an AI app gives up on a call that takes minutes).
   const queue = list.filter((c) => !knownClip(c.url));
-  const until = Date.now() + 45_000;
+  const until = Date.now() + 30_000;
+  // Light clips (Setup > Performance): one hidden window, the same queue one page after another.
+  const windows = perf.values().lightClips ? [0] : [0, 1, 2];
   await Promise.all(
-    [0, 1, 2].map(async () => {
+    windows.map(async () => {
       for (let c = queue.shift(); c && Date.now() < until; c = queue.shift()) {
         const one = c;
         const moment = await withPage(one.url, (w) => momentOn(w, one.site, one.channel, 12_000)).catch(() => null);
@@ -232,9 +236,9 @@ export async function findClips(source: ClipSource, range: ClipRange, limit = 12
 
 export interface FetchedClip {
   bytes: Uint8Array;
-  /** mp4 = ready to use; ts = MPEG-TS that the renderer remuxes into an MP4. */
-  kind: 'mp4' | 'ts';
-  site: ClipSite;
+  /** mp4 = ready to use; ts = MPEG-TS that the renderer remuxes into an MP4; rec = a recording (fragmented MP4) it remuxes too. */
+  kind: 'mp4' | 'ts' | 'rec';
+  site: ClipOrigin;
   channel: string;
   url: string;
   title: string;
@@ -333,10 +337,11 @@ async function hls(s: Session, playlistUrl: string): Promise<{ bytes: Uint8Array
   return { bytes: out, kind: init ? 'mp4' : 'ts' };
 }
 
-/** Download one clip: open its page like a viewer and take the video the page plays. */
-export async function fetchClip(url: string): Promise<FetchedClip> {
+/** Download one clip: open its page like a viewer and take the video the page plays (YouTube: record the part). */
+export async function fetchClip(url: string, span: { start?: number; seconds?: number } = {}): Promise<FetchedClip> {
+  if (parseYouTube(url)) return recordYouTube(url, span);
   const c = parseClipUrl(url);
-  if (!c) throw new Error(`"${url}" is not a Twitch or Kick clip address (kick.com/<channel>/clips/clip_..., twitch.tv/<channel>/clip/...).`);
+  if (!c || c.site === 'youtube') throw new Error(`"${url}" is not a Twitch or Kick clip address (kick.com/<channel>/clips/clip_..., twitch.tv/<channel>/clip/...).`);
   return withPage(c.url, async (w) => {
     // The video the page plays: a direct file (Twitch), or the HLS playlist the player loaded (Kick).
     const SRC = `(() => {
@@ -367,11 +372,277 @@ export async function fetchClip(url: string): Promise<FetchedClip> {
     const page = await run<{ title: string; channel: string }>(w, TITLE);
     const title = page.title;
     const channel = (c.channel || page.channel).toLowerCase();
-    const moment = knownClip(c.url)?.moment ?? (await momentOn(w, c.site, channel, 6_000));
+    const site = c.site as ClipSite;
+    const moment = knownClip(c.url)?.moment ?? (await momentOn(w, site, channel, 6_000));
     if (moment) remember(c.url, { moment });
     const s = w.webContents.session;
     const got = /\.m3u8(\?|$)/.test(src) ? await hls(s, src) : { bytes: await getBytes(s, src), kind: 'mp4' as const };
     return { ...got, site: c.site, channel, url: c.url, title, moment };
+  });
+}
+
+// ── YouTube ─────────────────────────────────────────────────────────────────
+// A part of any YouTube video. The parts worth clipping come off the video's own "most replayed" graph (the data its
+// watch page carries for the progress bar). The part itself is recorded off the page as it plays, in a hidden and
+// muted window: the video element's own stream (its picture and sound, no player buttons), so it takes as long as
+// the part. No downloader: only what the page plays a viewer.
+
+export interface YouTubeVideo {
+  id: string;
+  url: string;
+  title: string;
+  channel: string;
+  seconds: number;
+  views: number | null;
+  short: boolean;
+  live: boolean;
+  /** Why it can't be played here (age check, private, members only), or ''. */
+  blocked: string;
+  heat: HeatMarker[];
+  chapters: Array<{ start: number; title: string }>;
+  parts: ReplayedPart[];
+}
+
+/** The watch page's own data: title, channel, length, the replay graph and chapters. */
+const YT_INFO = `(() => {
+  const p = window.ytInitialPlayerResponse;
+  const d = window.ytInitialData;
+  if (!p || !p.videoDetails) return null;
+  const v = p.videoDetails;
+  const ps = p.playabilityStatus || {};
+  const heat = [];
+  const chapters = [];
+  const walk = (o, depth) => {
+    if (!o || typeof o !== 'object' || depth > 45) return;
+    if (o.markersList && o.markersList.markerType === 'MARKER_TYPE_HEATMAP' && Array.isArray(o.markersList.markers) && !heat.length)
+      for (const m of o.markersList.markers) heat.push({ start: Number(m.startMillis) / 1000, dur: Number(m.durationMillis) / 1000, v: Number(m.intensityScoreNormalized) });
+    if (Array.isArray(o.heatMarkers) && !heat.length)
+      for (const h of o.heatMarkers) { const m = h.heatMarkerRenderer || {}; heat.push({ start: Number(m.timeRangeStartMillis) / 1000, dur: Number(m.markerDurationMillis) / 1000, v: Number(m.heatMarkerIntensityScoreNormalized) }); }
+    if (o.chapterRenderer) {
+      const c = o.chapterRenderer;
+      const t = (c.title && (c.title.simpleText || (c.title.runs || []).map((r) => r.text).join(''))) || '';
+      const at = Number(c.timeRangeStartMillis) / 1000;
+      if (t && Number.isFinite(at) && !chapters.some((x) => x.start === at)) chapters.push({ start: at, title: t });
+    }
+    for (const k in o) walk(o[k], depth + 1);
+  };
+  walk(d, 0);
+  walk(p, 0);
+  const views = Number(v.viewCount);
+  return {
+    id: v.videoId || '',
+    title: v.title || '',
+    channel: v.author || '',
+    seconds: Number(v.lengthSeconds) || 0,
+    views: Number.isFinite(views) ? views : null,
+    live: !!v.isLiveContent && !!v.isLive,
+    status: ps.status || 'OK',
+    reason: ps.reason || (ps.errorScreen && ps.errorScreen.playerErrorMessageRenderer && ps.errorScreen.playerErrorMessageRenderer.reason && ps.errorScreen.playerErrorMessageRenderer.reason.simpleText) || '',
+    heat,
+    chapters: chapters.sort((a, b) => a.start - b.start),
+  };
+})()`;
+
+/** Off a consent page (outside the US): "Reject all", the choice that shares the least. */
+const YT_CONSENT = `(() => {
+  if (!/consent\\./.test(location.hostname)) return false;
+  const b = [...document.querySelectorAll('button, [role=button], input[type=submit]')].find((x) => /reject all|alle ablehnen|tout refuser|rechazar todo|rifiuta tutto/i.test((x.innerText || x.value || x.getAttribute('aria-label') || '').trim()));
+  if (b) b.click();
+  return true;
+})()`;
+
+const ytUrl = (id: string, start?: number): string => `https://www.youtube.com/watch?v=${id}${start ? `&t=${Math.floor(start)}s` : ''}`;
+
+async function ytInfo(w: BrowserWindow, id: string): Promise<YouTubeVideo> {
+  type Info = Omit<YouTubeVideo, 'url' | 'short' | 'blocked' | 'parts'> & { status: string; reason: string };
+  let info = null as Info | null;
+  // The first visit to YouTube in a fresh session reloads the page once (a theme / sign-in check): read until it settles.
+  const end = Date.now() + 30_000;
+  while (Date.now() < end) {
+    if (await run<boolean>(w, YT_CONSENT).catch(() => false)) {
+      await sleep(2500);
+      continue;
+    }
+    const got = await run<Info | null>(w, YT_INFO).catch(() => null);
+    if (got && got.id === id) {
+      info = got;
+      // The replay graph can arrive a moment after the page's first data.
+      if (got.heat.length || Date.now() > end - 22_000) break;
+    }
+    await sleep(700);
+  }
+  if (!info) {
+    const text = `${await run<string>(w, 'document.title').catch(() => '')} ${await run<string>(w, `(document.body && document.body.innerText || '').slice(0, 400)`).catch(() => '')}`;
+    if (BLOCKED.test(text) || /unusual traffic/i.test(text)) throw new Error('YouTube showed a human check instead of the video. Try again later.');
+    throw new Error('The YouTube page did not load the video. Check the address, or try again.');
+  }
+  const blocked =
+    info.status === 'OK'
+      ? ''
+      : info.status === 'LOGIN_REQUIRED'
+        ? `YouTube asks to sign in for this video (${info.reason || 'age-restricted or private'}): it can't be clipped here.`
+        : `YouTube won't play this video here (${info.reason || info.status}).`;
+  const short = info.seconds <= 180 && !info.heat.length;
+  return {
+    ...info,
+    url: ytUrl(id),
+    short,
+    blocked,
+    parts: replayedParts(info.heat, info.seconds),
+  };
+}
+
+/** A YouTube video's details and its most replayed parts (find_clips with a video). */
+export async function findYouTubeParts(url: string): Promise<YouTubeVideo> {
+  const yt = parseYouTube(url);
+  if (!yt) throw new Error(`"${url}" is not a YouTube video address.`);
+  const v = await withPage(ytUrl(yt.id), (w) => ytInfo(w, yt.id));
+  return { ...v, short: v.short || yt.short };
+}
+
+/** True while YouTube plays an ad in the player (the video element plays the ad then). */
+const YT_AD = `(() => { const p = document.getElementById('movie_player'); return !!(p && (p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting'))); })()`;
+/** The ad's Skip button, where it sits (a real click: a script click is ignored). */
+const YT_SKIP = `(() => { const b = document.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern'); if (!b) return null; const r = b.getBoundingClientRect(); return r.width ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; })()`;
+
+async function realClick(w: BrowserWindow, x: number, y: number): Promise<void> {
+  const at = { x: Math.round(x), y: Math.round(y) };
+  w.webContents.sendInputEvent({ type: 'mouseMove', ...at });
+  await sleep(rand(60, 140));
+  w.webContents.sendInputEvent({ type: 'mouseDown', ...at, button: 'left', clickCount: 1 });
+  await sleep(rand(50, 110));
+  w.webContents.sendInputEvent({ type: 'mouseUp', ...at, button: 'left', clickCount: 1 });
+}
+const rand = (a: number, b: number): number => a + Math.random() * (b - a);
+
+/** Sit out the ads before the video (skipping when YouTube offers it), up to two minutes. */
+async function pastAds(w: BrowserWindow): Promise<void> {
+  const end = Date.now() + 120_000;
+  while (Date.now() < end) {
+    if (!(await run<boolean>(w, YT_AD).catch(() => false))) return;
+    const skip = await run<{ x: number; y: number } | null>(w, YT_SKIP).catch(() => null);
+    if (skip) await realClick(w, skip.x, skip.y);
+    await sleep(800);
+  }
+  throw new Error('YouTube kept playing ads for two minutes. Try again later.');
+}
+
+/**
+ * The recorder, run in the page: seek to the part, wait for it to buffer, then record the video element's own stream
+ * until the video reaches the part's end. Recording pauses while the video waits for data or an ad plays, so neither
+ * ends up in the clip. State in window.__krec, the file in window.__kbuf.
+ */
+const YT_RECORD = (start: number, seconds: number, light = false): string => `(async () => {
+  const st = (window.__krec = { state: 'starting', err: '', t0: 0, t1: 0, w: 0, h: 0, mime: '', size: 0 });
+  try {
+    const p = document.getElementById('movie_player');
+    const v = document.querySelector('#movie_player video') || document.querySelector('video');
+    if (!p || !v) throw new Error('The player is not on the page.');
+    try { p.setPlaybackQualityRange && p.setPlaybackQualityRange('${light ? 'hd720' : 'hd1080'}', '${light ? 'hd720' : 'hd1080'}'); } catch {}
+    try { p.unMute && p.unMute(); p.setVolume && p.setVolume(100); } catch {}
+    v.muted = false;
+    v.volume = 1;
+    const now = () => (p.getCurrentTime ? p.getCurrentTime() : v.currentTime);
+    const ad = () => p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting');
+    try { p.pauseVideo ? p.pauseVideo() : v.pause(); } catch {}
+    if (p.seekTo) p.seekTo(${start}, true); else v.currentTime = ${start};
+    // Let the start of the part buffer first (up to 10 s), so the recording does not open on a frozen picture.
+    for (let i = 0; i < 100; i++) {
+      const b = v.buffered;
+      let ahead = 0;
+      for (let k = 0; k < b.length; k++) if (b.start(k) <= v.currentTime + 0.2 && b.end(k) > v.currentTime) ahead = b.end(k) - v.currentTime;
+      if (ahead >= Math.min(${seconds}, 12) && v.readyState >= 3) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const types = ['video/mp4;codecs=avc1.640028,opus', 'video/mp4;codecs=avc1.4d0028,opus', 'video/mp4;codecs=avc1,opus', 'video/mp4'];
+    const mime = types.find((t) => MediaRecorder.isTypeSupported(t));
+    if (!mime) throw new Error('This computer cannot record MP4 video.');
+    const stream = v.captureStream();
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: ${light ? '5e6' : '8e6'}, audioBitsPerSecond: 160e3 });
+    const parts = [];
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) parts.push(e.data); };
+    const stopped = new Promise((r) => (rec.onstop = r));
+    await (p.playVideo ? (p.playVideo(), Promise.resolve()) : v.play());
+    for (let i = 0; i < 50 && v.paused; i++) await new Promise((r) => setTimeout(r, 100));
+    st.t0 = now();
+    st.mime = mime;
+    rec.start(1000);
+    st.state = 'recording';
+    const until = ${start} + ${seconds};
+    const hardEnd = Date.now() + (${seconds} * 3 + 120) * 1000;
+    while (Date.now() < hardEnd) {
+      await new Promise((r) => setTimeout(r, 50));
+      const holding = ad() || v.readyState < 3 || v.seeking || v.paused;
+      if (holding && rec.state === 'recording') rec.pause();
+      else if (!holding && rec.state === 'paused') rec.resume();
+      if (v.paused && !ad() && !v.ended) { try { p.playVideo ? p.playVideo() : v.play(); } catch {} }
+      if (!ad() && (now() >= until || v.ended)) break;
+    }
+    st.t1 = now();
+    st.w = v.videoWidth;
+    st.h = v.videoHeight;
+    rec.stop();
+    await stopped;
+    try { p.pauseVideo ? p.pauseVideo() : v.pause(); } catch {}
+    const blob = new Blob(parts, { type: mime });
+    window.__kbuf = new Uint8Array(await blob.arrayBuffer());
+    st.size = window.__kbuf.length;
+    st.state = 'done';
+  } catch (e) {
+    st.err = String((e && e.message) || e);
+    st.state = 'error';
+  }
+})(), true`;
+
+const YT_SLICE = (from: number, len: number): string => `(() => {
+  const b = window.__kbuf.subarray(${from}, ${from + len});
+  let s = '';
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+  return btoa(s);
+})()`;
+
+/** Record a part of a YouTube video off its page (start / seconds into the video; default: a whole Short, else 30 s). */
+export async function recordYouTube(url: string, span: { start?: number; seconds?: number } = {}): Promise<FetchedClip> {
+  const yt = parseYouTube(url);
+  if (!yt) throw new Error(`"${url}" is not a YouTube video address.`);
+  const askedStart = Math.max(0, span.start ?? yt.start ?? 0);
+  return withPage(ytUrl(yt.id, askedStart), async (w) => {
+    const info = await ytInfo(w, yt.id);
+    if (info.blocked) throw new Error(info.blocked);
+    if (info.live) throw new Error('That video is live right now. Clip it once the stream is over (its replay is a normal video then).');
+    const length = info.seconds || askedStart + (span.seconds ?? 30);
+    if (askedStart >= length - 1) throw new Error(`The video is only ${Math.floor(length)} s long: start inside it.`);
+    const want = span.seconds ?? (yt.short || info.short ? length - askedStart : 30);
+    const seconds = Math.max(3, Math.min(YT_MAX_SECONDS, want, length - askedStart));
+    await pastAds(w);
+    const ok = await until(w, `!!document.querySelector('#movie_player video') && document.querySelector('#movie_player video').readyState >= 1`, 20_000);
+    if (!ok) throw new Error('The YouTube player did not start. Try again.');
+    // Light clips: the part at 720p, ~5 Mbps.
+    await run(w, YT_RECORD(askedStart, seconds, perf.values().lightClips));
+    type Rec = { state: string; err: string; t0: number; t1: number; w: number; h: number; mime: string; size: number };
+    let st: Rec | null = null;
+    const end = Date.now() + (seconds * 3 + 150) * 1000;
+    while (Date.now() < end) {
+      await sleep(1000);
+      st = await run<Rec>(w, 'window.__krec').catch(() => st);
+      if (!st || st.state === 'done' || st.state === 'error') break;
+      // A mid-roll ad: the recorder holds; skip it when YouTube lets us.
+      const skip = await run<{ x: number; y: number } | null>(w, YT_SKIP).catch(() => null);
+      if (skip) await realClick(w, skip.x, skip.y);
+    }
+    if (!st || st.state === 'error') throw new Error(`Recording the video failed${st?.err ? `: ${st.err}` : ''}.`);
+    if (st.state !== 'done') throw new Error('Recording the video took far too long (the page stalled). Try again.');
+    if (st.size > MAX_BYTES) throw new Error('That part is too large to use.');
+    if (st.size < 10_000) throw new Error('The recording came out empty. Try again.');
+    const chunks: Buffer[] = [];
+    const STEP = 4 * 1024 * 1024;
+    for (let at = 0; at < st.size; at += STEP) chunks.push(Buffer.from(await run<string>(w, YT_SLICE(at, STEP)), 'base64'));
+    await run(w, 'window.__kbuf = null').catch(() => {});
+    const start = Math.round(st.t0 * 10) / 10;
+    const clipUrl = youTubeClipUrl(yt.id, start);
+    const moment: ClipMoment = { stream: `youtube:${yt.id}`, start: Math.round(start) };
+    remember(clipUrl, { moment, seconds: Math.round(st.t1 - st.t0) });
+    return { bytes: new Uint8Array(Buffer.concat(chunks)), kind: 'rec' as const, site: 'youtube' as const, channel: info.channel, url: clipUrl, title: info.title, moment };
   });
 }
 

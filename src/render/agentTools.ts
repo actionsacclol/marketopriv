@@ -1,6 +1,6 @@
 import type { McpToolCall, McpToolResult } from '@shared/types';
 import { recordScreen } from './recorder';
-import { elVoiceNote, hasSound, storyBeats, timingFor } from '@shared/presets';
+import { elVoiceNote, hasSound, isVoiced, storyBeats, timingFor } from '@shared/presets';
 
 const SILENT_NOTE = ' WARNING: this reel has no sound at all (no voice, no music). Silent videos do badly on TikTok, Shorts and Reels: make it a story reel (voiced, with sound effects and music) unless the user asked for a silent one.';
 import { reelById, renderReel, useApp } from '../state/store';
@@ -8,8 +8,10 @@ import { renderStills } from './export';
 import { ensureVoiceover, takeVoiceNotes } from './voice';
 import { addReferenceVideo } from './refAnalyze';
 import { profileLine } from '@shared/refStyle';
-import { CLIP_SITE_LABEL } from '@shared/clipping';
+import { CLIP_ORIGIN_LABEL } from '@shared/clipping';
 import { saveClip } from './clipSave';
+import { renderThumbnail } from './thumbnail';
+import { renderKipClip, type KipArt } from './kip';
 
 // The renderer half of the MCP tools: anything that needs a canvas or the
 // encoder. Called by main through window.marketo.mcp.serve.
@@ -23,16 +25,16 @@ export async function runAgentTool(call: McpToolCall, progress: (fraction: numbe
   }
 
   if (call.tool === 'save_clip') {
-    const a = (call.args ?? {}) as { url: string };
-    const r = await saveClip(String(a.url ?? ''), progress);
+    const a = (call.args ?? {}) as { url: string; start?: number; seconds?: number };
+    const r = await saveClip(String(a.url ?? ''), progress, { start: a.start, seconds: a.seconds });
     const f = r.frames.map((x) => `${x.t}s`).join(', ');
     const words = r.captions.split('\n').filter(Boolean).length;
     return {
       ok: true,
       text: [
         ...(r.repeats.length ? [`SAME MOMENT: ${r.repeats.join('; ')}. Do not make a second reel of it: find_clips and save_clip another moment, unless the user asked for this one.`] : []),
-        `Saved "${r.title || 'clip'}" by ${r.channel} on ${CLIP_SITE_LABEL[r.site]} (${r.seconds.toFixed(1)}s, ${r.size.w}x${r.size.h}) → ${r.path}`,
-        `Source: ${r.url}`,
+        `Saved "${r.title || 'clip'}" by ${r.channel} on ${CLIP_ORIGIN_LABEL[r.site]} (${r.seconds.toFixed(1)}s, ${r.size.w}x${r.size.h}) → ${r.path}`,
+        r.site === 'youtube' ? `Source: ${r.url} (the file starts at that point of the video)` : `Source: ${r.url}`,
         r.captions
           ? `Captions (${r.language || 'speech'}, ${words} lines, "start | text", seconds from the clip's start; a line with only a time clears the caption during a pause, keep those; when the reel starts later, take the lines in its span and subtract its start):\n${r.captions}`
           : 'Captions: no speech found in it. Write a few short captions about what happens, or pick another clip.',
@@ -53,6 +55,40 @@ export async function runAgentTool(call: McpToolCall, progress: (fraction: numbe
     };
   }
 
+  if (call.tool === 'render_thumbnail') {
+    const id = String((call.args as { id?: string })?.id ?? '');
+    const v = (useApp.getState().db?.longVideos ?? []).find((x) => x.id === id);
+    if (!v) return { ok: false, text: `No long video "${id}". list_long_videos shows them.` };
+    if (call.client !== 'Kip') useApp.getState().go('long');
+    progress(0.2, 'Drawing the thumbnail');
+    const png = await renderThumbnail(v);
+    const r = await window.marketo.render.saveLongThumb(v.id, png);
+    if (!r.ok || !r.data) return { ok: false, text: r.message ?? 'Saving the thumbnail failed.' };
+    return { ok: true, text: `Saved the thumbnail of "${v.title}" (1280x720) → ${r.data}. Look at it: the words must read at phone size; change thumbnail_text / thumbnail_bg / thumbnail_side with save_long_video and render again if not.`, images: [{ data: png, mimeType: 'image/png' }] };
+  }
+
+  if (call.tool === 'render_kip') {
+    const a = (call.args ?? {}) as { id?: string; sections?: number[]; art?: KipArt; redo?: boolean };
+    const v = (useApp.getState().db?.longVideos ?? []).find((x) => x.id === a.id);
+    if (!v) return { ok: false, text: `No long video "${a.id}". list_long_videos shows them.` };
+    const want = (a.sections?.length ? a.sections.map((n) => n - 1) : v.sections.map((_, i) => i)).filter((i) => v.sections[i]);
+    const todo = want.filter((i) => v.sections[i].audio && (a.redo || a.sections?.length || !v.sections[i].kipVideo));
+    if (!todo.length) return { ok: true, text: want.some((i) => !v.sections[i].audio) ? 'Those sections have no narration yet: narrate_long_video first.' : 'Every section already has its Kip clip (redo: true renders them again).' };
+    if (call.client !== 'Kip') useApp.getState().go('long');
+    const accent = '#a855f7';
+    const color = '#8B5CF6';
+    const lines: string[] = [];
+    for (let k = 0; k < todo.length; k++) {
+      const i = todo[k];
+      const s = v.sections[i];
+      const r = await renderKipClip({ section: s, index: i, count: v.sections.length, art: a.art ?? '3d', color, accent, audioUrl: window.marketo.app.mediaUrl(s.audio!), onProgress: (u) => progress((k + u) / todo.length, `Kip, section ${i + 1} (${s.heading})`) });
+      const saved = await window.marketo.render.saveLongFile(v.id, `Kip ${String(i + 1).padStart(2, '0')} ${s.heading}.mp4`, r.data, i);
+      if (!saved.ok || !saved.data) return { ok: false, text: saved.message ?? 'Saving the Kip clip failed.' };
+      lines.push(`${i + 1}. ${s.heading}: ${r.seconds}s, moves ${s.kip || 'automatic'} → ${saved.data}`);
+    }
+    return { ok: true, text: `Rendered Kip for ${todo.length} section${todo.length === 1 ? '' : 's'} (720x1280, green screen #00d800):\n${lines.join('\n')}\nIn the edit: a new video track added last (it draws in front), each clip at its section's start, chroma_key on, scale about 0.55, pos_y 0.22, pos_x -0.4 (bottom-left) beside a key-points panel or 0.4 (bottom-right) otherwise. Text and shapes draw over video, so no full-screen shape may cover him: check with preview_frames.` };
+  }
+
   const args = (call.args ?? {}) as { id?: string; times?: number[]; scale?: number; shape?: 'vertical' | 'square'; t?: number };
   let reel = reelById(args.id ?? null);
   if (!reel) return { ok: false, text: `No reel "${args.id}".` };
@@ -62,7 +98,7 @@ export async function runAgentTool(call: McpToolCall, progress: (fraction: numbe
   if (call.tool === 'preview_reel') {
     const stills = await renderStills(reel, args.times, args.scale ?? 0.35, args.shape);
     const f = reel.fields;
-    const el = reel.preset === 'story' && f.voiceover === true ? elVoiceNote(storyBeats(f), String(f.voice ?? '')) : '';
+    const el = isVoiced(reel.preset) && f.voiceover === true ? elVoiceNote(storyBeats(f), String(f.voice ?? '')) : '';
     return {
       ok: true,
       text: `${reel.title} (${reel.preset}, ${timing.total.toFixed(1)}s; body ${timing.body.toFixed(1)}s + end card ${timing.cta}s).${el ? ` ${el}${el.startsWith('No narration') ? ' Timing is estimated from the text and can shift a little at render.' : ''}` : ''} Frames at ${stills.map((s) => `${s.t}s`).join(', ')}:${hasSound(reel.preset, reel.fields) ? '' : SILENT_NOTE}`,

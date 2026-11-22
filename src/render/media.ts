@@ -11,6 +11,8 @@ export const MUSIC_UNDER_VOICE = 0.28;
 
 export interface FrameSource {
   size: { w: number; h: number };
+  /** Length of the video in seconds (0 = unknown). */
+  duration: number;
   /** The frame showing at media time `t` (seconds). */
   frameAt(t: number): Promise<CanvasImageSource | null>;
   dispose(): void;
@@ -52,6 +54,7 @@ export async function seekingSource(path: string): Promise<FrameSource> {
   await waitMeta(v);
   return {
     size: { w: v.videoWidth, h: v.videoHeight },
+    duration: Number.isFinite(v.duration) ? v.duration : 0,
     async frameAt(t) {
       await seek(v, t);
       return v;
@@ -71,13 +74,23 @@ export async function sequentialSource(path: string, start: number): Promise<Fra
   if (!(await track.canDecode())) throw new Error('This video codec can\'t be decoded here. Re-encode it as H.264 MP4.');
   const scale = Math.min(1, 1920 / Math.max(track.displayWidth, track.displayHeight));
   const sink = new CanvasSink(track, { width: Math.round(track.displayWidth * scale), height: Math.round(track.displayHeight * scale), fit: 'fill', poolSize: 4 });
-  const gen = sink.canvases(start);
+  const duration = await input.computeDuration().catch(() => 0);
+  let gen = sink.canvases(start);
   let cur: WrappedCanvas | null = null;
   let next: WrappedCanvas | null = (await gen.next()).value ?? null;
   let ended = false;
   return {
     size: { w: Math.round(track.displayWidth * scale), h: Math.round(track.displayHeight * scale) },
+    duration,
     async frameAt(t) {
+      // Asked for an earlier time (a looping background starting over): decode again from there.
+      if (cur && t < cur.timestamp - 0.05) {
+        void gen.return(undefined);
+        gen = sink.canvases(Math.max(0, t));
+        cur = null;
+        ended = false;
+        next = (await gen.next()).value ?? null;
+      }
       while (next && next.timestamp <= t + 1e-3) {
         cur = next;
         if (ended) {
