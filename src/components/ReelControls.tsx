@@ -245,10 +245,10 @@ export function MixCard({ accounts }: { accounts: IgAccount[] }) {
     <Card padded={false}>
       <div className="px-4 pt-3">
         <div className="text-sm font-semibold text-white">Style mix</div>
-        <p className="mt-0.5 text-xs text-krypt-muted">How many of an account's reels each of its styles gets. Marketo tells every run which style is due, from the last ten reels.</p>
+        <p className="mt-0.5 text-xs text-krypt-muted">How many of an account's reels each style that is on gets. Marketo tells every run which style is due, from the latest reels.</p>
       </div>
       {many.length === 0 ? (
-        <p className="px-4 pb-3 pt-2 text-sm text-krypt-muted">Every account runs one style. Open a style below and switch it on for an account to set a mix.</p>
+        <p className="px-4 pb-3 pt-2 text-sm text-krypt-muted">Every account runs one style. Switch more on below to set a mix.</p>
       ) : (
         <div className="divide-y divide-white/5">
           {many.map((a) => (

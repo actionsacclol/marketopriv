@@ -227,4 +227,37 @@ export const STYLE_PAGES: Record<string, StylePage> = {
     hooks: ['"Same game. Same PC."', '"Why does your PC get slower every year?"', '"Why your mouse feels like it\'s on ice."', '"Overthinker vs Doer: the 3 AM fix."'],
     structure: ['Versus: two named figures in the same situation', 'Each beat: what each one does', 'The payoff: the smart one lights up, the real screen for 2-3 s', '"Which one are you?"', 'Explainer: the question, the cause in scenes, the fix on a real screen, the result'],
   },
+  blox: {
+    length: '7-12s dances, 12-25s skits, 25-45s rants',
+    benefits: [
+      'Blocky-avatar animation is a look a huge young audience already watches all day, so the video feels at home in their feed.',
+      'One recognisable avatar turns a run of videos into a channel people follow for the character.',
+      'Three lengths from one style: a narrated rant, a wordless two-avatar skit, a looping dance under one line.',
+      'Nothing to film or animate: the hub builds the avatar, the world, the moves and the camera, and moves the mouth with the voice.',
+    ],
+    hooks: ['"Your PC is not slow. It is busy."', '"My PC with 40 tabs open"', '"me after fixing one bug"', '"Day 1 me vs day 30 me"'],
+    structure: ['Rant: the complaint, the reasons one scene a line, the big moment, the fix, the result', 'Skit: two named avatars, bubbles, a fall as the punchline', 'Dance: one line, three moves, a new camera each beat, loops'],
+  },
+  slides: {
+    length: '5-8 slides (10 at most)',
+    benefits: [
+      'People swipe at their own pace, so a list or a how-to gets read to the end and saved for later.',
+      'One slideshow becomes a photo post on Instagram, TikTok, Threads, Facebook and X, and a short video with music for Pinterest.',
+      'Nothing to film or narrate: the hub draws the slides from your text, screenshots and screen recordings.',
+      'Each platform gets the picture shape that fills its feed (4:5 on Instagram, full screen on TikTok).',
+    ],
+    hooks: ['"4 Windows settings to turn off today"', '"Stop apps from starting with Windows"', '"5 things your PC does behind your back"', '"3 mistakes every new streamer makes"'],
+    structure: ['The cover: a number or a promise, big', 'One idea a slide: a short title and two lines at most', 'A real screenshot every second or third slide', 'The last slide: a reason to save or send it'],
+  },
+  ask: {
+    length: '45-70s',
+    benefits: [
+      "The asker says what the viewer is thinking, so the answer plays as a conversation, not a lecture.",
+      "Three named parts on a board show people how far along they are and what is still coming.",
+      "The last part is an honest check, and every episode ends on \"send this to the friend who...\".",
+      "Nothing to film: the hub draws the room, both characters, the board and its diagrams, and moves the mouths with the voice.",
+    ],
+    hooks: ["\"One Windows setting is messing with your aim.\"", "\"People say this one click frees 20 GB.\"", "\"Everyone says you need a new PC for this.\""],
+    structure: ["Cold open: the claim, the asker's question, \"three parts\"", "Part 1: what it is", "Part 2: how to do it, on the board or a real screen", "Part 3: is it real? The answer on a stamp", "\"Send this to the friend who...\""],
+  },
 };

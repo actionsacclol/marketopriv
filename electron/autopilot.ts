@@ -20,6 +20,8 @@ import * as instance from './instance';
 import * as perf from './perf';
 import { EXTRA_AFTER_LAST_MIN, EXTRA_AFTER_RUN_MIN, EXTRA_BEFORE_RUN_MIN, EXTRA_KILL_MIN, EXTRA_RUNS_DEFAULT, EXTRA_RUN_MIN, EXTRA_TRIES, isExtraReport, postsOwed, type PostOwed } from '../shared/extraRuns';
 import { SITE_LABEL } from '../shared/warmup';
+import { entry as editorEntry } from './editor';
+import { EDITOR_SERVER } from '../shared/longform';
 
 const home = os.homedir();
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -71,12 +73,13 @@ const taskName = (): string => `Krypt Marketo Autopilot${deps.dev ? ' (dev)' : '
 export const PROMPT = `This is a scheduled, unattended Krypt Marketo run. Nobody is watching: work through today's plan with the marketo tools, then stop.
 
 1. get_overview, then get_today. get_today is the plan: follow its order (inbox, engagement, posts against today's targets, replies to comments, metrics, stats, log_session). When it opens with instructions from the user for this run, those come first: they decide what this run makes or does, inside the same limits and rules. It ends with the last run's report: don't redo what it did, and pick up what it left.
-2. Research every reel with WebSearch and WebFetch, whatever its type (story, list, versus, stats, tool reels too): find a real, current angle (news, on-chain events, launches, trends, what people are asking about this week) and check every number and claim against the source you read. Never invent a story or a number; if you can't source it, pick another angle. (The reddit, greentext, meme and dumb styles are the exception: made-up stories and jokes on purpose, written the way their style rules say, never presented as news or fact. The stickman style's scenes are made-up too, but every fact, setting and tool in them is real.) Before making a reel: get_performance (its "User feedback" part is the user's own ratings, rules and more / less of: it sets the direction), get_playbook (its notes say which content goes on which platform, if there are any), and list_posts with your idea as the query so you don't repeat a story. Read krypt_tools for any Krypt tool you feature. For a story reel, set its art style (art: flat, cartoon, ps2, 3d) to what get_performance's art style test says for the platform it is mainly for, and give the mascot character beats (shock, think, cheer...) where the line has an emotion. Make it, preview it, render it (square too for X), post it where it fits, and mark_posted each link. X is not a video feed: of its posts each day, at most 1-2 are videos; the others are text posts (a sharp sourced take, a stat with its source, a question, a short thread) and image posts (render_image of a reel's strongest frame).
+2. Research every reel with WebSearch and WebFetch, whatever its type (story, list, versus, stats, tool reels too): find a real, current angle (news, on-chain events, launches, trends, what people are asking about this week) and check every number and claim against the source you read. Never invent a story or a number; if you can't source it, pick another angle. (The reddit, greentext, meme and dumb styles are the exception: made-up stories and jokes on purpose, written the way their style rules say, never presented as news or fact. The stickman and blox styles' scenes are made-up too, but every fact, setting and tool in them is real.) Before making a reel: get_performance (its "User feedback" part is the user's own ratings, rules and more / less of: it sets the direction), get_playbook (its notes say which content goes on which platform, if there are any), and list_posts with your idea as the query so you don't repeat a story. Read krypt_tools for any Krypt tool you feature. For a story reel, set its art style (art: flat, cartoon, ps2, 3d) to what get_performance's art style test says for the platform it is mainly for, and give the mascot character beats (shock, think, cheer...) where the line has an emotion. Make it, preview it, render it (square too for X), post it where it fits, and mark_posted each link. X is not a video feed: of its posts each day, at most 1-2 are videos; the others are text posts (a sharp sourced take, a stat with its source, a question, a short thread) and image posts (render_image of a reel's strongest frame).
 3. Engagement is half the job, not an extra: on every platform, do the "THIS RUN" engagement goal get_today lists (likes, comments or replies, follows, reposts, saves and favorites, spread through the run between posts). It is a goal to reach, not a ceiling to stay far under: a run that ends with half of it undone on a platform says why in the report. Watch first and like only what you actually watched; follow accounts in the niche that post well. Comments and replies are in the goal (the writing rules in the instructions); when the hub turns one back as machine-written, rewrite it and send it again: that is not a failed post. Watch one platform at a time, so the videos really play. If a feed or search is off-niche or empty, try the niche's keywords and hashtags, or the accounts it already follows, before giving up. Stay human-paced and under the limits: the recommended ones are ceilings to stay well under, and a limit the user set themselves (get_warmup_plan names those) is a number they want reached. Never change a limit yourself. Post once per platform in a run, unless that platform's get_today line says more for this run: the hub refuses a post that comes sooner than the platform's gap after the last one (2 hours, 90 min on X, or the user's own number), so the next one goes later in the run or in the next run. Spread the platforms through the run (post on one, engage or answer the inbox on another, then post on the next) instead of uploading everywhere in one burst.
 3b. Lines starting ONE-TIME (following Krypt's accounts) and KRYPT VISIT (looking in on them, with likes and sometimes a comment) in get_today or in a browser_open answer are part of every run: do them partway through that platform's engagement (not as the very first action there), before you leave that platform, and never skip them for time. Say in the report what you did there.
 4. Anything only the user can do (a sign-in, a security check or captcha, a passcode, a checkpoint, a "verify it's you", a Page/profile switch, an approval card that is still waiting): do not try to solve it. Skip that platform for this run and put it in the report.
 5. If a posting or upload flow fails twice on a platform, stop on that platform for this run and put the exact error in the report. Do not loop.
 6. Only open web pages to research; never sign in, fill forms or download anything on the web. (Content Rewards links are submitted through browser_open site "rewards", as get_today says.)
+6b. When get_today has a LONG-FORM CHANNEL part, that is the main job of this run: follow it and the steps list_long_videos gives, using the krypt-editor tools to make the video (they open Krypt Editor themselves). If those tools are missing, do the Marketo parts and put NEEDS YOU: install Krypt Editor and connect it to this AI in the report. If they are there but build_longform is not one of them, that Krypt Editor is too old: put NEEDS YOU: update Krypt Editor to the newest version instead.
 7. Keep the whole run within the time get_today's USAGE TIER line gives (never more than about 60 minutes). That line also says how many platforms, new reels and web searches this run gets: it overrides anything above that asks for more. It is what keeps the user's AI plan from running out.
 8. Learn, before the report: record_reel_metrics for every reel get_today lists as due (each platform separately, platform set), record_account_stats for each platform, then get_performance. When the numbers show a pattern on at least 2 reels a side (a hook type, format, topic, length, music, posting time, or one platform liking something another doesn't), add_learning with the evidence and the platform. If newer numbers contradict an older learning, delete_learning it. Never save a guess as a learning. The next runs read these before they make anything.
 
@@ -100,13 +103,15 @@ function pinnedArgs(ai: AutopilotAi, id: string): string[] {
   const b = deps.bridge?.();
   if (!b) throw new Error('The AI connection is still starting. Try again in a moment.');
   const file = path.join(dir(), `run-mcp-${id}.json`);
-  fs.writeFileSync(file, JSON.stringify({ mcpServers: { marketo: { command: b.exe, args: [b.shim, '--client', 'claude-code', '--config', path.join(instance.ROOT, 'mcp.json'), '--profile', id], env: { ELECTRON_RUN_AS_NODE: '1' } } } }, null, 2));
+  // Krypt Editor's tools ride along when it is on this computer (long videos are made there).
+  const ed = editorEntry('claude-code');
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: { marketo: { command: b.exe, args: [b.shim, '--client', 'claude-code', '--config', path.join(instance.ROOT, 'mcp.json'), '--profile', id], env: { ELECTRON_RUN_AS_NODE: '1' } }, ...(ed ? { [EDITOR_SERVER]: ed } : {}) } }, null, 2));
   return ['--strict-mcp-config', '--mcp-config', file];
 }
 
 /** The AI apps that can run headless, and how. Claude Code is the one this is built and tested with. */
 const AIS: Record<AutopilotAi, { name: string; bin: string; args: string[]; client: string; note?: string; /** Its answer comes as JSON with the tokens used (kept beside the report). */ json?: boolean; /** The option that picks the model. */ modelFlag?: string; /** The setting that makes it summarise a long conversation earlier (the token saver). */ saverEnv?: string }> = {
-  claude: { name: 'Claude Code', bin: 'claude', args: ['-p', '--output-format', 'json', '--allowedTools', 'mcp__marketo,WebSearch,WebFetch'], client: 'claude-code', json: true, modelFlag: '--model', saverEnv: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW' },
+  claude: { name: 'Claude Code', bin: 'claude', args: ['-p', '--output-format', 'json', '--allowedTools', `mcp__marketo,mcp__${EDITOR_SERVER},WebSearch,WebFetch`], client: 'claude-code', json: true, modelFlag: '--model', saverEnv: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW' },
   codex: { name: 'Codex', bin: 'codex', args: ['exec', '--skip-git-repo-check', '-'], client: 'codex', note: 'Not tested with Marketo yet.', modelFlag: '--model' },
 };
 
@@ -621,10 +626,23 @@ export const running = (): boolean => {
 };
 
 /** Start one run now (the same script the schedule starts), in the background. */
-export async function runNow(): Promise<AutopilotStatus> {
+export async function runNow(want?: AutopilotAi): Promise<AutopilotStatus> {
   if (!SUPPORTED) throw new Error('Autopilot runs on Windows and macOS only for now.');
   if (isRunning()) throw new Error('A run is already going. Its report shows up here when it ends.');
-  const cmd = await writeFiles(settings().ai, settings().model, settings().saver);
+  // With autopilot off nothing is fixed yet: the run uses the AI picked on the page, or, started from elsewhere, the
+  // saved one if it is installed and otherwise the one that is (a Codex-only computer never ran Claude Code).
+  let s = settings();
+  if (!s.on) {
+    let ai = want && AIS[want] ? want : s.ai;
+    if (!want && !(await where(AIS[ai].bin))) for (const id of Object.keys(AIS) as AutopilotAi[]) if (id !== ai && (await where(AIS[id].bin))) ai = id;
+    if (ai !== s.ai) {
+      // The other app's model name means nothing to this one.
+      const { model: _model, ...rest } = s;
+      profiles.setAutopilot({ ...rest, ai });
+      s = settings();
+    }
+  }
+  const cmd = await writeFiles(s.ai, s.model, s.saver);
   if (MAC) {
     // The LaunchAgent starts it when there is one (launchd then knows it is running and won't start it twice).
     const kicked = fs.existsSync(plistFile()) && (await launchctl(['kickstart', `${guiDomain()}/${launchLabel()}`])).ok;

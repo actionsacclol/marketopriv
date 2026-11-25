@@ -146,12 +146,20 @@ export function ReelPlayer({ preset, fields, jump, banner: bannerPath }: { prese
         s.dirty = true;
       }
       const story = isVoiced(s.preset);
-      const storyT = story && s.video ? storyVideoTime(s.fields, s.t, undefined, Number.isFinite(s.video.duration) ? s.video.duration : 0) : null;
+      // A slideshow's screen slide is one frame of the recording: the video stays paused on it.
+      const frozen = s.preset === 'slides';
+      const storyT = story && s.video ? storyVideoTime(s.fields, s.t, undefined, Number.isFinite(s.video.duration) ? s.video.duration : 0, frozen) : null;
       const clipT = story ? (storyT ?? 0) : num(s.fields, 'start', 0) + Math.min(s.t, num(s.fields, 'seconds', 12));
       const inClip = story ? storyT !== null : s.t < num(s.fields, 'seconds', 12);
       if (s.video && s.video.readyState >= 1) {
         s.video.muted = !(s.preset === 'clip' && clipSound(s.fields));
-        if (playing && inClip) {
+        if (frozen) {
+          if (!s.video.paused) s.video.pause();
+          if (inClip && Math.abs(s.video.currentTime - clipT) > 0.05) {
+            s.video.currentTime = clipT;
+            s.dirty = true;
+          }
+        } else if (playing && inClip) {
           if (s.video.paused) void s.video.play().catch(() => {});
           if (Math.abs(s.video.currentTime - clipT) > 0.3) s.video.currentTime = clipT;
         } else {

@@ -1,4 +1,4 @@
-import { isVoiced, storyBeats, storyVoiceSig, timingFor, num } from '@shared/presets';
+import { isVoiced, storyBeats, storyVoiceSig, timingFor, num, type StoryBeat } from '@shared/presets';
 import { storySfx } from '@shared/sfx';
 import type { Fields, Reel } from '@shared/types';
 import { cleanTune, clipKey, isEleven, readVoiceCache, voiceName, type VoiceCache, type VoiceTune } from '@shared/voice';
@@ -285,6 +285,8 @@ async function buyEleven(reel: Reel, old: VoiceCache, onStatus?: (s: string) => 
   const tune = cleanTune({ voice: String(reel.fields.voice ?? ''), speed: Number(reel.fields.voice_speed ?? 1), warmth: Number(reel.fields.voice_warmth ?? 0), clarity: Number(reel.fields.voice_clarity ?? 0) });
   const want = beats.filter((b) => b.elKey);
   if (!want.length || !isEleven(tune.voice)) return {};
+  // Ask reels: the asker's lines are bought in the asker's voice.
+  const tuneOf = (b: StoryBeat): VoiceTune => (b.elVoice && b.elVoice !== tune.voice ? cleanTune({ ...tune, voice: b.elVoice }) : tune);
   const got: VoiceCache['clips'] = {};
   let bought = 0;
   let credits = 0;
@@ -304,7 +306,7 @@ async function buyEleven(reel: Reel, old: VoiceCache, onStatus?: (s: string) => 
     }
     onStatus?.(`ElevenLabs ${i + 1}/${want.length}: ${b.say.slice(0, 40)}`);
     try {
-      const c = await speakEleven(b.elKey, b.say, tune, tune.speed, want[i - 1]?.say ?? '', want[i + 1]?.say ?? '');
+      const c = await speakEleven(b.elKey, b.say, tuneOf(b), tune.speed, want[i - 1]?.say ?? '', want[i + 1]?.say ?? '');
       got[b.elKey] = { file: c.file, dur: c.dur, ...(c.words ? { words: c.words } : {}) };
       if (c.pace) paces.set(i, c.pace);
       bought++;
@@ -313,7 +315,7 @@ async function buyEleven(reel: Reel, old: VoiceCache, onStatus?: (s: string) => 
     } catch (e) {
       // Never another voice in its place: the reel waits. Lines already bought stay saved and are reused next time.
       throw new VoiceHeldError(
-        `Not rendered: ElevenLabs could not voice line ${i + 1} of ${want.length} in ${voiceName(tune.voice)} (${(e as Error).message}). A reel is never switched to another voice, so it waits: render_reel it again later${bought ? ` (the ${bought} line${bought === 1 ? '' : 's'} bought this time ${bought === 1 ? 'is' : 'are'} kept)` : ''}. If it keeps failing, end the run's report with "NEEDS YOU: ElevenLabs is failing, reel not rendered" and do not post a stand-in.`,
+        `Not rendered: ElevenLabs could not voice line ${i + 1} of ${want.length} in ${voiceName(tuneOf(b).voice)} (${(e as Error).message}). A reel is never switched to another voice, so it waits: render_reel it again later${bought ? ` (the ${bought} line${bought === 1 ? '' : 's'} bought this time ${bought === 1 ? 'is' : 'are'} kept)` : ''}. If it keeps failing, end the run's report with "NEEDS YOU: ElevenLabs is failing, reel not rendered" and do not post a stand-in.`,
       );
     }
   }
@@ -328,7 +330,7 @@ async function buyEleven(reel: Reel, old: VoiceCache, onStatus?: (s: string) => 
       const speed = Math.min(1.2, Math.max(0.7, tune.speed * (usual / p)));
       onStatus?.(`ElevenLabs: evening out the pace of "${b.say.slice(0, 30)}"`);
       try {
-        const c = await speakEleven(`${b.elKey}-p`, b.say, tune, speed, want[i - 1]?.say ?? '', want[i + 1]?.say ?? '');
+        const c = await speakEleven(`${b.elKey}-p`, b.say, tuneOf(b), speed, want[i - 1]?.say ?? '', want[i + 1]?.say ?? '');
         credits += b.say.length;
         if (c.pace && Math.abs(c.pace - usual) < Math.abs(p - usual)) {
           got[b.elKey] = { file: c.file, dur: c.dur, ...(c.words ? { words: c.words } : {}) };
@@ -340,7 +342,7 @@ async function buyEleven(reel: Reel, old: VoiceCache, onStatus?: (s: string) => 
     }
     if (rushed.length) notes.push(`Evened out the pace of ${evened} of ${rushed.length} rushed line${rushed.length === 1 ? '' : 's'} (re-voiced once).`);
   }
-  if (bought) notes.push(`${voiceName(tune.voice)}: bought ${bought} new line${bought === 1 ? '' : 's'} (about ${credits.toLocaleString()} characters).`);
+  if (bought) notes.push(`${[...new Set(want.map((b) => voiceName(tuneOf(b).voice)))].join(' + ')}: bought ${bought} new line${bought === 1 ? '' : 's'} (about ${credits.toLocaleString()} characters).`);
   return got;
 }
 

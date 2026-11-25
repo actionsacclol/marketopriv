@@ -19,7 +19,7 @@ const VY = 1010; // visual centre
 const KICKER_Y = 292;
 const HEAD_TOP = 340;
 
-interface Theme {
+export interface Theme {
   light: boolean;
   ink: string;
   sub: string;
@@ -31,7 +31,7 @@ interface Theme {
   blue: string;
 }
 
-const DARK: Theme = { light: false, ink: '#FFFFFF', sub: 'rgba(255,255,255,0.62)', panel: 'rgba(22,22,30,0.95)', stroke: 'rgba(255,255,255,0.12)', track: 'rgba(255,255,255,0.1)', pos: '#22C55E', neg: '#F43F5E', blue: '#3B82F6' };
+export const DARK: Theme = { light: false, ink: '#FFFFFF', sub: 'rgba(255,255,255,0.62)', panel: 'rgba(22,22,30,0.95)', stroke: 'rgba(255,255,255,0.12)', track: 'rgba(255,255,255,0.1)', pos: '#22C55E', neg: '#F43F5E', blue: '#3B82F6' };
 const LIGHT: Theme = { light: true, ink: '#0B0B0F', sub: 'rgba(11,11,15,0.55)', panel: '#FFFFFF', stroke: 'rgba(0,0,0,0.08)', track: 'rgba(0,0,0,0.08)', pos: '#16A34A', neg: '#E11D48', blue: '#2563EB' };
 
 function hash(n: number): number {
@@ -1774,12 +1774,23 @@ function scene(ctx: Ctx, env: Env, beats: StoryBeat[], i: number, local: number,
     else if (art === 'ps2') dialogueBox(ctx, env, b, local, i === 0 && !opts.animateIn, !act);
     else headline(ctx, env, th, b, local, false, i === 0);
     const p = opts.animateIn ? easeOut(prog(local, 0.12, 0.45)) : 1;
-    const l = opts.animateIn ? local : 5;
     if (act) {
       if (head) actionFx(ctx, art, b.visual, head, local);
       actionLabel(ctx, env, art, b, local, !opts.animateIn && i === 0);
       return;
     }
+    storyVisual(ctx, env, th, beats, i, local, p, opts.animateIn);
+  });
+  ctx.restore();
+  return th;
+}
+
+/** One beat's diagram, drawn around (W/2, VY). Duo reels draw it scaled onto their board. */
+export function storyVisual(ctx: Ctx, env: Env, th: Theme, beats: StoryBeat[], i: number, local: number, p: number, animateIn: boolean): void {
+  const b = beats[i];
+  const opts = { animateIn };
+  const l = animateIn ? local : 5;
+  {
     switch (b.visual) {
       case 'title':
         vTitle(ctx, env, th, b, p);
@@ -1849,9 +1860,7 @@ function scene(ctx: Ctx, env: Env, beats: StoryBeat[], i: number, local: number,
       default:
         break;
     }
-  });
-  ctx.restore();
-  return th;
+  }
 }
 
 /** A soft colour band sweeping down over the cut. */

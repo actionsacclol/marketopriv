@@ -24,18 +24,23 @@ import * as reelFiles from './reelFiles';
 import * as mediaFolders from './mediaFolders';
 import { resolveYtChannel } from './ytChannel';
 import * as longVideo from './longVideo';
+import * as editor from './editor';
 import type { VoiceTune } from '../shared/voice';
 import { SITES, linkOn } from '../shared/warmup';
 import { startAgentHost } from './mcp/host';
 import { shortVersion, startUpdateCheck, updateInfo } from './update';
 import * as profiles from './profiles';
 import * as proxy from './proxy';
+import * as proxyPool from './proxyPool';
+import * as chromeProfiles from './chromeProfiles';
+import * as chromeImport from './chromeImport';
 import * as secret from './secret';
 import * as instance from './instance';
 import * as perf from './perf';
 import { setBanner } from './campaignBanner';
 import { cleanPerf } from '../shared/perf';
-import type { ProfilesResult } from '../shared/types';
+import type { ChromeLocalRow, ProfilesResult } from '../shared/types';
+import { MAX_SLIDES, STILL_SHAPES, type StillShape } from '../shared/types';
 import { locked, lockWindows, startedForDebugging } from './lock';
 import type { McpHandle } from './mcp/index';
 
@@ -396,12 +401,21 @@ function registerIpc(): void {
   // The example videos shipped with the app (Create > Examples).
   ipcMain.handle('app:examples', () => {
     const dir = app.isPackaged ? path.join(process.resourcesPath, 'resources', 'examples') : path.join(app.getAppPath(), 'resources', 'examples');
-    const have = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.mp4')).map((f) => f.slice(0, -4)) : [];
-    return { dir, have };
+    const files = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+    const have = files.filter((f) => f.endsWith('.mp4')).map((f) => f.slice(0, -4));
+    // A slideshow's example also ships as its pictures (<id>-1.jpg ...), shown one at a time with arrows.
+    const slides: Record<string, number> = {};
+    for (const id of have) {
+      let n = 0;
+      while (files.includes(`${id}-${n + 1}.jpg`)) n++;
+      if (n > 1) slides[id] = n;
+    }
+    return { dir, have, slides };
   });
   ipcMain.handle('app:openExternal', (_e, url: string) => (/^https?:\/\//i.test(url) ? shell.openExternal(url) : undefined));
+  ipcMain.handle('app:editorStatus', () => editor.status());
   ipcMain.handle('app:showItemInFolder', (_e, p: string) => shell.showItemInFolder(p));
-  ipcMain.handle('app:openMediaFolder', wrapAsync((kind: string) => mediaFolders.open(kind === 'memes' ? 'memes' : 'backgrounds')));
+  ipcMain.handle('app:openMediaFolder', wrapAsync((kind: string) => mediaFolders.open(kind === 'memes' ? 'memes' : kind === 'images' ? 'images' : 'backgrounds')));
   ipcMain.handle('app:openCampaignFolder', wrapAsync((title: string) => mediaFolders.open('campaigns', String(title ?? '') || 'Campaign')));
   ipcMain.handle('app:resolveYtChannel', wrapAsync((input: string) => resolveYtChannel(String(input ?? ''))));
   // Setup > Help: the logs in one zip for the user to send to Krypt (redacted, see logExport.ts).
@@ -546,10 +560,105 @@ function registerIpc(): void {
   );
   ipcMain.handle('proxy:check', wrapAsync((id: string) => proxy.checkNow(String(id))));
   ipcMain.handle('proxy:acceptIp', wrap((id: string) => proxy.acceptIp(String(id))));
+  // The proxy manager (Multi run > Proxies): a list of proxies pasted in bulk, checked, and handed to profiles.
+  /** A profile's proxy changed under its open pages: the open profile's run tabs close so the next page takes it up. */
+  const proxyMoved = (owner: string): void => {
+    if (profiles.find(String(owner).split('::')[0]).id === profiles.activeId() && !autopilot.running()) browser.closeRunTabs();
+  };
+  ipcMain.handle('proxy:pool', () => proxyPool.list());
+  ipcMain.handle('proxy:poolImport', wrapAsync((text: string) => proxyPool.importText(String(text ?? ''))));
+  ipcMain.handle('proxy:poolCheck', wrapAsync((id: string) => proxyPool.check(String(id))));
+  ipcMain.handle('proxy:poolRemove', wrapAsync((ids: string[]) => proxyPool.remove(Array.isArray(ids) ? ids.map(String) : [])));
+  ipcMain.handle(
+    'proxy:poolAssign',
+    wrapAsync(async (id: string, owner: string) => {
+      const items = await proxyPool.assign(String(id), String(owner));
+      proxyMoved(owner);
+      return items;
+    }),
+  );
+  ipcMain.handle(
+    'proxy:poolAuto',
+    wrapAsync(async () => {
+      const r = await proxyPool.autoAssign();
+      for (const g of r.given) proxyMoved(g.id);
+      return r;
+    }),
+  );
+  ipcMain.handle(
+    'proxy:poolRelease',
+    wrapAsync(async (owner: string) => {
+      const items = await proxyPool.release(String(owner));
+      proxyMoved(owner);
+      return items;
+    }),
+  );
 
   ipcMain.handle('chrome:status', () => chromeBridge.status());
   ipcMain.handle('chrome:open', wrap((dir: string) => chromeBridge.openProfile(String(dir))));
   ipcMain.handle('chrome:scan', wrapAsync((dir: string) => browser.scanChromeProfile(String(dir ?? ''))));
+  // Multi run > Chrome profiles: Chrome's own profiles, what uses each here, making new ones, and a Marketo profile for each.
+  /** How many accounts a profile that is not open has (read from its saved data, again only when that changed). */
+  const countCache = new Map<string, { mtime: number; n: number }>();
+  const accountsIn = (id: string): number => {
+    if (id === profiles.activeId()) return store.get().igAccounts.length;
+    const file = path.join(profiles.dir(id), 'marketo-db.json');
+    try {
+      const mtime = fs.statSync(file).mtimeMs;
+      const c = countCache.get(id);
+      if (c && c.mtime === mtime) return c.n;
+      const n = ((JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) as { igAccounts?: unknown[] }).igAccounts ?? []).length;
+      countCache.set(id, { mtime, n });
+      return n;
+    } catch {
+      return 0;
+    }
+  };
+  const chromeLocals = (): ChromeLocalRow[] => {
+    const made = new Map(profiles.list().filter((p) => p.chromeDir).map((p) => [p.chromeDir!, { id: p.id, name: p.name }]));
+    const others = proxy.chromeDirsOfOthers();
+    return chromeBridge.status().local.map((c) => ({
+      ...c,
+      ...(made.has(c.dir) ? { profile: made.get(c.dir)!, ...(accountsIn(made.get(c.dir)!.id) === 0 ? { empty: true } : {}) } : {}),
+      accounts: [...store.get().igAccounts.filter((a) => a.chromeDir === c.dir).map((a) => a.handle), ...(others.has(c.dir) ? [others.get(c.dir)!.name === made.get(c.dir)?.name ? 'its account is added' : `an account in "${others.get(c.dir)!.name}"`] : [])],
+    }));
+  };
+  ipcMain.handle('chrome:locals', () => chromeLocals());
+  ipcMain.handle(
+    'chrome:make',
+    wrapAsync(async (names: string[]) => {
+      const out = await chromeProfiles.create(Array.isArray(names) ? names.map(String) : []);
+      log('info', `made ${out.length} Chrome profile${out.length === 1 ? '' : 's'}: ${out.map((x) => x.dir).join(', ')}`);
+      return out;
+    }),
+  );
+  ipcMain.handle(
+    'chrome:addAccounts',
+    wrapAsync(async (dir: string, fresh: boolean) => {
+      const r = await chromeImport.addAccounts(String(dir ?? ''), fresh !== false);
+      log('info', `Chrome profile ${r.dir} read for "${r.profile}": ${r.added ? `added ${r.added} (${r.sites.join(', ')})` : `nothing added (${r.note ?? 'no reason given'})`}`);
+      return r;
+    }),
+  );
+  ipcMain.handle('chrome:importProfiles', async (_e, dirs: string[], copySettings: boolean, copyKnowledge: boolean, auto: boolean) => {
+    let n = 0;
+    const r = await prof(async () => {
+      const rows = chromeLocals();
+      for (const dir of Array.isArray(dirs) ? dirs.map(String) : []) {
+        const c = rows.find((x) => x.dir === dir);
+        // One that already has a profile, or whose accounts are already in a profile, is left as it is.
+        if (!c || c.profile || c.accounts.length) continue;
+        const p = profiles.create(profiles.freeName(c.name));
+        store.seed(profiles.dir(p.id), outputDirFor(p), { settings: !!copySettings, knowledge: !!copyKnowledge });
+        profiles.setChromeDir(p.id, dir);
+        if (auto) profiles.setAutopilotFor(p.id, true);
+        n++;
+      }
+      if (n) log('info', `${n} profile${n === 1 ? '' : 's'} made from Chrome profiles`);
+      await autopilot.refresh();
+    });
+    return { ...r, made: n };
+  });
   autopilot.init({
     dev: !!dataOverride,
     log: (m) => log('info', m),
@@ -633,7 +742,7 @@ function registerIpc(): void {
   ipcMain.handle('autopilot:setExtraRuns', (_e, n: number) => apRun(() => autopilot.setExtraRuns(Number(n))));
   ipcMain.handle('autopilot:setTier', (_e, tier: string) => apRun(() => autopilot.setTier(String(tier) as UsageTier)));
   ipcMain.handle('autopilot:disable', () => apRun(() => autopilot.disable()));
-  ipcMain.handle('autopilot:runNow', () => apRun(() => autopilot.runNow()));
+  ipcMain.handle('autopilot:runNow', (_e, ai?: string) => apRun(() => autopilot.runNow(ai === 'claude' || ai === 'codex' ? ai : undefined)));
   ipcMain.handle('autopilot:openFolder', () => void shell.openPath(autopilot.openFolder()));
 
   ipcMain.handle('refs:add', wrapAsync((input: RefVideoInput) => refs.add(profiles.dir(), input)));
@@ -722,12 +831,35 @@ function registerIpc(): void {
       return { ok: false, message: (e as Error).message };
     }
   });
-  ipcMain.handle('render:saveImage', async (_e, reelId: string, png: string, t: number, shape?: 'vertical' | 'square') => {
+  // A reel's slides as pictures for a photo post: "<title> <id> slides <shape>/01.jpg ...", and their paths on the reel.
+  ipcMain.handle('render:saveSlides', async (_e, reelId: string, images: string[], shape: StillShape) => {
+    try {
+      const reel = store.findReel(reelId);
+      if (!STILL_SHAPES.includes(shape)) throw new Error(`Unknown shape "${String(shape)}".`);
+      if (!Array.isArray(images) || images.length < 2 || images.length > MAX_SLIDES) throw new Error(`A slideshow is 2 to ${MAX_SLIDES} pictures.`);
+      const dir = path.join(store.get().settings.outputDir, `${safeName(reel.title)} ${reel.id.slice(5)} slides ${shape}`);
+      await fs.promises.mkdir(dir, { recursive: true });
+      // Slides from an earlier save (there may have been more of them) go first.
+      for (const f of await fs.promises.readdir(dir)) if (/^\d\d\.jpg$/i.test(f)) await fs.promises.rm(path.join(dir, f), { force: true });
+      const files: string[] = [];
+      for (let i = 0; i < images.length; i++) {
+        const file = path.join(dir, `${String(i + 1).padStart(2, '0')}.jpg`);
+        await fs.promises.writeFile(file, Buffer.from(String(images[i]), 'base64'));
+        files.push(file);
+      }
+      store.markSlides(reelId, shape, files);
+      log('info', `saved ${files.length} slides (${shape}) of ${reel.id} → ${dir}`);
+      return { ok: true, data: files };
+    } catch (e) {
+      return { ok: false, message: (e as Error).message };
+    }
+  });
+  ipcMain.handle('render:saveImage', async (_e, reelId: string, png: string, t: number, shape?: StillShape) => {
     try {
       const reel = store.findReel(reelId);
       const dir = store.get().settings.outputDir;
       await fs.promises.mkdir(dir, { recursive: true });
-      const file = path.join(dir, `${safeName(reel.title)} ${reel.id.slice(5)} ${Number(t).toFixed(1)}s${shape === 'vertical' ? '' : ' square'}.png`);
+      const file = path.join(dir, `${safeName(reel.title)} ${reel.id.slice(5)} ${Number(t).toFixed(1)}s${shape === 'vertical' ? '' : ` ${shape ?? 'square'}`}.png`);
       await fs.promises.writeFile(file, Buffer.from(String(png), 'base64'));
       log('info', `saved frame ${reel.id}@${t}s → ${file}`);
       return { ok: true, data: file };
@@ -800,6 +932,7 @@ async function bootstrap(): Promise<void> {
   await secret.init();
   await Promise.all([agent.loadKey(), eleven.loadKey()]);
   proxy.init(log);
+  proxyPool.init(log);
   browser.init({ onStatus: (st) => send('browser:status', st), log });
   // Discord Rich Presence (krypt.cc), always on like the other Krypt apps; quietly waits when Discord isn't open.
   // One Discord status for the app: in multi-instance mode the base app (Main) shows it, not every window.
@@ -911,7 +1044,9 @@ async function bootstrap(): Promise<void> {
 
 /** The Chrome profiles this profile's accounts are set to: the Chrome helper sends those to this window. */
 function chromeDirsNow(): string[] {
-  return [...new Set(store.get().igAccounts.filter((a) => a.browser === 'chrome' && a.chromeDir).map((a) => a.chromeDir!))];
+  // The Chrome profile this profile was made for counts too: its first account is added from that one.
+  const own = profiles.list().find((p) => p.active)?.chromeDir;
+  return [...new Set([...store.get().igAccounts.filter((a) => a.browser === 'chrome' && a.chromeDir).map((a) => a.chromeDir!), ...(own ? [own] : [])])];
 }
 
 app.on('window-all-closed', () => app.quit());

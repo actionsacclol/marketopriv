@@ -25,6 +25,9 @@ function voiceRefs(): Set<string> {
 
 export const pruneVoice = (): Promise<number> => voice.prune(voiceRefs()).catch(() => 0);
 
+/** The folders a reel's saved slides are in (one per shape; each holds only that reel's pictures). */
+const slideDirs = (r: Reel): string[] => [...new Set(Object.values(r.slides ?? {}).flatMap((list) => (list ?? []).map((f) => path.dirname(f))))];
+
 /** Remove reels from the hub. With trashFiles, a rendered video no other reel points at goes to the Recycle Bin / Trash. */
 export async function removeReels(ids: string[], trashFiles: boolean): Promise<DeleteReelsResult> {
   const gone = store.deleteReels(ids.map(String));
@@ -32,7 +35,8 @@ export async function removeReels(ids: string[], trashFiles: boolean): Promise<D
   if (trashFiles) {
     const still = new Set(store.get().reels.flatMap((r) => [r.renderPath, r.squarePath]).filter(Boolean));
     const files = [...new Set(gone.flatMap((r) => [r.renderPath, r.squarePath]).filter((p): p is string => !!p && !still.has(p)))];
-    for (const f of files) {
+    // Its slides (a folder of pictures per shape) go with it.
+    for (const f of [...files, ...new Set(gone.flatMap(slideDirs))]) {
       if (!fs.existsSync(f)) continue;
       try {
         await shell.trashItem(f);
@@ -62,7 +66,7 @@ export async function cleanupRenders(days: number): Promise<{ reels: number; fil
   const d = store.get();
   const before = Date.now() - days * 86_400_000;
   const open = new Set((d.submissions ?? []).filter((s) => s.status === 'due' || s.status === 'submitted').map((s) => s.reelId));
-  const done = d.reels.filter((r) => r.status === 'posted' && (r.renderPath || r.squarePath) && !open.has(r.id) && lastPosted(r) > 0 && lastPosted(r) < before);
+  const done = d.reels.filter((r) => r.status === 'posted' && (r.renderPath || r.squarePath || r.slides) && !open.has(r.id) && lastPosted(r) > 0 && lastPosted(r) < before);
   if (!done.length) return { reels: 0, files: 0 };
   const ids = new Set(done.map((r) => r.id));
   const keep = new Set(d.reels.filter((r) => !ids.has(r.id)).flatMap((r) => [r.renderPath, r.squarePath]).filter(Boolean));
@@ -70,7 +74,7 @@ export async function cleanupRenders(days: number): Promise<{ reels: number; fil
   const cleaned: string[] = [];
   for (const r of done) {
     let ok = true;
-    for (const f of [r.renderPath, r.squarePath]) {
+    for (const f of [r.renderPath, r.squarePath, ...slideDirs(r)]) {
       if (!f || keep.has(f) || !fs.existsSync(f)) continue;
       try {
         await shell.trashItem(f);

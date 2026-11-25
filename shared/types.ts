@@ -30,6 +30,13 @@ export interface ReelMetrics {
 
 /** vertical = 1080x1920 (Instagram, TikTok, Shorts); square = 1080x1080 (X). */
 export type RenderShape = 'vertical' | 'square';
+/** Pictures also come as portrait = 1080x1350 (4:5: Instagram, Threads, Facebook and X photo posts) and pin = 1080x1620 (2:3: Pinterest). */
+export type StillShape = RenderShape | 'portrait' | 'pin';
+export const STILL_SHAPES: StillShape[] = ['vertical', 'square', 'portrait', 'pin'];
+/** Width x height of each shape. */
+export const SHAPE_SIZE: Record<StillShape, { w: number; h: number }> = { vertical: { w: 1080, h: 1920 }, square: { w: 1080, h: 1080 }, portrait: { w: 1080, h: 1350 }, pin: { w: 1080, h: 1620 } };
+/** The most pictures one photo post takes (render_slides saves at most this many). */
+export const MAX_SLIDES = 10;
 
 export interface Reel {
   id: string;
@@ -40,6 +47,8 @@ export interface Reel {
   renderPath?: string;
   /** The square (1080x1080) version for X: the vertical frame's content band on a blurred fill. */
   squarePath?: string;
+  /** Its slides saved as pictures for a photo post (render_slides), in order, per shape. Cleared when its content changes. */
+  slides?: Partial<Record<StillShape, string[]>>;
   renderedAt?: string;
   renderSeconds?: number;
   /** When its rendered files went to the Recycle Bin (Setup > Performance, clean up posted reels): render again to post again. */
@@ -406,7 +415,7 @@ export interface IgAccount {
   pushProduct?: string;
   /** The user's own instructions for the AI on each platform (Home > click a platform). get_today and browser_open pass them on. */
   platformNotes?: Partial<Record<Site, string>>;
-  /** Channel styles it runs (Styles page, shared/styles.ts), main first. Missing = just the main style. */
+  /** Channel styles it runs (Styles page, shared/styles.ts), main first. Missing = every built-in style (they all start on; the user switches some off). */
   styles?: string[];
   /** Clipping style: whose Twitch / Kick clips to cut into reels, and how far back to look (Styles page, shared/clipping.ts). */
   clipping?: ClipSettings;
@@ -569,7 +578,17 @@ export type LimitKey = 'minutes' | 'likes' | 'saves' | 'follows' | 'comments' | 
 export type SiteLimits = Partial<Record<LimitKey, number>>;
 
 /** Krypt's tools (creator program), the user's own business, or a clip channel (clipping style only). */
-export type PromoteMode = 'krypt' | 'own' | 'clips';
+export type PromoteMode = 'krypt' | 'own' | 'clips' | 'longform';
+
+/** The long-form YouTube channel's plan (the long-form mode; Create > Long videos). Every number is the user's own. */
+export interface LongformPlan {
+  /** Long videos a week (0 = none for now). */
+  perWeek: number;
+  /** How long each one aims to be, in minutes. */
+  length: '5-7' | '8-12' | '12-20';
+  /** How a finished video goes up. */
+  visibility: 'public' | 'unlisted';
+}
 export interface PromoteModeSave {
   brand?: Brand;
   /** Account id → its styles and style mix while this mode was on. */
@@ -589,6 +608,8 @@ export interface Settings {
   promoting?: PromoteMode;
   /** Each mode's own copy, kept when switching away so switching back restores it: the brand form, and every account's styles. */
   brandModes?: Partial<Record<PromoteMode, PromoteModeSave>>;
+  /** The long-form channel's plan (long-form mode). Not set = the defaults (shared/longform.ts). */
+  longform?: LongformPlan;
   /** The voice new story reels start with (Voices page). Not set = the built-in default. */
   voice?: VoiceTune;
   /** ElevenLabs (the user's own key; Voices page). */
@@ -656,6 +677,58 @@ export interface ProxyRow {
   /** A Chrome profile's own proxy (Setup > Performance, a proxy for each Chrome profile): the accounts that run in it. */
   accounts?: string[];
   state: ProxyState;
+}
+
+/** A proxy in the proxy manager's list that is no profile's yet. */
+export interface ProxyPoolItem {
+  id: string;
+  scheme: ProxyScheme;
+  host: string;
+  port: number;
+  username?: string;
+  hasPassword?: boolean;
+  /** The last check: where it goes out, how long the answer took, or what went wrong. */
+  ip?: string;
+  country?: string;
+  city?: string;
+  ms?: number;
+  checkedAt?: string;
+  error?: string;
+}
+export interface ProxyPoolImport {
+  added: number;
+  /** Lines left out and why (line 0 = a proxy that was already there). */
+  skipped: Array<{ line: number; why: string }>;
+  items: ProxyPoolItem[];
+}
+
+/** One of Chrome's own profiles on this computer, and what uses it here (Multi run > Chrome profiles). */
+export interface ChromeLocalRow {
+  dir: string;
+  name: string;
+  /** Partly hidden ("sk***ow@gmail.com"). */
+  email: string;
+  hasExtension: boolean;
+  connected: boolean;
+  /** The Marketo profile made for it. */
+  profile?: { id: string; name: string };
+  /** Accounts that run in it, as "handle (profile)" when they are another profile's. */
+  accounts: string[];
+  /** Its Marketo profile has no account yet (its sign-ins can be read and added). */
+  empty?: boolean;
+}
+
+/** What reading one Chrome profile's sign-ins added (Multi run > Chrome profiles). */
+export interface ChromeImportResult {
+  dir: string;
+  /** The Marketo profile it was for. */
+  profile: string;
+  /** The account added (its handle), when one was. */
+  added?: string;
+  /** The platforms switched on for it. */
+  sites: string[];
+  /** Why nothing was added, or what is left to do by hand. */
+  note?: string;
 }
 
 export interface ProxyInput {
@@ -784,7 +857,8 @@ export interface PostLog {
   topic?: string;
   /** krypt_tools ids it features. */
   tools?: string[];
-  kind?: 'video' | 'short' | 'text' | 'image' | 'live';
+  /** slides = a photo post of several pictures to swipe through (a slideshow / carousel). */
+  kind?: 'video' | 'short' | 'text' | 'image' | 'slides' | 'live';
   views?: number;
   likes?: number;
   comments?: number;
@@ -811,6 +885,20 @@ export interface LongSection {
   kip?: string;
   /** Kip presenting this section (render_kip): green-screen MP4. */
   kipVideo?: string;
+}
+
+/** A long video's numbers from YouTube Studio. */
+export interface LongStats {
+  views: number;
+  likes?: number;
+  comments?: number;
+  /** Impressions click-through rate, percent. */
+  ctr?: number;
+  /** Average percentage viewed. */
+  avgViewed?: number;
+  /** Subscribers it brought. */
+  subs?: number;
+  at: string;
 }
 
 export type LongStatus = 'script' | 'narrated' | 'edited' | 'ready' | 'uploaded';
@@ -843,6 +931,10 @@ export interface LongVideo {
   visibility?: 'unlisted' | 'public' | 'private';
   /** The video's link once uploaded. */
   url?: string;
+  /** When its upload was saved in Studio. */
+  uploadedAt?: string;
+  /** Its numbers as last read off YouTube Studio (the AI saves them; they decide what gets made next). */
+  stats?: LongStats;
   voice?: string;
   createdAt: string;
   updatedAt: string;
@@ -1203,6 +1295,8 @@ export interface ProfileInfo {
   visible?: boolean;
   /** Runs in the background (no window) whenever Main is open or a run needs it. */
   background?: boolean;
+  /** The Chrome profile (its folder) this profile was made for: its accounts start out in that one. */
+  chromeDir?: string;
 }
 
 /** What the profile calls answer with. */
@@ -1221,9 +1315,18 @@ export interface UpdateInfo {
   checkedAt?: string;
 }
 
+/** Krypt Editor on this computer (long videos are made in it). */
+export interface EditorStatus {
+  installed: boolean;
+  version?: string;
+  /** The AI apps it is connected to (their settings hold its tools). */
+  connected: string[];
+}
+
 export interface MarketoApi {
   app: {
     version(): Promise<string>;
+    editorStatus(): Promise<EditorStatus>;
     update(): Promise<UpdateInfo>;
     profiles(): Promise<ProfileInfo[]>;
     /** New profile, empty or with this one's settings and voices (never its accounts, brand or content). */
@@ -1247,7 +1350,7 @@ export interface MarketoApi {
     /** Quit and start again (multi-instance mode is read at start). */
     restart(): Promise<void>;
     /** Where the shipped example videos are, and which ones exist. */
-    examples(): Promise<{ dir: string; have: string[] }>;
+    examples(): Promise<{ dir: string; have: string[]; slides?: Record<string, number> }>;
     openExternal(url: string): Promise<void>;
     showItemInFolder(p: string): Promise<void>;
     /** Open the Backgrounds or Memes folder (made when missing) for the meme styles. */
@@ -1374,7 +1477,8 @@ export interface MarketoApi {
     /** Pick a usage tier: sets the model, run times and token saver to the tier's, and sizes each run to it. */
     setTier(tier: UsageTier): Promise<ActionResult<AutopilotStatus>>;
     disable(): Promise<ActionResult<AutopilotStatus>>;
-    runNow(): Promise<ActionResult<AutopilotStatus>>;
+    /** `ai`: the one picked on the Autopilot page (used while autopilot is off; a schedule that is on keeps its own). */
+    runNow(ai?: AutopilotAi): Promise<ActionResult<AutopilotStatus>>;
     openFolder(): Promise<void>;
   };
   proxy: {
@@ -1387,6 +1491,18 @@ export interface MarketoApi {
     check(profileId: string): Promise<ActionResult<ProxyState>>;
     /** Keep the IP the last check saw as the sticky one. */
     acceptIp(profileId: string): Promise<ActionResult<ProxyState>>;
+    /** The proxy manager's list: proxies that are no profile's yet. */
+    pool(): Promise<ProxyPoolItem[]>;
+    /** Add a pasted list (one proxy a line). */
+    poolImport(text: string): Promise<ActionResult<ProxyPoolImport>>;
+    poolCheck(id: string): Promise<ActionResult<ProxyPoolItem[]>>;
+    poolRemove(ids: string[]): Promise<ActionResult<ProxyPoolItem[]>>;
+    /** Give one to a profile (the proxy it had goes back into the list). */
+    poolAssign(id: string, owner: string): Promise<ActionResult<ProxyPoolItem[]>>;
+    /** One each for the profiles with no proxy on. */
+    poolAuto(): Promise<ActionResult<{ given: Array<{ profile: string; id: string; proxy: string }>; items: ProxyPoolItem[] }>>;
+    /** Take a profile's proxy back into the list. */
+    poolRelease(owner: string): Promise<ActionResult<ProxyPoolItem[]>>;
   };
   chrome: {
     status(): Promise<ChromeStatus>;
@@ -1395,6 +1511,14 @@ export interface MarketoApi {
     open(dir: string): Promise<ActionResult>;
     /** Who that Chrome profile ('' = the only one connected) is signed in as on each platform, and its YouTube channels. */
     scan(dir: string): Promise<ActionResult<ProfileScan>>;
+    /** Every Chrome profile on this computer and what uses it. */
+    locals(): Promise<ChromeLocalRow[]>;
+    /** Make new Chrome profiles with these names (each opens once). */
+    make(names: string[]): Promise<ActionResult<Array<{ dir: string; name: string }>>>;
+    /** A Marketo profile for each of these Chrome profiles (ones that already have one are skipped). */
+    importProfiles(dirs: string[], copySettings: boolean, copyKnowledge: boolean, autopilot: boolean): Promise<ProfilesResult & { made?: number }>;
+    /** Read that Chrome profile's sign-ins and add them as the account of the Marketo profile made for it. */
+    addAccounts(dir: string, fresh: boolean): Promise<ActionResult<ChromeImportResult>>;
   };
   approvals: {
     list(): Promise<Approval[]>;
@@ -1457,7 +1581,9 @@ export interface MarketoApi {
     /** Write a finished render to disk and mark the reel rendered. */
     save(reelId: string, data: Uint8Array, seconds: number, shape?: RenderShape): Promise<ActionResult<string>>;
     /** Write one frame (base64 PNG) next to the renders; returns its path. */
-    saveImage(reelId: string, png: string, t: number, shape?: RenderShape): Promise<ActionResult<string>>;
+    saveImage(reelId: string, png: string, t: number, shape?: StillShape): Promise<ActionResult<string>>;
+    /** Write a reel's slides (base64 JPEGs, in order) into its slides folder and keep their paths on the reel; returns the paths. */
+    saveSlides(reelId: string, images: string[], shape: StillShape): Promise<ActionResult<string[]>>;
     /** A long video's thumbnail (1280x720 PNG) into its folder; saved on the video. */
     saveLongThumb(id: string, png: string): Promise<ActionResult<string>>;
     /** A file of a long video (a Kip clip) into its folder; with section, saved on that section as its Kip clip. */

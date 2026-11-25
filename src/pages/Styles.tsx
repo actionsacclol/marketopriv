@@ -3,19 +3,22 @@ import { ArrowLeft, Check, Copy, Film, Pencil, Plus, Trash2, Volume2, VolumeX } 
 import type { CustomStyle, IgAccount } from '@shared/types';
 import { ClipSources } from '../components/ClipSourcesEditor';
 import { MemeStyleSettings } from '../components/MemeStyleSettings';
-import { STYLES, TONE_STYLES, allStyles, styleName, stylesOf, type ChannelStyle } from '@shared/styles';
+import { STYLES, TONE_STYLES, allStyles, styleName, styleNeeds, stylesOf, type ChannelStyle } from '@shared/styles';
 import { MixCard, VarietyCard } from '../components/ReelControls';
 import { STYLE_PAGES } from '@shared/stylePages';
 import { Card, GhostButton, Page, PrimaryButton } from '../components/ui';
 import { useApp } from '../state/store';
 import { cls } from '../lib/format';
+import { SlidePreview, slideUrls } from '../components/SlidePreview';
+import { modeOf } from '../lib/promoteMode';
 
 // Styles: what each account's videos are (shared/styles.ts). The grid shows every
-// style with its preview; clicking one opens its own page (why it works, hooks,
-// how a video is built) where it is switched on per account. The user can also
-// tell the AI "run the vote style on @handle".
+// style with its preview and an on/off switch: every built-in style starts on, and
+// the user switches off the ones their AI should not make. Clicking a card opens the
+// style's own page (why it works, hooks, how a video is built), where it can be set
+// per account. The user can also tell the AI "run the vote style on @handle".
 
-type Media = { dir: string; have: string[] };
+type Media = { dir: string; have: string[]; slides?: Record<string, number> };
 const fileOf = (m: Media, id: string, ext: string): string => window.marketo.app.mediaUrl(`${m.dir}\\${id}.${ext}`);
 
 function Missing() {
@@ -27,29 +30,95 @@ function Missing() {
   );
 }
 
-/** The grid: hover to play (muted), click to open the style's page. */
-function StyleTile({ st, media, running, onOpen }: { st: ChannelStyle; media: Media; running: string[]; onOpen: () => void }) {
-  const brand = useApp((s) => s.db!.brand);
-  const video = useRef<HTMLVideoElement>(null);
-  const { name, label } = styleName(st, brand);
-  const have = media.have.includes(st.preview);
+/**
+ * Switch a style on or off for the given accounts (all of them from a card's switch). Returns how many changed and
+ * the accounts left alone because the style was their last one.
+ */
+async function switchStyle(accounts: IgAccount[], id: string, on: boolean): Promise<{ changed: number; kept: string[]; error?: string }> {
+  let changed = 0;
+  const kept: string[] = [];
+  for (const a of accounts) {
+    const now = stylesOf(a);
+    if (now.includes(id) === on) continue;
+    const next = on ? [...now, id] : now.filter((x) => x !== id);
+    if (!next.length) {
+      kept.push(a.handle);
+      continue;
+    }
+    const r = await window.marketo.db.saveAccount({ id: a.id, styles: [...next.filter((x) => x === 'main'), ...next.filter((x) => x !== 'main')] });
+    if (!r.ok) return { changed, kept, error: r.message ?? 'Could not save.' };
+    changed++;
+  }
+  return { changed, kept };
+}
+
+/** A small on/off switch. `part` = on for some accounts only. */
+function Switch({ on, part, disabled, label, onChange }: { on: boolean; part?: boolean; disabled?: boolean; label: string; onChange: (v: boolean) => void }) {
   return (
     <button
+      type="button"
+      role="switch"
+      aria-checked={part ? 'mixed' : on}
+      aria-label={label}
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation();
+        onChange(!on);
+      }}
+      className={cls('relative h-[20px] w-[36px] shrink-0 rounded-full border transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-krypt-purple/60 disabled:opacity-50', on ? 'border-emerald-400/60 bg-emerald-500/80' : part ? 'border-emerald-400/40 bg-emerald-500/30' : 'border-white/15 bg-white/[0.12]')}
+    >
+      <span className={cls('absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow transition-all duration-200', on ? 'left-[18px]' : part ? 'left-[10px]' : 'left-[2px]')} />
+    </button>
+  );
+}
+
+/** The grid: hover to play (muted), click to open the style's page, the switch turns it on or off for every account. */
+function StyleTile({ st, media, accounts, onOpen }: { st: ChannelStyle; media: Media; accounts: IgAccount[]; onOpen: () => void }) {
+  const brand = useApp((s) => s.db!.brand);
+  const toast = useApp((s) => s.toast);
+  const video = useRef<HTMLVideoElement>(null);
+  const [busy, setBusy] = useState(false);
+  const { name, label } = styleName(st, brand);
+  const have = media.have.includes(st.preview);
+  const running = accounts.filter((a) => stylesOf(a).includes(st.id));
+  const on = accounts.length > 0 && running.length === accounts.length;
+  const part = running.length > 0 && !on;
+  // On, but something is missing before the AI can make it (streamers to clip, a Krypt tool to show).
+  const needs = running.map((a) => styleNeeds(st.id, a, brand)).find(Boolean) ?? '';
+  const flip = async (want: boolean): Promise<void> => {
+    setBusy(true);
+    const r = await switchStyle(accounts, st.id, want);
+    setBusy(false);
+    if (r.error) return toast('error', r.error);
+    if (r.kept.length) return toast('warn', `${r.kept.join(', ')} ${r.kept.length === 1 ? 'needs' : 'need'} at least one style: switch another on first.`);
+    toast('ok', want ? `${name} is on: your AI makes it in its turn.` : `${name} is off: your AI will not make it.`);
+  };
+  return (
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
       onMouseEnter={() => void video.current?.play().catch(() => {})}
       onMouseLeave={() => {
         if (!video.current) return;
         video.current.pause();
         video.current.currentTime = 0;
       }}
-      className={cls('group flex flex-col overflow-hidden rounded-2xl border text-left transition hover:-translate-y-0.5', st.id === 'main' ? 'border-krypt-purple/50 bg-krypt-purple/[0.07]' : 'border-white/10 bg-white/[0.03] hover:border-white/25')}
+      className={cls('group flex cursor-pointer flex-col overflow-hidden rounded-2xl border text-left transition hover:-translate-y-0.5', st.id === 'main' ? 'border-krypt-purple/50 bg-krypt-purple/[0.07]' : 'border-white/10 bg-white/[0.03] hover:border-white/25')}
     >
-      <div className="relative aspect-[9/16] w-full bg-black">
-        {have ? <video ref={video} src={fileOf(media, st.preview, 'mp4')} poster={fileOf(media, st.preview, 'jpg')} muted loop playsInline preload="none" className="h-full w-full object-cover" /> : <Missing />}
-        {running.length > 0 && (
-          <span className="absolute left-2 top-2 flex items-center gap-1 rounded-full bg-emerald-500/85 px-2 py-0.5 text-[10px] font-semibold text-white">
-            <Check className="h-3 w-3" /> {running.length === 1 ? running[0] : `${running.length} accounts`}
-          </span>
+      <div className={cls('relative aspect-[9/16] w-full bg-black transition', running.length === 0 && accounts.length > 0 && 'opacity-40 grayscale group-hover:opacity-80 group-hover:grayscale-0')}>
+        {slideUrls(media, st.preview).length ? (
+          <SlidePreview urls={slideUrls(media, st.preview)} />
+        ) : have ? (
+          <video ref={video} src={fileOf(media, st.preview, 'mp4')} poster={fileOf(media, st.preview, 'jpg')} muted loop playsInline preload="none" className="h-full w-full object-cover" />
+        ) : (
+          <Missing />
         )}
       </div>
       <div className="flex flex-1 flex-col gap-1 p-3">
@@ -59,8 +128,14 @@ function StyleTile({ st, media, running, onOpen }: { st: ChannelStyle; media: Me
           <span className="ml-auto shrink-0 rounded border border-white/15 px-1 font-mono text-[10px] text-white/70">{label}</span>
         </div>
         <p className="line-clamp-2 text-xs leading-snug text-krypt-muted">{st.about}</p>
+        <div className="mt-auto flex items-center gap-2 pt-2">
+          <Switch on={on} part={part} disabled={busy || accounts.length === 0} label={`${name}: ${on ? 'on' : 'off'}`} onChange={() => void flip(!on)} />
+          <span className={cls('min-w-0 truncate text-[11px]', needs ? 'text-amber-200/90' : running.length ? 'text-emerald-200/90' : 'text-krypt-muted')}>
+            {accounts.length === 0 ? 'Add an account first' : needs ? needs : on ? 'On' : part ? `On for ${running.length} of ${accounts.length}` : 'Off'}
+          </span>
+        </div>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -78,7 +153,7 @@ function StyleForm({ own, onDone }: { own?: CustomStyle; onDone: () => void }) {
     const r = await window.marketo.db.saveStyle({ id: own?.id, name, about, rules, base });
     setBusy(false);
     if (!r.ok) return toast('error', r.message ?? 'Could not save.');
-    toast('ok', own ? 'Style saved.' : 'Style made. Open it to switch it on for an account.');
+    toast('ok', own ? 'Style saved.' : 'Style made. Switch it on with the switch on its card.');
     onDone();
   };
   return (
@@ -173,17 +248,15 @@ function StylePageView({ st, media, accounts, onBack }: { st: ChannelStyle; medi
   };
 
   const toggle = async (a: IgAccount): Promise<void> => {
-    const now = stylesOf(a);
-    const on = now.includes(st.id);
-    let next = on ? now.filter((x) => x !== st.id) : [...now, st.id];
-    if (!next.length) return toast('warn', `${a.handle} needs at least one style.`);
-    next = [...next.filter((x) => x === 'main'), ...next.filter((x) => x !== 'main')];
+    const on = stylesOf(a).includes(st.id);
     setBusy(a.id);
-    const r = await window.marketo.db.saveAccount({ id: a.id, styles: next });
+    const r = await switchStyle([a], st.id, !on);
     setBusy(null);
-    if (!r.ok) return toast('error', r.message ?? 'Could not save.');
+    if (r.error) return toast('error', r.error);
+    if (r.kept.length) return toast('warn', `${a.handle} needs at least one style.`);
     toast('ok', on ? `${a.handle} stops making ${name} videos.` : `${a.handle} now runs ${name}. Set how often each is used under Style mix.`);
   };
+  const needs = accounts.filter((a) => stylesOf(a).includes(st.id)).map((a) => styleNeeds(st.id, a, brand)).find(Boolean) ?? '';
 
   return (
     <div className="space-y-5">
@@ -192,7 +265,9 @@ function StylePageView({ st, media, accounts, onBack }: { st: ChannelStyle; medi
       </GhostButton>
       <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
         <div className="relative aspect-[9/16] w-full max-w-[320px] overflow-hidden rounded-2xl border border-white/10 bg-black">
-          {have ? (
+          {slideUrls(media, st.preview).length ? (
+            <SlidePreview big urls={slideUrls(media, st.preview)} />
+          ) : have ? (
             <>
               <video ref={video} src={fileOf(media, st.preview, 'mp4')} poster={fileOf(media, st.preview, 'jpg')} muted loop playsInline autoPlay className="h-full w-full cursor-pointer object-cover" onClick={toggleSound} />
               <button aria-label={sound ? 'Mute' : 'Play with sound'} onClick={toggleSound} className="absolute bottom-3 right-3 flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/60 text-white backdrop-blur hover:bg-black/80">
@@ -235,7 +310,10 @@ function StylePageView({ st, media, accounts, onBack }: { st: ChannelStyle; medi
             </Section>
           )}
           <Card>
-            <div className="text-sm font-semibold text-white">Run it on</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="text-sm font-semibold text-white">Run it on</div>
+              {needs && <span className="rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 text-[11px] text-amber-100">{needs}{st.id === 'clipping' ? ' (below)' : ''}: until then your AI skips it</span>}
+            </div>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {accounts.length === 0 && <span className="text-xs text-krypt-muted">Add an account first (Grow &gt; Accounts).</span>}
               {accounts.map((a) => {
@@ -310,15 +388,47 @@ export default function Styles() {
   const mine = useApp((s) => s.db!.customStyles) ?? [];
   const [adding, setAdding] = useState(false);
   const st = open ? allStyles().find((x) => x.id === open) : undefined;
+  const toast = useApp((s) => s.toast);
+  const [allBusy, setAllBusy] = useState(false);
+  // A clip channel runs the clipping style alone: no "all on" there.
+  const clips = useApp((s) => modeOf(s.db!)) === 'clips';
+  const everyId = allStyles().map((x) => x.id);
+  const allOn = accounts.every((a) => everyId.every((id) => stylesOf(a).includes(id)));
+  const onlyMain = accounts.every((a) => stylesOf(a).length === 1 && stylesOf(a)[0] === 'main');
+  // Every style on, or back to the main style alone, for every account. A style mix the user saved is theirs: it is left as it is.
+  const setAll = async (on: boolean): Promise<void> => {
+    setAllBusy(true);
+    for (const a of accounts) {
+      const r = await window.marketo.db.saveAccount({ id: a.id, styles: on ? everyId : ['main'] });
+      if (!r.ok) {
+        setAllBusy(false);
+        return toast('error', r.message ?? 'Could not save.');
+      }
+    }
+    setAllBusy(false);
+    toast('ok', on ? 'Every style is on.' : 'Only the main style is on. Switch on the ones you want.');
+  };
   return (
     <Page
       title="Styles"
-      subtitle={st ? undefined : 'What your accounts’ videos are. Hover to preview, click a style to see how it works and run it.'}
+      subtitle={st ? undefined : 'The kinds of video your AI makes. Every style starts on: switch off the ones you do not want. Hover to preview, click a style to see how it works.'}
       actions={
         st ? undefined : (
-          <GhostButton small onClick={() => setAdding(true)}>
-            <Plus className="h-3.5 w-3.5" /> New style
-          </GhostButton>
+          <span className="flex items-center gap-2">
+            {accounts.length > 0 && !clips && (
+              <>
+                <GhostButton small className="whitespace-nowrap" disabled={allBusy || allOn} onClick={() => void setAll(true)}>
+                  All on
+                </GhostButton>
+                <GhostButton small className="whitespace-nowrap" disabled={allBusy || onlyMain} onClick={() => void setAll(false)}>
+                  Main only
+                </GhostButton>
+              </>
+            )}
+            <GhostButton small className="whitespace-nowrap" onClick={() => setAdding(true)}>
+              <Plus className="h-3.5 w-3.5" /> New style
+            </GhostButton>
+          </span>
         )
       }
     >
@@ -334,7 +444,7 @@ export default function Styles() {
           </div>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4">
             {allStyles().map((x) => (
-              <StyleTile key={x.id} st={x} media={media} running={accounts.filter((a) => stylesOf(a).includes(x.id)).map((a) => a.handle)} onOpen={() => openStyle(x.id)} />
+              <StyleTile key={x.id} st={x} media={media} accounts={accounts} onOpen={() => openStyle(x.id)} />
             ))}
           </div>
           </div>

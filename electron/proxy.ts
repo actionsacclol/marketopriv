@@ -288,9 +288,35 @@ export interface CheckResult {
   error?: string;
 }
 
+/** A profile's saved proxy password ('' = none), for the proxy manager moving a proxy back into its list. */
+export async function passwordFor(owner: string): Promise<string> {
+  const o = ownerOf(owner);
+  const id = o.dir ? chromeOwner(o.dir, o.pid) : o.pid;
+  const s = settingsOf(id);
+  return s?.hasPassword ? passwordOf(id, s) : '';
+}
+
+/** The exit IP of a proxy that is no profile's yet (the proxy manager's list), from a throwaway session, with the time it took. */
+export async function checkRaw(key: string, p: { scheme: ProxySettings['scheme']; host: string; port: number; username?: string; password?: string }): Promise<CheckResult & { ms?: number }> {
+  const ses = session.fromPartition(`marketo-proxy-check-pool-${safe(key)}`);
+  await ses.clearStorageData().catch(() => {});
+  await ses.setProxy({ mode: 'fixed_servers', proxyRules: rules({ on: true, scheme: p.scheme, host: p.host, port: p.port }), proxyBypassRules: '' });
+  await ses.clearAuthCache().catch(() => {});
+  await ses.closeAllConnections().catch(() => {});
+  if (p.username) signIn.set(ses, { host: p.host.toLowerCase(), username: p.username, password: p.password ?? '' });
+  else signIn.delete(ses);
+  const t = Date.now();
+  const r = await loadCheck(ses);
+  return r.ok ? { ...r, ms: Date.now() - t } : r;
+}
+
 /** What ipinfo.io says a session's exit IP is, loaded the way a page is (so the proxy and its sign-in are used). */
 export async function checkSession(ses: Session, id: string = own()): Promise<CheckResult> {
   await applyTo(ses, id);
+  return loadCheck(ses);
+}
+
+async function loadCheck(ses: Session): Promise<CheckResult> {
   const win = new BrowserWindow({ show: false, width: 400, height: 300, webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false } });
   try {
     win.webContents.setAudioMuted(true);
@@ -422,6 +448,12 @@ export function effectiveFor(dir: string | null | undefined, perChrome: boolean)
   }
   const p = active();
   return { owner: own(), p, sig: `${own()}|${sig(p)}|${gen}` };
+}
+
+/** A named Marketo profile's own proxy, for reading a Chrome profile on its behalf (Multi run > Chrome profiles). */
+export function effectiveForProfile(pid: string): { owner: string; p: ProxySettings | null; sig: string } {
+  const p = on(settingsOf(pid));
+  return { owner: pid, p, sig: `for:${pid}|${sig(p)}` };
 }
 
 /** What the extension needs to set the proxy in its Chrome profile ({on:false} clears it). */

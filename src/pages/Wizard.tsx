@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeft, ArrowRight, AtSign, RefreshCw, Boxes, Briefcase, Check, Chrome, CircleAlert, CircleCheck, Copy, ExternalLink, Facebook, ImageIcon, Instagram, MessageCircle, Music2, Pin, Play, Scissors, X, Youtube } from 'lucide-react';
+import { ArrowLeft, ArrowRight, AtSign, RefreshCw, Boxes, Briefcase, Check, Chrome, Clapperboard, CircleAlert, CircleCheck, Copy, ExternalLink, Facebook, ImageIcon, Instagram, MessageCircle, Music2, Pin, Play, Scissors, X, Youtube } from 'lucide-react';
 import type { Brand, ClientInfo, ClipSettings, IgAccount, NetProfile, Network, ProfileScan, Site } from '@shared/types';
 import { DEFAULT_TARGETS, SITES, SITE_LABEL, YT_UPLOADS_PER_DAY, localDate, sameHandle, sitesOf } from '@shared/warmup';
 import { CLIPPING_GUIDE_THUMB, CLIPPING_GUIDE_URL, CREATOR_PITCH, EMPTY_BRAND, GUIDE_VIDEO_THUMB, GUIDE_VIDEO_URL, creatorProblem } from '@shared/brand';
@@ -16,7 +16,8 @@ import { ExtensionSetup, chromeLabel, extensionCheck } from '../components/Exten
 import { Card, GhostButton, PrimaryButton, Toggle } from '../components/ui';
 import { useApp } from '../state/store';
 import { cls } from '../lib/format';
-import { FIELDS } from './Setup';
+import { fieldsFor } from './Setup';
+import { EditorSetup, LongformPlanFields, useEditorStatus } from '../components/Longform';
 import { ClientRow } from './Agents';
 import { GoalButtons, ProductField } from '../components/GoalPicker';
 import type { GoalId } from '@shared/goals';
@@ -25,11 +26,13 @@ import type { GoalId } from '@shared/goals';
 // signed in, signing in, connecting an AI, and the daily rules. Every step
 // after the brand can be skipped and finished later on the normal pages.
 
-/** What the install is for: Krypt's tools, the user's own brand, or a clip channel (clipping style only). */
-type Mode = 'krypt' | 'own' | 'clips';
-type StepId = 'start' | 'plan' | 'brand' | 'platforms' | 'where' | 'signin' | 'ai' | 'voice' | 'rules';
+/** What the install is for: Krypt's tools, the user's own brand, a clip channel (clipping style only), or a long-form YouTube channel. */
+type Mode = 'krypt' | 'own' | 'clips' | 'longform';
+type StepId = 'start' | 'plan' | 'editor' | 'brand' | 'platforms' | 'where' | 'signin' | 'ai' | 'voice' | 'rules';
 /** The clip channel's extra step after Start: the short plan and the clipping guide video. */
 const PLAN_STEP: { id: StepId; label: string } = { id: 'plan', label: 'The plan' };
+/** The long-form channel's extra step after Start: install Krypt Editor, where its videos are made. */
+const EDITOR_STEP: { id: StepId; label: string } = { id: 'editor', label: 'Krypt Editor' };
 const STEPS: Array<{ id: StepId; label: string }> = [
   { id: 'start', label: 'Start' },
   { id: 'brand', label: 'Brand' },
@@ -135,7 +138,9 @@ export default function Wizard() {
   const where = 'chrome' as 'chrome' | 'hub';
   const [name, setName] = useState(existing?.handle ?? '');
   /** The Chrome profile this account is kept to ('' = automatic: the one signed in as it). */
-  const [chromeDir, setChromeDir] = useState(existing?.chromeDir ?? '');
+  // A profile made for one Chrome profile (Multi run > Chrome profiles) starts its first account in that one.
+  const madeFor = useApp((st) => st.profiles.find((p) => p.active)?.chromeDir);
+  const [chromeDir, setChromeDir] = useState(existing?.chromeDir ?? madeFor ?? '');
   const [xHandle, setXHandle] = useState(existing?.x?.handle ?? '');
   const [ttHandle, setTtHandle] = useState(existing?.tiktok?.handle ?? '');
   const [fbPage, setFbPage] = useState(existing?.facebook?.handle ?? '');
@@ -166,7 +171,6 @@ export default function Wizard() {
   };
   const claudeReady = clients.some((c) => c.id === 'claude-code' && c.connected);
   const [busy, setBusy] = useState(false);
-  const [allApps, setAllApps] = useState(false);
 
   // ── What the picked Chrome profile is signed in to (read once it is connected; fills in the handles) ──
   const [scan, setScan] = useState<ProfileScan | null>(null);
@@ -204,7 +208,8 @@ export default function Wizard() {
   const refreshClients = (): void => void window.marketo.mcp.clients().then(setClients);
   useEffect(refreshClients, []);
 
-  const steps = mode === 'clips' ? [STEPS[0], PLAN_STEP, ...STEPS.slice(1)] : STEPS;
+  const steps = mode === 'clips' ? [STEPS[0], PLAN_STEP, ...STEPS.slice(1)] : mode === 'longform' ? [STEPS[0], EDITOR_STEP, { id: 'brand' as StepId, label: 'Channel' }, ...STEPS.slice(2)] : STEPS;
+  const editor = useEditorStatus(step === 'editor' || (step === 'ai' && mode === 'longform'));
   const at = Math.max(0, steps.findIndex((s) => s.id === step));
   const next = (): void => setStep(steps[Math.min(steps.length - 1, at + 1)].id);
   const back = (): void => setStep(steps[Math.max(0, at - 1)].id);
@@ -229,6 +234,8 @@ export default function Wizard() {
     // The mode's own saved copy (Setup keeps one per mode), else its defaults.
     setBrand(drafts[m] ? { ...drafts[m]!, ...carry } : db.brand.setupDone && m === startMode ? { ...db.brand, ...carry } : brandFor(db, m, { ...brand, ...carry }));
     setMode(m);
+    // A long-form channel is a YouTube channel: YouTube starts picked.
+    if (m === 'longform') setSites((v) => new Set<Site>([...v, 'youtube']));
   };
 
   const saveBrand = async (): Promise<boolean> => {
@@ -284,7 +291,7 @@ export default function Wizard() {
       facebook: net('facebook', fbPage),
       threads: net('threads', thHandle),
       pinterest: net('pinterest', pinHandle),
-      goals: Object.fromEntries([...sites].map((s) => [s, mode === 'clips' ? 'grow' : goal])) as Partial<Record<Site, GoalId>>,
+      goals: Object.fromEntries([...sites].map((s) => [s, mode === 'clips' || mode === 'longform' ? 'grow' : goal])) as Partial<Record<Site, GoalId>>,
       pushProduct: goal === 'product' ? pushProduct : '',
       // A clip channel runs the clipping style only, on the streamers picked at the brand step.
       ...(mode === 'clips' ? { styles: ['clipping'], clipping } : {}),
@@ -301,7 +308,8 @@ export default function Wizard() {
 
   const finish = async (): Promise<void> => {
     setBusy(true);
-    if (accountId) await window.marketo.db.saveAccount({ id: accountId, targets });
+    // A long-form channel posts no Shorts unless a number was typed for them on this page.
+    if (accountId) await window.marketo.db.saveAccount({ id: accountId, targets: mode === 'longform' ? { youtube: 0, ...targets } : targets });
     const r = await window.marketo.brand.save({ ...brand, setupDone: true });
     setBusy(false);
     if (!r.ok) return toast('error', r.message ?? 'Could not save.');
@@ -319,7 +327,10 @@ export default function Wizard() {
   const st = browser.find((b) => b.accountId === accountId);
   const signedIn = (s: Site): boolean => (s === 'instagram' ? !!st?.loggedIn : s === 'youtube' ? !!st?.youtube?.loggedIn : !!st?.[s]?.loggedIn);
   const aiConnected = (mcp?.clients.length ?? 0) > 0 || clients.some((c) => c.connected) || !!(chat?.hasKey && db.agent.model);
-  const firstPrompt = `Read the Marketo playbook, then run get_today and do today's plan for ${brand.name || 'my brand'}.`;
+  const firstPrompt =
+    mode === 'longform'
+      ? `Run get_today in Marketo and work on the next long video for ${brand.name || 'my channel'}: pick it from the channel, make it in Krypt Editor, then upload it.`
+      : `Read the Marketo playbook, then run get_today and do today's plan for ${brand.name || 'my brand'}.`;
 
   const openSite = async (s: Site): Promise<void> => {
     if (!accountId) return;
@@ -352,8 +363,8 @@ export default function Wizard() {
         <VideoCard url={GUIDE_VIDEO_URL} thumb={GUIDE_VIDEO_THUMB} title="New here? Watch the guide first">
           Krypt walks through what Marketo does and how to set it up. Opens on YouTube in your browser.
         </VideoCard>
-        <div className="mt-6 text-xs font-semibold uppercase tracking-[0.18em] text-krypt-muted">What are you promoting?</div>
-        <div className="mt-3 grid gap-3 lg:grid-cols-3">
+        <div className="mt-6 text-xs font-semibold uppercase tracking-[0.18em] text-krypt-muted">What is it for?</div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <Choice on={mode === 'krypt'} onClick={() => pickMode('krypt')} icon={<Boxes className="h-4 w-4" />} title="Promote Krypt and get paid">
             {CREATOR_PITCH} Everything about every krypt.cc tool is already filled in, so this is the fastest start.
           </Choice>
@@ -363,7 +374,25 @@ export default function Wizard() {
           <Choice on={mode === 'clips'} onClick={() => pickMode('clips')} icon={<Scissors className="h-4 w-4" />} title="Clip streamers">
             A clip channel. Pick Twitch or Kick streamers, and every day their most-viewed clips become captioned videos that name the streamer.
           </Choice>
+          <Choice on={mode === 'longform'} onClick={() => pickMode('longform')} icon={<Clapperboard className="h-4 w-4" />} title="A long-form YouTube channel">
+            Full-length YouTube videos, made in Krypt Editor. Marketo picks what to make from your channel, writes the title, description and thumbnail, uploads it and answers the comments.
+          </Choice>
         </div>
+      </>
+    );
+  } else if (step === 'editor') {
+    if (editor.status && !editor.status.installed) warn = 'Krypt Editor is not on this computer yet. You can go on and install it later, but no long video can be made until it is installed and connected to your AI.';
+    else if (editor.status && !editor.status.connected.length) warn = 'Krypt Editor is not connected to an AI yet. You can go on, but your AI cannot make a video in it until it is.';
+    body = (
+      <>
+        <h1 className="text-2xl font-bold text-white">First, get Krypt Editor</h1>
+        <p className="mt-1 text-sm text-krypt-muted">
+          Long videos are made in Krypt Editor, Krypt's free video editor. Your AI builds the whole video in it from a script: the narration, the pictures, captions, chapters and the export. Marketo does the rest of the channel: it picks what to make, writes the title, description and thumbnail, uploads through YouTube Studio and answers the comments.
+        </p>
+        <div className="mt-5">
+          <EditorSetup status={editor.status} refresh={editor.refresh} />
+        </div>
+        <p className="mt-3 text-xs text-krypt-muted">You do not have to keep Krypt Editor open: your AI opens it when a video is due. Next you describe the channel.</p>
       </>
     );
   } else if (step === 'plan') {
@@ -415,12 +444,14 @@ export default function Wizard() {
     onNext = saveBrand;
     body = (
       <>
-        <h1 className="text-2xl font-bold text-white">{forKrypt ? 'Krypt, filled in for you' : mode === 'clips' ? 'Your clip channel' : 'Describe your brand'}</h1>
+        <h1 className="text-2xl font-bold text-white">{forKrypt ? 'Krypt, filled in for you' : mode === 'clips' ? 'Your clip channel' : mode === 'longform' ? 'Describe your channel' : 'Describe your brand'}</h1>
         <p className="mt-1 text-sm text-krypt-muted">
           {forKrypt
             ? 'Add where you get paid, and you are done here. The brand below is already set up; change it only if you want to.'
             : mode === 'clips'
               ? 'Add the streamers to clip and name the channel. The rest is filled in for a clip page; change it only if you want to.'
+              : mode === 'longform'
+                ? 'Your AI reads this before it picks and writes every video. The name and what the channel is about are enough to start; say the kind of video you want (explainers, documentaries, top lists, tutorials, stickman stories) and it is built that way.'
               : 'Your AI reads this before every video and post. Name and one sentence are enough to start; your AI can fill in the rest later.'}
         </p>
         {forKrypt && <CreatorCard className="mt-5" value={brand.creator} onChange={(c) => setBrand((b) => ({ ...b, creator: c }))} />}
@@ -434,7 +465,7 @@ export default function Wizard() {
           </Card>
         )}
         <Card className="mt-5 grid gap-3 md:grid-cols-2">
-          {FIELDS.map((x) => (
+          {fieldsFor(mode ?? 'own').map((x) => (
             <div key={x.key} className={x.long ? 'md:col-span-2' : ''}>
               <label className="label">
                 {x.label}
@@ -465,7 +496,8 @@ export default function Wizard() {
       </>
     );
   } else if (step === 'platforms') {
-    canNext = sites.size > 0;
+    const long = mode === 'longform';
+    canNext = long ? sites.has('youtube') : sites.size > 0;
     onNext = saveAccount;
     const ytOn = sites.has('youtube');
     const acct = accountId ? db.igAccounts.find((x) => x.id === accountId) : undefined;
@@ -479,8 +511,12 @@ export default function Wizard() {
     ].filter((f) => sites.has(f.s as Site)) as Array<{ s: Site; label: string; placeholder: string; value: string; set: (v: string) => void; mono?: boolean }>;
     body = (
       <>
-        <h1 className="text-2xl font-bold text-white">Where do you want to post?</h1>
-        <p className="mt-1 text-sm text-krypt-muted">Pick any. One is fine; you can add the others later on the Accounts page. Every platform keeps its own daily limits.</p>
+        <h1 className="text-2xl font-bold text-white">{long ? 'Your YouTube channel' : 'Where do you want to post?'}</h1>
+        <p className="mt-1 text-sm text-krypt-muted">
+          {long
+            ? 'YouTube is on: the long videos go up there. Pick the channel in the card below if your Google sign-in owns more than one. The other platforms are optional, for short videos; you can add them later on the Accounts page.'
+            : 'Pick any. One is fine; you can add the others later on the Accounts page. Every platform keeps its own daily limits.'}
+        </p>
         <div className="mt-5 grid gap-3 md:grid-cols-2">
           {SITES.map((s) => {
             const Icon = SITE_ICON[s];
@@ -497,9 +533,9 @@ export default function Wizard() {
                   })
                 }
                 icon={<Icon className="h-4 w-4" />}
-                title={SITE_LABEL[s]}
+                title={long && s === 'youtube' ? 'YouTube' : SITE_LABEL[s]}
               >
-                {SITE_ABOUT[s]}
+                {long && s === 'youtube' ? 'Your long videos, uploaded through YouTube Studio, and their comments. Shorts too if you set a number for them on the last step.' : SITE_ABOUT[s]}
                 {scan?.sites[s]?.signedIn && (
                   <span className="mt-1 block font-mono text-xs text-emerald-300">
                     {s === 'youtube' ? `Signed in${scan.sites.youtube?.channels?.length ? ` · ${scan.sites.youtube.channels.length} channels` : ''}` : scan.sites[s]?.handle ? `Signed in as @${scan.sites[s]!.handle}` : 'Signed in'}
@@ -641,7 +677,7 @@ export default function Wizard() {
             </div>
             {fresh && <p className="mt-1 text-[11px] text-krypt-muted">On a brand-new account the link in bio waits until about day 30; an early link can get it restricted.</p>}
           </div>
-          {mode !== 'clips' && (
+          {mode !== 'clips' && mode !== 'longform' && (
             <div className="space-y-2 md:col-span-2">
               <label className="label">Goal</label>
               <GoalButtons value={goal} onChange={setGoal} />
@@ -678,7 +714,7 @@ export default function Wizard() {
               <div key={s} className="flex items-center gap-3 px-4 py-3">
                 <Icon className="h-4 w-4 shrink-0 text-krypt-muted" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium text-white">{SITE_LABEL[s]}</div>
+                  <div className="text-sm font-medium text-white">{mode === 'longform' && s === 'youtube' ? 'YouTube' : SITE_LABEL[s]}</div>
                   <Status ok={ok}>{ok ? 'Signed in' : where === 'chrome' && st?.connected === false ? 'Chrome not connected yet' : `Not signed in yet (${SIGNIN_URL[s]})`}</Status>
                 </div>
                 <GhostButton small onClick={() => void openSite(s)}>
@@ -698,17 +734,11 @@ export default function Wizard() {
         <p className="mt-1 text-sm text-krypt-muted">Marketo is driven by the AI you already use. Connect adds Marketo to its settings; restart that app afterwards so it picks it up.</p>
         <Card padded={false} className="mt-5 divide-y divide-white/5">
           {[...clients]
-            .filter((c) => allApps || c.connected || c.detected || !clients.some((x) => x.connected || x.detected))
             .sort((a, b) => Number(b.connected) - Number(a.connected) || Number(b.detected) - Number(a.detected))
             .map((c) => (
               <ClientRow key={c.id} c={c} onChanged={refreshClients} />
             ))}
         </Card>
-        {!allApps && clients.some((c) => !c.connected && !c.detected) && clients.some((c) => c.connected || c.detected) && (
-          <button onClick={() => setAllApps(true)} className="mt-2 text-xs text-krypt-muted underline-offset-2 hover:text-white hover:underline">
-            Show AI apps not found on this computer
-          </button>
-        )}
         <Card className="mt-4 space-y-2">
           <div className="text-sm font-semibold text-white">How much of your AI plan to use</div>
           <p className="text-xs text-krypt-muted">For the scheduled runs (autopilot, last step). On a $20 plan like Claude Pro, pick Low: it is made to last the whole month. Change it any time under AI, Usage.</p>
@@ -728,6 +758,15 @@ export default function Wizard() {
               }
             />
           </Card>
+        )}
+        {mode === 'longform' && editor.status && (
+          <div className="mt-3">
+            <Status ok={editor.status.connected.length > 0}>
+              {editor.status.connected.length
+                ? `Krypt Editor is connected to ${editor.status.connected.join(', ')}. Your AI needs both: Marketo and Krypt Editor.`
+                : 'Krypt Editor is not connected to an AI yet: in Krypt Editor press AI agents (top right) and Connect, with the same AI as here.'}
+            </Status>
+          </div>
         )}
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <Status ok={aiConnected}>{(mcp?.clients.length ?? 0) > 0 ? `Talking to Marketo now: ${mcp!.clients.map((c) => c.name).join(', ')}` : aiConnected ? 'Connected. It shows up here once it makes its first call.' : 'No AI connected yet'}</Status>
@@ -774,14 +813,24 @@ export default function Wizard() {
     const picked = SITES.filter((s) => sites.has(s));
     body = (
       <>
-        <h1 className="text-2xl font-bold text-white">Daily rules</h1>
-        <p className="mt-1 text-sm text-krypt-muted">How much your AI aims to post each day. It stops at each platform's daily limit, and new accounts post less while they warm up. Those limits are recommended numbers: you can set your own on the Accounts page (Daily limits).</p>
+        <h1 className="text-2xl font-bold text-white">{mode === 'longform' ? 'The channel plan' : 'Daily rules'}</h1>
+        <p className="mt-1 text-sm text-krypt-muted">
+          {mode === 'longform'
+            ? 'How many long videos your AI makes, and how they go up. Change it any time under Create, Long videos. Below that, short videos a day, if you want any.'
+            : "How much your AI aims to post each day. It stops at each platform's daily limit, and new accounts post less while they warm up. Those limits are recommended numbers: you can set your own on the Accounts page (Daily limits)."}
+        </p>
+        {mode === 'longform' && (
+          <Card className="mt-5">
+            <div className="mb-3 text-sm font-semibold text-white">Long videos</div>
+            <LongformPlanFields />
+          </Card>
+        )}
         <Card className="mt-5 space-y-4">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             {picked.map((s) => (
               <div key={s}>
                 <label className="label">{SITE_LABEL[s]}</label>
-                <input type="number" min={0} className="input font-mono" value={targets[s] ?? DEFAULT_TARGETS[s]} onChange={(e) => setTargets((t) => ({ ...t, [s]: Math.max(0, Math.round(Number(e.target.value) || 0)) }))} />
+                <input type="number" min={0} className="input font-mono" value={targets[s] ?? (mode === 'longform' && s === 'youtube' ? 0 : DEFAULT_TARGETS[s])} onChange={(e) => setTargets((t) => ({ ...t, [s]: Math.max(0, Math.round(Number(e.target.value) || 0)) }))} />
                 <div className="mt-1 text-[11px] text-krypt-muted">posts a day</div>
               </div>
             ))}
@@ -798,12 +847,16 @@ export default function Wizard() {
               <Copy className="h-3.5 w-3.5" /> Copy
             </GhostButton>
           </div>
-          <p className="text-[11px] text-krypt-muted">It checks what is due on each platform, makes and posts the videos, warms up, and answers comments and messages. Run it once or a few times a day.</p>
+          <p className="text-[11px] text-krypt-muted">
+            {mode === 'longform'
+              ? 'It reads the channel, picks the next video, builds it in Krypt Editor, uploads it and answers the comments. A long video can take more than one sitting; it carries on where it stopped.'
+              : 'It checks what is due on each platform, makes and posts the videos, warms up, and answers comments and messages. Run it once or a few times a day.'}
+          </p>
         </Card>
         <Card className="mt-4 space-y-1">
-          <Toggle on={auto} onChange={(v) => (claudeReady ? setAuto(v) : toast('warn', 'Autopilot needs Claude Code installed and connected (the "Your AI" step).'))} label="Or let it run by itself: autopilot, 3 times a day with Claude Code" />
+          <Toggle on={auto} onChange={(v) => (claudeReady ? setAuto(v) : toast('warn', 'This switch needs Claude Code installed and connected (the "Your AI" step). With Codex, turn autopilot on from the Autopilot page after setup.'))} label="Or let it run by itself: autopilot, 3 times a day with Claude Code" />
           <p className="text-[11px] text-krypt-muted">
-            {claudeReady ? 'Your computer starts Claude Code at about 9:00, 15:00 and 21:00 to do the daily work. Keep the computer on. Change or stop it on the Autopilot page. Later, Create > Campaigns can get your posts paid per view (Content Rewards).' :'Needs Claude Code installed and connected to Marketo. You can turn it on later on the Autopilot page.'}
+            {claudeReady ? 'Your computer starts Claude Code at about 9:00, 15:00 and 21:00 to do the daily work. Keep the computer on. Change or stop it on the Autopilot page. Later, Create > Campaigns can get your posts paid per view (Content Rewards).' :'This switch needs Claude Code installed and connected to Marketo. With Codex (its command-line program), or later, turn it on from the Autopilot page.'}
           </p>
         </Card>
       </>

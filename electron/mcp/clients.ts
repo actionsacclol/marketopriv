@@ -34,14 +34,50 @@ interface ClientDef {
   /** Extra fields this client wants on a stdio entry. */
   extra?: Record<string, string>;
   /** A folder that exists when the app is installed. */
-  sign: string;
+  sign?: string;
+  /** More places the app can be installed to (any one existing counts). */
+  signs?: () => string[];
+  /** The name the bridge reports for it, when it shares another app's settings file. */
+  client?: string;
   hint: string;
 }
 
+/** Folders in `dir` whose name starts with `prefix` (Store apps live in Packages\<name>_<publisher id>). */
+function dirsStarting(dir: string, prefix: string): string[] {
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && d.name.toLowerCase().startsWith(prefix.toLowerCase()))
+      .map((d) => path.join(dir, d.name));
+  } catch {
+    return [];
+  }
+}
+const localAppData = (): string => process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local');
+
+/**
+ * Claude Desktop from the Microsoft Store (or its newer installer) keeps its settings inside its own package folder,
+ * not in %APPDATA%\Claude: a file written only to the usual place is never read by it.
+ */
+const claudeStoreDirs = (): string[] => (process.platform === 'win32' ? dirsStarting(path.join(localAppData(), 'Packages'), 'Claude_').map((d) => path.join(d, 'LocalCache', 'Roaming', 'Claude')).filter((d) => fs.existsSync(d)) : []);
+
+/** Where the ChatGPT desktop app is installed. */
+const chatgptDirs = (): string[] =>
+  process.platform === 'win32'
+    ? [...dirsStarting(path.join(localAppData(), 'Packages'), 'OpenAI.ChatGPT'), path.join(localAppData(), 'Programs', 'ChatGPT')]
+    : process.platform === 'darwin'
+      ? ['/Applications/ChatGPT.app', path.join(home, 'Applications', 'ChatGPT.app')]
+      : [];
+
+/** Claude Code's own settings file (its user-level MCP servers live under "mcpServers"). */
+const claudeCodeFile = (): string => path.join(process.env.CLAUDE_CONFIG_DIR?.trim() || home, '.claude.json');
+
 const CLIENTS: ClientDef[] = [
-  { id: 'claude-code', name: 'Claude Code', kind: 'claude-cli', file: path.join(home, '.claude.json'), sign: path.join(home, '.claude'), hint: 'Start a new Claude Code session (or run /mcp).' },
-  { id: 'claude-desktop', name: 'Claude Desktop', kind: 'json', key: 'mcpServers', file: appConfig('Claude', 'claude_desktop_config.json'), sign: appConfig('Claude'), hint: 'Quit Claude Desktop completely and open it again.' },
+  { id: 'claude-code', name: 'Claude Code', kind: 'claude-cli', file: claudeCodeFile(), sign: path.join(home, '.claude'), hint: 'Start a new Claude Code session (or run /mcp).' },
+  { id: 'claude-desktop', name: 'Claude Desktop', kind: 'json', key: 'mcpServers', file: appConfig('Claude', 'claude_desktop_config.json'), sign: appConfig('Claude'), signs: claudeStoreDirs, hint: 'Quit Claude Desktop completely (also from the tray) and open it again.' },
   { id: 'codex', name: 'Codex', kind: 'toml', file: path.join(home, '.codex', 'config.toml'), sign: path.join(home, '.codex'), hint: 'Start a new Codex session.' },
+  // The ChatGPT desktop app reads the same settings file as Codex (OpenAI: they "share this configuration").
+  { id: 'chatgpt', name: 'ChatGPT desktop', kind: 'toml', client: 'codex', file: path.join(home, '.codex', 'config.toml'), signs: chatgptDirs, hint: 'In ChatGPT: Settings > MCP servers should list "marketo"; press Restart there. It shares these settings with Codex.' },
   { id: 'cursor', name: 'Cursor', kind: 'json', key: 'mcpServers', file: path.join(home, '.cursor', 'mcp.json'), sign: path.join(home, '.cursor'), hint: 'In Cursor: Settings > MCP, check that "marketo" is on, then start a new chat.' },
   { id: 'windsurf', name: 'Windsurf', kind: 'json', key: 'mcpServers', file: path.join(home, '.codeium', 'windsurf', 'mcp_config.json'), sign: path.join(home, '.codeium', 'windsurf'), hint: 'In Windsurf: open the MCP panel and press Refresh.' },
   { id: 'gemini-cli', name: 'Gemini CLI', kind: 'json', key: 'mcpServers', file: path.join(home, '.gemini', 'settings.json'), sign: path.join(home, '.gemini'), hint: 'Start a new Gemini CLI session (/mcp lists it).' },
@@ -83,16 +119,38 @@ function runClaude(bin: string, args: string[]): Promise<{ ok: boolean; out: str
   });
 }
 
+/** Claude Code is on this computer in some form (its folder or settings file exists), even when its program was not found. */
+const claudeCodeHere = (): boolean => fs.existsSync(path.join(home, '.claude')) || fs.existsSync(claudeCodeFile());
+
+/**
+ * The same entry `claude mcp add --scope user` writes, put into Claude Code's settings file directly. For when its
+ * program can't be found or run from here (installed somewhere unusual, or only inside the Claude desktop app).
+ */
+function connectClaudeFile(exe: string, shim: string): ActionResult {
+  const file = claudeCodeFile();
+  const cfg = readJson(file);
+  if (!cfg) return { ok: false, message: `${file} couldn't be read, so it was left alone. Run this in a terminal instead: ${installCommand(exe, shim)}` };
+  const servers = cfg.mcpServers && typeof cfg.mcpServers === 'object' ? (cfg.mcpServers as Record<string, unknown>) : {};
+  cfg.mcpServers = { ...servers, [SERVER_NAME]: { type: 'stdio', ...entryFor(exe, shim, 'claude-code') } };
+  writeWithBackup(file, `${JSON.stringify(cfg, null, 2)}\n`);
+  return { ok: true, message: 'Connected Claude Code. Close it and start a new session (or run /mcp) so it picks Marketo up.' };
+}
+
 async function connectClaudeCode(exe: string, shim: string): Promise<ActionResult> {
   const bin = await findClaude();
-  if (!bin) return { ok: false, message: `The Claude Code CLI wasn't found. Run this in a terminal: ${installCommand(exe, shim)}` };
-  let r = await runClaude(bin, claudeArgs(exe, shim));
-  if (!r.ok && /already exists/i.test(r.out)) {
-    await runClaude(bin, ['mcp', 'remove', '--scope', 'user', SERVER_NAME]);
-    r = await runClaude(bin, claudeArgs(exe, shim));
+  if (bin) {
+    let r = await runClaude(bin, claudeArgs(exe, shim));
+    if (!r.ok && /already exists/i.test(r.out)) {
+      await runClaude(bin, ['mcp', 'remove', '--scope', 'user', SERVER_NAME]);
+      r = await runClaude(bin, claudeArgs(exe, shim));
+    }
+    if (r.ok) return { ok: true, message: 'Connected Claude Code. Start a new Claude Code session (or run /mcp).' };
+    // Its own command failed: write the same entry ourselves, and say why only if that fails too.
+    const viaFile = connectClaudeFile(exe, shim);
+    return viaFile.ok ? viaFile : { ok: false, message: `claude mcp add failed: ${r.out.slice(0, 300)}` };
   }
-  if (!r.ok) return { ok: false, message: `claude mcp add failed: ${r.out.slice(0, 300)}` };
-  return { ok: true, message: 'Connected Claude Code. Start a new Claude Code session (or run /mcp).' };
+  if (!claudeCodeHere()) return { ok: false, message: 'Claude Code was not found on this computer. Install it (claude.com/claude-code), open it once and sign in, then press Connect again.' };
+  return connectClaudeFile(exe, shim);
 }
 
 // ── Config files ───────────────────────────────────────────────────────────
@@ -126,22 +184,43 @@ function readJson(file: string): Record<string, unknown> | null {
 
 const jsonBlock = (c: ClientDef, e: Entry): string => JSON.stringify({ [c.key!]: { [SERVER_NAME]: { ...(c.extra ?? {}), ...e } } }, null, 2);
 
+/**
+ * The settings files to write for an app. Claude Desktop from the Store reads the copy inside its package folder, so
+ * that one is written (and the usual one too when its folder is there: an older install may still read it).
+ */
+function filesOf(c: ClientDef): string[] {
+  if (c.id !== 'claude-desktop') return [c.file];
+  const store = claudeStoreDirs().map((d) => path.join(d, path.basename(c.file)));
+  return store.length ? [...store, ...(fs.existsSync(path.dirname(c.file)) ? [c.file] : [])] : [c.file];
+}
+
 function connectJson(c: ClientDef, e: Entry): ActionResult {
-  const cfg = readJson(c.file);
-  if (!cfg) return { ok: false, message: `${c.file} couldn't be read as JSON (it may have comments), so it was left alone. Add this to it by hand:\n${jsonBlock(c, e)}` };
-  const servers = cfg[c.key!] && typeof cfg[c.key!] === 'object' ? (cfg[c.key!] as Record<string, unknown>) : {};
-  cfg[c.key!] = { ...servers, [SERVER_NAME]: { ...(c.extra ?? {}), ...e } };
-  writeWithBackup(c.file, `${JSON.stringify(cfg, null, 2)}\n`);
+  let wrote = 0;
+  let bad = '';
+  for (const file of filesOf(c)) {
+    const cfg = readJson(file);
+    if (!cfg) {
+      bad = file;
+      continue;
+    }
+    const servers = cfg[c.key!] && typeof cfg[c.key!] === 'object' ? (cfg[c.key!] as Record<string, unknown>) : {};
+    cfg[c.key!] = { ...servers, [SERVER_NAME]: { ...(c.extra ?? {}), ...e } };
+    writeWithBackup(file, `${JSON.stringify(cfg, null, 2)}\n`);
+    wrote++;
+  }
+  if (!wrote) return { ok: false, message: `${bad || c.file} couldn't be read as JSON (it may have comments), so it was left alone. Add this to it by hand:\n${jsonBlock(c, e)}` };
   return { ok: true, message: `Connected ${c.name}. ${c.hint}` };
 }
 
-function disconnectJson(c: ClientDef): ActionResult {
-  const cfg = readJson(c.file);
-  if (!cfg) return { ok: false, message: `${c.file} couldn't be read as JSON. Remove the "${SERVER_NAME}" entry by hand.` };
-  const servers = cfg[c.key!] as Record<string, unknown> | undefined;
-  if (servers && typeof servers === 'object' && SERVER_NAME in servers) {
-    delete servers[SERVER_NAME];
-    writeWithBackup(c.file, `${JSON.stringify(cfg, null, 2)}\n`);
+function disconnectJson(c: ClientDef, key = c.key!): ActionResult {
+  for (const file of filesOf(c)) {
+    const cfg = readJson(file);
+    if (!cfg) return { ok: false, message: `${file} couldn't be read as JSON. Remove the "${SERVER_NAME}" entry by hand.` };
+    const servers = cfg[key] as Record<string, unknown> | undefined;
+    if (servers && typeof servers === 'object' && SERVER_NAME in servers) {
+      delete servers[SERVER_NAME];
+      writeWithBackup(file, `${JSON.stringify(cfg, null, 2)}\n`);
+    }
   }
   return { ok: true, message: `Removed from ${c.name}.` };
 }
@@ -170,14 +249,43 @@ function connectToml(c: ClientDef, e: Entry): ActionResult {
 
 function isConnected(c: ClientDef): boolean {
   if (c.kind === 'toml') return (readText(c.file) ?? '').split(/\r?\n/).some((l) => TOML_HEAD.test(l));
-  const cfg = readJson(c.file);
-  const servers = cfg?.[c.kind === 'claude-cli' ? 'mcpServers' : c.key!] as Record<string, unknown> | undefined;
-  return !!servers && typeof servers === 'object' && SERVER_NAME in servers;
+  return filesOf(c).some((file) => {
+    const servers = readJson(file)?.[c.kind === 'claude-cli' ? 'mcpServers' : c.key!] as Record<string, unknown> | undefined;
+    return !!servers && typeof servers === 'object' && SERVER_NAME in servers;
+  });
+}
+
+/** The AI apps whose settings hold a server of this name (Krypt Editor's, say), one name per settings file. */
+export function clientsWith(name: string): string[] {
+  const esc = name.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+  const head = new RegExp(`^\\s*\\[\\s*mcp_servers\\.(?:"${esc}"|${esc})(\\.[^\\]]+)?\\s*\\]`);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const c of CLIENTS) {
+    const has =
+      c.kind === 'toml'
+        ? (readText(c.file) ?? '').split(/\r?\n/).some((l) => head.test(l))
+        : filesOf(c).some((file) => {
+            const servers = readJson(file)?.[c.kind === 'claude-cli' ? 'mcpServers' : c.key!] as Record<string, unknown> | undefined;
+            return !!servers && typeof servers === 'object' && name in servers;
+          });
+    if (!has || seen.has(c.file)) continue;
+    seen.add(c.file);
+    out.push(c.name);
+  }
+  return out;
+}
+
+/** A server's own entry in Claude Code's settings (how that app starts it), when it is there. */
+export function claudeServer(name: string): { command: string; args: string[] } | null {
+  const c = CLIENTS.find((x) => x.kind === 'claude-cli');
+  const e = (c && (readJson(c.file)?.mcpServers as Record<string, { command?: unknown; args?: unknown }> | undefined))?.[name];
+  return e && typeof e.command === 'string' && Array.isArray(e.args) ? { command: e.command, args: e.args.map(String) } : null;
 }
 
 // ── Public ─────────────────────────────────────────────────────────────────
 export function listClients(_exe: string, _shim: string | null): ClientInfo[] {
-  return CLIENTS.map((c) => ({ id: c.id, name: c.name, configPath: c.file, detected: fs.existsSync(c.sign), connected: isConnected(c), hint: c.hint }));
+  return CLIENTS.map((c) => ({ id: c.id, name: c.name, configPath: filesOf(c)[0], detected: (!!c.sign && fs.existsSync(c.sign)) || !!c.signs?.().some((d) => fs.existsSync(d)), connected: isConnected(c), hint: c.hint }));
 }
 
 export async function connectClient(id: string, exe: string, shim: string | null): Promise<ActionResult> {
@@ -186,7 +294,7 @@ export async function connectClient(id: string, exe: string, shim: string | null
   if (!shim) return { ok: false, message: MISSING };
   try {
     if (c.kind === 'claude-cli') return await connectClaudeCode(exe, shim);
-    const e = entryFor(exe, shim, c.id);
+    const e = entryFor(exe, shim, c.client ?? c.id);
     return c.kind === 'toml' ? connectToml(c, e) : connectJson(c, e);
   } catch (e) {
     return { ok: false, message: `Couldn't update ${c.file}: ${(e as Error).message}` };
@@ -199,9 +307,10 @@ export async function disconnectClient(id: string): Promise<ActionResult> {
   try {
     if (c.kind === 'claude-cli') {
       const bin = await findClaude();
-      if (!bin) return { ok: false, message: 'The Claude Code CLI wasn\'t found. Run: claude mcp remove --scope user marketo' };
-      const r = await runClaude(bin, ['mcp', 'remove', '--scope', 'user', SERVER_NAME]);
-      return r.ok ? { ok: true, message: 'Removed from Claude Code.' } : { ok: false, message: r.out.slice(0, 300) };
+      const r = bin ? await runClaude(bin, ['mcp', 'remove', '--scope', 'user', SERVER_NAME]) : { ok: false, out: '' };
+      if (r.ok && !isConnected(c)) return { ok: true, message: 'Removed from Claude Code.' };
+      // Its program was not found, failed, or left the entry: take the entry out of its settings file ourselves.
+      return disconnectJson(c, 'mcpServers');
     }
     if (c.kind === 'toml') {
       const text = readText(c.file);

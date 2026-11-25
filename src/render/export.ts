@@ -1,7 +1,7 @@
 import { perfNow } from '../lib/perf';
 import { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, QUALITY_HIGH, QUALITY_MEDIUM } from 'mediabunny';
-import { clipSound, isVoiced, num, storyBeats, storyVideoTime, storyVoiceTrack, str, timingFor } from '@shared/presets';
-import type { Reel, RenderShape } from '@shared/types';
+import { clipSound, contentBand, isVoiced, num, storyBeats, storyVideoTime, storyVoiceTrack, str, timingFor } from '@shared/presets';
+import { SHAPE_SIZE, type Reel, type RenderShape, type StillShape } from '@shared/types';
 import { H, W, drawReel, loadBanner, loadFonts, loadLogo, preloadImages } from './engine';
 import { bannerOf } from '@shared/campaigns';
 import { useApp } from '../state/store';
@@ -44,7 +44,7 @@ async function bannerFor(reel: Reel): Promise<{ path: string; img: HTMLImageElem
 
 /** The source second to show at reel time t (null = no video in this frame). */
 function sourceTime(reel: Reel, t: number, beats: ReturnType<typeof storyBeats> | null, duration = 0): number | null {
-  if (isVoiced(reel.preset)) return beats ? storyVideoTime(reel.fields, t, beats, duration) : null;
+  if (isVoiced(reel.preset)) return beats ? storyVideoTime(reel.fields, t, beats, duration, reel.preset === 'slides') : null;
   return num(reel.fields, 'start', 0) + Math.min(t, num(reel.fields, 'seconds', 12));
 }
 
@@ -63,7 +63,7 @@ export async function renderMp4(reel: Reel, opts: RenderOpts): Promise<{ data: U
   canvas.height = H;
   const ctx = canvas.getContext('2d', { alpha: false })!;
   // Square: each vertical frame is drawn, then its content band is placed on a square canvas (see squareFrame).
-  const square = opts.shape === 'square' ? squareCompositor(canvas) : null;
+  const square = opts.shape === 'square' ? shapeCompositor(canvas, 'square', reel.preset) : null;
   const encoded = square ? square.canvas : canvas;
 
   const music = str(reel.fields, 'music');
@@ -140,47 +140,53 @@ export async function renderMp4(reel: Reel, opts: RenderOpts): Promise<{ data: U
   return { data: new Uint8Array(buf), seconds: total, bannerPath };
 }
 
-// ── Square (X) ────────────────────────────────────────────────────────────
-/** Every preset keeps its text inside this band of the 1080x1920 frame (Instagram's own buttons cover the rest). */
-const BAND_TOP = 220;
-const BAND_BOTTOM = 1680;
-const SQ = 1080;
-
-/** Draws the vertical frame's content band, scaled to the square's height and centred, over a blurred, dimmed fill of the same frame. Nothing is cut. */
-export function squareCompositor(src: HTMLCanvasElement): { canvas: HTMLCanvasElement; draw: () => void } {
+// ── Other shapes (square for X, 4:5 and 2:3 pictures) ─────────────────────
+/**
+ * The vertical frame as another shape. Every preset keeps its content inside a band of the 1080x1920 frame (the
+ * platforms' own buttons cover the rest; shared/presets.ts contentBand). A shape at least as tall as the band is cut
+ * straight out of the frame around it; a shorter one gets the band scaled to its height and centred over a blurred,
+ * dimmed fill of the same frame. Nothing of the content is cut either way.
+ */
+export function shapeCompositor(src: HTMLCanvasElement, shape: Exclude<StillShape, 'vertical'>, preset: string): { canvas: HTMLCanvasElement; draw: () => void } {
+  const out = SHAPE_SIZE[shape];
+  const band = contentBand(preset);
   const canvas = document.createElement('canvas');
-  canvas.width = SQ;
-  canvas.height = SQ;
+  canvas.width = out.w;
+  canvas.height = out.h;
   const ctx = canvas.getContext('2d', { alpha: false })!;
+  const bandH = band.bottom - band.top;
+  if (out.h >= bandH) {
+    const top = Math.round(Math.min(H - out.h, Math.max(0, (band.top + band.bottom) / 2 - out.h / 2)));
+    return { canvas, draw: () => ctx.drawImage(src, 0, top, W, out.h, 0, 0, out.w, out.h) };
+  }
   // The fill: the frame shrunk to a few pixels and stretched back up, which blurs it cheaply.
   const tiny = document.createElement('canvas');
   tiny.width = 27;
   tiny.height = 27;
   const tctx = tiny.getContext('2d')!;
-  const bandH = BAND_BOTTOM - BAND_TOP;
-  const scale = SQ / bandH;
+  const scale = out.h / bandH;
   const w = Math.round(W * scale);
-  const x = Math.round((SQ - w) / 2);
+  const x = Math.round((out.w - w) / 2);
   return {
     canvas,
     draw() {
-      tctx.drawImage(src, 0, BAND_TOP, W, bandH, 0, 0, tiny.width, tiny.height);
+      tctx.drawImage(src, 0, band.top, W, bandH, 0, 0, tiny.width, tiny.height);
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(tiny, 0, 0, SQ, SQ);
+      ctx.drawImage(tiny, 0, 0, out.w, out.h);
       ctx.fillStyle = 'rgba(0,0,0,0.22)';
-      ctx.fillRect(0, 0, SQ, SQ);
+      ctx.fillRect(0, 0, out.w, out.h);
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.35)';
       ctx.shadowBlur = 40;
-      ctx.drawImage(src, 0, BAND_TOP, W, bandH, x, 0, w, SQ);
+      ctx.drawImage(src, 0, band.top, W, bandH, x, 0, w, out.h);
       ctx.restore();
     },
   };
 }
 
-/** Still frames as base64 PNGs (scaled). Default times: opening frame, two body beats, end card. */
-export async function renderStills(reel: Reel, times: number[] | undefined, scale: number, shape?: RenderShape): Promise<Array<{ t: number; data: string }>> {
+/** Still frames as base64 images (scaled; PNG, or JPEG for full-size slides). Default times: opening frame, two body beats, end card. */
+export async function renderStills(reel: Reel, times: number[] | undefined, scale: number, shape?: StillShape, jpeg = false): Promise<Array<{ t: number; data: string }>> {
   const timing = timingFor(reel.preset, reel.fields);
   const ts = (times?.length ? times : defaultTimes(timing.body, timing.cta)).map((t) => Math.max(0, Math.min(t, timing.total - 0.01)));
   await loadFonts();
@@ -191,7 +197,7 @@ export async function renderStills(reel: Reel, times: number[] | undefined, scal
   full.width = W;
   full.height = H;
   const ctx = full.getContext('2d', { alpha: false })!;
-  const sq = shape === 'square' ? squareCompositor(full) : null;
+  const sq = shape && shape !== 'vertical' ? shapeCompositor(full, shape, reel.preset) : null;
   const shown = sq ? sq.canvas : full;
   const small = document.createElement('canvas');
   small.width = Math.round(shown.width * scale);
@@ -207,7 +213,7 @@ export async function renderStills(reel: Reel, times: number[] | undefined, scal
       drawReel(ctx, { preset: reel.preset, fields: reel.fields, t, frame: Math.round(t * 30), logo, banner, video: frame, videoSize: src?.size ?? null });
       sq?.draw();
       sctx.drawImage(shown, 0, 0, small.width, small.height);
-      out.push({ t, data: small.toDataURL('image/png').split(',')[1] });
+      out.push({ t, data: (jpeg ? small.toDataURL('image/jpeg', 0.93) : small.toDataURL('image/png')).split(',')[1] });
     }
   } finally {
     src?.dispose();

@@ -9,3 +9,6 @@ import './story';
 import './narrated';
 import './meme';
 import './stickman';
+import './slides';
+import './duo';
+import './blox';

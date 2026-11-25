@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { ArrowDown, ArrowUp, Code2, Copy, Play, Plus, Trash2, VolumeX } from 'lucide-react';
-import { parseFx } from '@shared/presets';
+import { SLIDE_FLAG, parseFx } from '@shared/presets';
 import { STICK_FLAG, STICK_POSES } from '@shared/stickman';
+import { DUO_FLAG } from '@shared/duo';
+import { BLOX_FLAG, BLOX_MOVES } from '@shared/blox';
 import { cls } from '../lib/format';
 
 // Story beats as cards: one card per beat instead of the raw
@@ -63,12 +65,29 @@ const MEME_VISUALS: Visual[] = [
 ];
 /** Stickman beats: a pose (or "poseA/poseB" for two figures), a big word and props. */
 const STICK_VISUALS: Visual[] = STICK_POSES.map((p) => ({ id: p, name: p, a: 'Big word', b: 'Props', aHint: 'FREE', bHint: 'desk;laptop=12.5;B:phone;sign=FREE' }));
-const visualsFor = (preset: string): Visual[] => (preset === 'narrated' ? NARRATED_VISUALS : preset === 'meme' ? MEME_VISUALS : preset === 'stickman' ? STICK_VISUALS : VISUALS);
+/** Blocky-avatar beats: a move (or "moveA/moveB" for two avatars), a big word and props. */
+const BLOX_VISUALS: Visual[] = BLOX_MOVES.map((p) => ({ id: p, name: p, a: 'Big word', b: 'Props', aHint: 'BRO?', bHint: 'sign=FREE;B:bubble=no way;screen=12.5' }));
+/** Slideshow slides: words, a picture, a frame of the screen recording, or the closing slide. */
+const SLIDE_VISUALS: Visual[] = [
+  { id: 'text', name: 'Words', a: 'Small line above', b: 'Text under the title', aHint: 'STEP 1', bHint: 'First part / second part' },
+  { id: 'image', name: 'Picture', a: 'Picture file', b: 'Text under it', aHint: 'C:\\...\\shot.png @0.5,0.3 x2' },
+  { id: 'photo', name: 'Photo with text on it', a: 'Picture file', b: 'Smaller line', aHint: 'C:\\...\\Images\\beach.jpg' },
+  { id: 'screen', name: 'Recording frame', a: 'Second', b: 'Text under it', aHint: '12.5 @0.5,0.3 x2' },
+  { id: 'end', name: 'Closing slide', a: 'Button word', b: 'Line under it', aHint: 'Save it' },
+];
+/** Ask reels: a chip in the cold open, a story diagram on the board, the closing card. */
+const DUO_VISUALS: Visual[] = [
+  { id: 'none', name: 'Keep the board as it is', a: '', b: '' },
+  { id: 'chip', name: 'Corner chip (cold open)', a: 'Big word or number', b: 'Small tag', aHint: '$1,080', bHint: 'PER CLIP' },
+  ...VISUALS.filter((v) => !['none', 'cta', 'tier', 'chat', 'crosshair', 'radar', 'wallets'].includes(v.id)),
+  { id: 'end', name: 'Closing card', a: 'Next step', b: 'Small line', aHint: 'Follow for *part two*' },
+];
+const visualsFor = (preset: string): Visual[] => (preset === 'duo' ? DUO_VISUALS : preset === 'narrated' ? NARRATED_VISUALS : preset === 'meme' ? MEME_VISUALS : preset === 'stickman' ? STICK_VISUALS : preset === 'blox' ? BLOX_VISUALS : preset === 'slides' ? SLIDE_VISUALS : VISUALS);
 
 /** Flag tokens (spaces between them; commas too, except inside an effect's point like zoom=0.5,0.3). */
 const tokens = (s: string): string[] => s.split(/\s+/).flatMap((t) => (/=\d*\.?\d+,\d/.test(t) ? [t] : t.split(','))).filter(Boolean);
 const KNOWN = /^(?:light|dark|wipe|pause=[\d.]+|speed=[\d.]+|top|impact|over)$/i;
-const onlyFlags = (s: string): boolean => tokens(s).length > 0 && tokens(s).every((t) => KNOWN.test(t) || STICK_FLAG.test(t.toLowerCase()) || !!parseFx(t));
+const onlyFlags = (s: string): boolean => tokens(s).length > 0 && tokens(s).every((t) => KNOWN.test(t) || STICK_FLAG.test(t.toLowerCase()) || SLIDE_FLAG.test(t.toLowerCase()) || DUO_FLAG.test(t.toLowerCase()) || BLOX_FLAG.test(t.toLowerCase()) || !!parseFx(t));
 
 const clean = (v: string): string => v.replace(/\|/g, '/').replace(/\n/g, ' ');
 
@@ -111,13 +130,14 @@ function serialize(beats: Beat[]): string {
     .join('\n');
 }
 
-const blankFor = (preset: string): Beat => ({ secs: preset === 'story' ? '3' : '1', headline: preset === 'story' ? 'New beat' : 'New line', visual: preset === 'narrated' ? 'none' : preset === 'meme' ? 'image' : preset === 'stickman' ? 'talk' : 'title', a: '', b: '', say: '', theme: '', wipe: false, pause: '', speed: '', extra: '' });
+const blankFor = (preset: string): Beat => ({ secs: preset === 'story' ? '3' : preset === 'slides' ? '3.5' : '1', headline: preset === 'story' ? 'New beat' : preset === 'slides' ? 'New slide' : 'New line', visual: preset === 'narrated' || preset === 'duo' ? 'none' : preset === 'meme' ? 'image' : preset === 'stickman' || preset === 'blox' ? 'talk' : preset === 'slides' ? 'text' : 'title', a: '', b: '', say: '', theme: '', wipe: false, pause: '', speed: '', extra: '' });
 
 export function BeatEditor({ value, onChange, starts, onSeek, help, preset = 'story' }: { value: string; onChange: (v: string) => void; starts: number[]; onSeek: (t: number) => void; help?: string; preset?: string }) {
   const visuals = visualsFor(preset);
-  const stick = preset === 'stickman';
-  // Stickman poses are typed (two figures: "think/type"), so any text is kept as written.
-  const visualOf = (id: string): Visual => (stick ? { ...STICK_VISUALS[0], id, name: id || 'idle' } : (visuals.find((v) => v.id === id) ?? visuals[visuals.length - 1]));
+  const blox = preset === 'blox';
+  const stick = preset === 'stickman' || blox;
+  // Stickman poses and avatar moves are typed (two figures: "think/type"), so any text is kept as written.
+  const visualOf = (id: string): Visual => (stick ? { ...(blox ? BLOX_VISUALS : STICK_VISUALS)[0], id, name: id || 'idle' } : (visuals.find((v) => v.id === id) ?? visuals[visuals.length - 1]));
   const BLANK = blankFor(preset);
   const [raw, setRaw] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
@@ -202,12 +222,12 @@ export function BeatEditor({ value, onChange, starts, onSeek, help, preset = 'st
                 </div>
                 <div className="grid grid-cols-[1fr_88px] gap-2">
                   <div>
-                    <label className="label">{stick ? 'Pose (two figures: think/type)' : 'Visual'}</label>
+                    <label className="label">{blox ? 'Move (two avatars: sad/dance)' : stick ? 'Pose (two figures: think/type)' : 'Visual'}</label>
                     {stick ? (
                       <>
                         <input className="input font-mono text-xs" list="stick-poses" value={b.visual} onChange={(e) => edit(i, { visual: e.target.value.toLowerCase() })} />
                         <datalist id="stick-poses">
-                          {STICK_POSES.map((p) => (
+                          {(blox ? BLOX_MOVES : STICK_POSES).map((p) => (
                             <option key={p} value={p} />
                           ))}
                         </datalist>

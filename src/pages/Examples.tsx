@@ -5,11 +5,12 @@ import { presetById } from '@shared/presets';
 import { Page, PrimaryButton } from '../components/ui';
 import { useApp } from '../state/store';
 import { cls } from '../lib/format';
+import { SlidePreview } from '../components/SlidePreview';
 
 // Create > Examples: one finished video per style. Hover to play, click for
 // sound, "Make one like this" starts a reel in Studio from the same style.
 
-function ExampleCard({ ex, dir, have }: { ex: Example; dir: string; have: boolean }) {
+function ExampleCard({ ex, dir, have, slides }: { ex: Example; dir: string; have: boolean; slides: number }) {
   const toast = useApp((s) => s.toast);
   const go = useApp((s) => s.go);
   const video = useRef<HTMLVideoElement>(null);
@@ -65,7 +66,9 @@ function ExampleCard({ ex, dir, have }: { ex: Example; dir: string; have: boolea
   return (
     <div className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
       <div className="relative aspect-[9/16] bg-black" onMouseEnter={start} onMouseLeave={stop}>
-        {have ? (
+        {slides ? (
+          <SlidePreview urls={Array.from({ length: slides }, (_, k) => window.marketo.app.mediaUrl(`${dir}\\${ex.id}-${k + 1}.jpg`))} />
+        ) : have ? (
           <>
             <video data-example ref={video} src={file('mp4')} poster={file('jpg')} muted loop playsInline preload="metadata" className="h-full w-full cursor-pointer object-cover" onClick={toggleSound} />
             <button aria-label={sound ? 'Mute' : 'Play with sound'} onClick={toggleSound} className="absolute bottom-3 right-3 flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/60 text-white backdrop-blur hover:bg-black/80">
@@ -98,14 +101,14 @@ function ExampleCard({ ex, dir, have }: { ex: Example; dir: string; have: boolea
 }
 
 export default function Examples() {
-  const [info, setInfo] = useState<{ dir: string; have: string[] } | null>(null);
+  const [info, setInfo] = useState<{ dir: string; have: string[]; slides?: Record<string, number> } | null>(null);
   useEffect(() => void window.marketo.app.examples().then(setInfo), []);
   return (
     <Page title="Examples" subtitle="One video of every style. Hover to play, click for sound. Your AI can make any of them: just name the style.">
       {info && (
         <div className={cls('grid gap-5', 'grid-cols-[repeat(auto-fill,minmax(230px,1fr))]')}>
           {EXAMPLES.map((ex) => (
-            <ExampleCard key={ex.id} ex={ex} dir={info.dir} have={info.have.includes(ex.id)} />
+            <ExampleCard key={ex.id} ex={ex} dir={info.dir} have={info.have.includes(ex.id)} slides={info.slides?.[ex.id] ?? 0} />
           ))}
         </div>
       )}

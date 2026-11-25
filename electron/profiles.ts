@@ -22,6 +22,8 @@ interface Entry {
   autopilot?: boolean;
   /** Multi-instance mode: runs in the background (no window) whenever Main is open or a run needs it. */
   background?: boolean;
+  /** The Chrome profile it was made for (Multi run > Chrome profiles): its accounts start out in that one. */
+  chromeDir?: string;
 }
 
 interface State {
@@ -136,6 +138,7 @@ export function list(): ProfileInfo[] {
       active: p.id === activeId(),
       autopilot: !!p.autopilot,
       ...(p.background && p.id !== MAIN ? { background: true } : {}),
+      ...(p.chromeDir ? { chromeDir: p.chromeDir } : {}),
       ...(instance.MULTI ? { running: !!run, ...(run ? { visible: run.visible !== false } : {}) } : {}),
     };
   });
@@ -184,6 +187,29 @@ export function rename(id: string, name: string): ProfileInfo {
     if (q) q.name = n;
   });
   return find(p.id);
+}
+
+/** Tie a profile to a Chrome profile ('' = to none). */
+export function setChromeDir(id: string, chromeDir: string): ProfileInfo {
+  const p = entry(id);
+  if (chromeDir && !/^(Default|Profile \d{1,4})$/.test(chromeDir)) throw new Error('That is not a Chrome profile.');
+  change(() => {
+    const q = state.list.find((x) => x.id === p.id);
+    if (!q) return;
+    if (chromeDir) q.chromeDir = chromeDir;
+    else delete q.chromeDir;
+  });
+  return find(p.id);
+}
+
+/** A free profile name close to the one asked for ("Work", "Work 2", ...), short enough to be one. */
+export function freeName(want: string): string {
+  fresh();
+  const base = want.replace(/[\x00-\x1f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 36) || 'Chrome profile';
+  const taken = new Set(state.list.map((p) => p.name.toLowerCase()));
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let n = 2; n < 1000; n++) if (!taken.has(`${base} ${n}`.toLowerCase())) return `${base} ${n}`;
+  return `${base} ${Date.now() % 100000}`;
 }
 
 /** Take a profile off the list. Returns its folder, for the caller to move to the Recycle Bin. */

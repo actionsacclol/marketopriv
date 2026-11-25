@@ -1,8 +1,10 @@
 import type { FieldValue, Fields } from './types';
-import { ELEVEN_SPEED, TUNE_RANGE, VOICE_IDS, cleanTune, clipKey, hashKey, isEleven, readVoiceCache, tuneFromFields, voiceName, type VoiceTune } from './voice';
+import { ELEVEN_SPEED, TUNE_RANGE, VOICE_IDS, cleanTune, clipKey, hashKey, isEleven, readVoiceCache, tuneFromFields, voiceId, voiceName, type VoiceTune } from './voice';
 import { chatEnd, pollEnd, storySfx } from './sfx';
 import { ACTION_HELP, ARTS } from './character';
 import { STICK_FLAG, STICK_GEAR, STICK_HELP, stickScreenStart } from './stickman';
+import { DUO_FLAG, DUO_HELP, DUO_SETS, duoLines } from './duo';
+import { BLOX_FLAG, BLOX_HELP, BLOX_LOOK_A, BLOX_LOOK_B, BLOX_LOOK_HELP, BLOX_SETS, BLOX_TIMES } from './blox';
 
 // Preset styles: the schema, defaults and timing of every reel format. Pure
 // data so the main process (MCP tool listing / validation) and the renderer
@@ -72,7 +74,7 @@ export function parseFx(tok: string): Fx | null {
 }
 
 /** Presets that speak their beats (the story engine's voice, effects and music). */
-export const VOICED_PRESETS = ['story', 'narrated', 'meme', 'stickman'];
+export const VOICED_PRESETS = ['story', 'narrated', 'meme', 'stickman', 'blox', 'slides', 'duo'];
 export const isVoiced = (preset: string): boolean => VOICED_PRESETS.includes(preset);
 
 export const ACCENTS: Record<string, [string, string, string]> = {
@@ -400,7 +402,174 @@ export const PRESETS: PresetMeta[] = [
       ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
     ],
   },
+  {
+    id: 'blox',
+    name: 'Blocky avatars',
+    tagline: 'One or two blocky game-style avatars in a small 3D world (a studded baseplate, a park, an obby path over lava, a city street) acting it out with stiff, snappy moves: narrated rants and stories, wordless two-avatar skits with chat bubbles, or a dance under one relatable line. Captions, a big word, name tags over the heads, a moving camera.',
+    inspiredBy: 'Blocky-avatar animation shorts (the Roblox-style story, rant and skit channels): one recognisable avatar, quick cuts, a new move on every line',
+    fields: [
+      {
+        key: 'beats',
+        label: 'Beats',
+        type: 'lines',
+        default: [
+          '1 | Your PC is not slow. It is *busy*. | shrug | BRO? | question | | cam=close',
+          '1 | Every app you install asks to start with Windows. | point | | sign=START ME',
+          '1 | Launchers. Updaters. Chat apps. They all said yes for you. | angry | | | | cam=low',
+          '1 | So your PC starts twenty things before it starts you. | run | | | | cam=far',
+          '1 | Open Task Manager. Startup apps. Turn off what you never use. | type | | | | push',
+          '1 | Same PC. Faster start. | cheer | FAST | trophy | | win',
+          '1 | Save this for your next fresh install. | thumbsup',
+        ].join('\n'),
+        help: BLOX_HELP + FX_HELP,
+      },
+      { key: 'names', label: 'Name tags', type: 'text', default: '', help: 'The name over each head: "Me;My PC" for two avatars, or one name. Empty = none. A ; here, or a "moveA/moveB" beat, puts two avatars on stage.' },
+      { key: 'avatar', label: 'Avatar', type: 'text', default: BLOX_LOOK_A, help: `What avatar A looks like, ${BLOX_LOOK_HELP}` },
+      { key: 'avatar_b', label: 'Second avatar', type: 'text', default: BLOX_LOOK_B, help: 'Avatar B (two-avatar reels), written the same way.' },
+      { key: 'set', label: 'World', type: 'select', default: 'baseplate', options: [...BLOX_SETS], help: 'baseplate = a studded grey plate with a few big coloured blocks; park = grass, blocky trees, a path and a bench; obby = a rainbow path over lava with floating platforms; city = a pavement, buildings and a road.' },
+      { key: 'time', label: 'Time of day', type: 'select', default: 'day', options: [...BLOX_TIMES], help: 'day, sunset, or night (stars, lit windows).' },
+      { key: 'highlight', label: 'Highlight colour', type: 'select', default: 'yellow', options: ['yellow', 'green', 'orange', 'red', 'cyan', 'white', 'accent'], help: 'The big word, the spoken word in the captions, signs, the winner\'s burst and name.' },
+      { key: 'captions', label: 'Captions', type: 'select', default: 'words', options: ['words', 'line', 'title', 'off'], help: 'words = 1-3 words at a time popping in as they are said; line = the whole line, the word being said lit up; title = the caption as plain text at the top (wordless skits and dances); off = none.' },
+      { key: 'video', label: 'Screen recording', type: 'file', fileKind: 'video', default: '', help: 'The recording a screen prop shows (record_screen or a tool\'s bundled recording).' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.15, min: 0, max: 1.5, step: 0.02 },
+      ...VOICE_FIELDS.map((f) => (f.key === 'sfx_volume' ? { ...f, default: 0.5 } : f.key === 'bed' ? { ...f, default: 'goofy' } : f.key === 'bed_volume' ? { ...f, default: 0.3 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice.' },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      { key: 'loop', label: 'Loop back to the opening', type: 'toggle', default: true, help: 'The last beat runs back into the first (no end card).' },
+      ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
+    ],
+  },
+  {
+    id: 'slides',
+    name: 'Slideshow',
+    tagline: 'Slides to swipe through: a cover with the hook, one point per slide (text, a picture, or a frame of a screen recording), a closing slide. render_slides saves them as pictures for a photo post (an Instagram carousel, a TikTok photo post, Threads, Facebook, X); render_reel makes the same slides a video with music.',
+    inspiredBy: 'TikTok photo slideshows and Instagram carousels: lists, step-by-steps and cheat sheets people save and send',
+    fields: [
+      {
+        key: 'beats',
+        label: 'Slides',
+        type: 'lines',
+        default: [
+          '3 | 4 Windows settings to turn *off* today | text | WINDOWS 11 | Each one takes ten seconds',
+          '3.5 | 1. Startup apps | text | | Open Task Manager / Go to Startup apps / Turn off what you never use',
+          '3.5 | 2. Background recording | text | | Settings / Gaming / Captures / Record what happened: off',
+          '3.5 | 3. Visual effects | text | | Search "performance" / Adjust the appearance of Windows / Adjust for best performance',
+          '3.5 | 4. Pointer precision | text | | Mouse settings / Additional mouse settings / Untick Enhance pointer precision',
+          '3 | Save this for your next *fresh install* | end | Save it | One PC tip a day',
+        ].join('\n'),
+        help:
+          'One slide per line: seconds | title | kind | a | b | say | flags. seconds = how long it shows in the video version. *word* = highlight colour. Kinds: text (a = a small caps line above the title, like "STEP 1" or the topic; b = the text under it; " / " between parts makes a list) · image (a = a picture file; b = the text under it) · screen (one frame of the screen recording in the video field: a = its second; b = the text under it). A picture or a frame can show only a part of itself, so the panel that matters reads on a phone: after the file or the second, "@0.7,0.3 x2" = 2x around that point, or "@0.05,0.2,0.4,0.7" = that area (x,y of its top-left corner, then its width and height), all as fractions of the frame · photo (the TikTok photo-slideshow look: a = a picture file that fills the whole slide, the title written on it the way TikTok\'s own text looks, b = a smaller line under it; flags: pos=30 puts the text 30% down the slide (default 50), style=outline / shadow / plain / box for this slide, and to make the picture your own: "@..." crop, flip (mirrored), bw, warm, cool, grain, dim=0.3 (darker, 0-0.8), blur=8) · end (the closing slide: a = a button-like word such as "Save it", b = a line under it; the logo shows above when the reel has one). The first slide is the cover: its title is drawn biggest and is what people see in the feed, so it carries the hook. Flag over = the picture fills the whole slide with the text on top (image and screen slides). Keep each slide to one idea: a title of 2-8 words and at most 3 short lines. say = what the voice reads on that slide when voice-over is on (default: the title). ' +
+          FX_HELP,
+      },
+      { key: 'look', label: 'Look', type: 'select', default: 'dark', options: ['dark', 'light', 'color'], help: 'dark = white text on near-black with the accent glow; light = dark text on off-white; color = white text on the accent colour.' },
+      { key: 'font', label: 'Lettering', type: 'select', default: 'bold', options: ['bold', 'brand'], help: 'bold = a heavy round sans, the way text reads on TikTok and Instagram; brand = the squarer brand face.' },
+      { key: 'align', label: 'Text', type: 'select', default: 'left', options: ['left', 'center'] },
+      { key: 'text_style', label: 'Text on photos', type: 'select', default: 'outline', options: ['outline', 'shadow', 'plain', 'box'], help: 'How the words sit on photo slides, like TikTok\'s own text: outline = a dark edge around each letter; shadow = a soft shadow; plain = nothing; box = each line on a solid label.' },
+      { key: 'text_color', label: 'Photo text colour', type: 'text', default: '#FFFFFF', help: 'The colour of the words on photo slides (hex). With box it is the label\'s colour.' },
+      { key: 'text_size', label: 'Photo text size', type: 'select', default: 'medium', options: ['small', 'medium', 'large'] },
+      { key: 'footer', label: 'Footer', type: 'text', default: '', help: 'A small line at the bottom of every slide: the account\'s handle ("@name"), so a slide that gets sent around still says whose it is.' },
+      { key: 'counter', label: 'Slide numbers', type: 'toggle', default: true, help: '"2/6" in the bottom corner.' },
+      { key: 'video', label: 'Screen recording', type: 'file', fileKind: 'video', default: '', help: 'The recording screen slides take their frame from (record_screen makes one; krypt_tools names a tool\'s bundled one).' },
+      { key: 'gap', label: 'Pause after a line (s)', type: 'number', default: 0.35, min: 0, max: 1.5, step: 0.05, hidden: true },
+      ...VOICE_FIELDS.map((f) => (f.key === 'voiceover' ? { ...f, default: false } : f.key === 'sfx_volume' ? { ...f, default: 0.4 } : f.key === 'bed' ? { ...f, default: 'lofi' } : f.key === 'bed_volume' ? { ...f, default: 0.5 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3.4, min: 1.5, max: 8, step: 0.1, hidden: true },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      { key: 'loop', label: 'Loop', type: 'toggle', default: true, help: 'The video version replays from the cover (no end card: the closing slide is the end).' },
+      ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
+    ],
+  },
+  {
+    id: 'duo',
+    name: 'Ask the AI',
+    tagline: 'Two low-poly 3D characters in a small room: a person asks, the AI character answers. A full-screen cold open (the claim, the question, "three parts"), then a board comes down over the top half with the parts as tabs and one animated diagram per line while the two keep talking underneath. Ends on a send-this card.',
+    inspiredBy: 'Explainer reels built as a conversation with an AI character: a claim people are already talking about, answered in three named parts with a fact check last',
+    fields: [
+      {
+        key: 'beats',
+        label: 'Lines',
+        type: 'lines',
+        default: [
+          '1 | One Windows setting is *messing with your aim*. | chip | YOUR AIM | 1 SETTING',
+          '1.5 | wait, which one? | none | | | | who=a',
+          '1 | Let me show you. *Three parts*. | none | | | | act=present',
+          '1 | It is called *Enhance pointer precision*. On by default. | title | Enhance pointer precision | Windows mouse settings | | part=1',
+          '1 | Move fast, and the cursor flies *further*. Same hand, different distance. | steps | Same hand movement;Slow swipe: short;Fast swipe: far',
+          '1.5 | so it is acceleration? | none | | | | who=a',
+          '1 | Exactly. *Mouse acceleration*. | stamp | ACCELERATION | built into Windows',
+          '1 | Open Settings. Bluetooth and devices. Mouse. | steps | Settings;Bluetooth & devices;Mouse | | | part=2',
+          '1 | Additional mouse settings, Pointer Options. *Untick it*. | steps | Additional mouse settings;Pointer Options;!Enhance pointer precision',
+          '1.5 | and now I never miss? | none | | | | who=a part=3',
+          '1 | No. But the same move lands in the *same spot*. Every time. | stamp | CONSISTENT | not a skill upgrade | | act=shrug',
+          '3 | Send this to the friend who blames his mouse | end | Follow for *part two* | one PC fix a day',
+        ].join('\n'),
+        help: DUO_HELP + FX_HELP,
+      },
+      { key: 'parts', label: 'Parts', type: 'text', default: 'What it is;How to turn it off;Does it matter?', help: 'The board\'s tabs, ; between them (two to four, three reads best). The last one is the honest check: "Is it real?", "Does it matter?", "What it costs".' },
+      { key: 'board_title', label: 'Board title', type: 'text', default: 'THE AIM FIX', help: 'Small caps line in the board\'s corner: the episode\'s name.' },
+      { key: 'set', label: 'Room', type: 'select', default: 'studio', options: [...DUO_SETS], help: 'studio = a warm podcast desk with a slat wall; diner = a night booth with a neon window; terminal = a dark room lit by green screens.' },
+      { key: 'sign', label: 'Wall sign', type: 'text', default: 'ASK KIP', help: 'The glowing sign on the wall: the series\' name, two or three words.' },
+      { key: 'char_name', label: 'AI character name', type: 'text', default: 'KIP' },
+      { key: 'char_color', label: 'AI character colour', type: 'text', default: '#8B5CF6', help: 'Body colour as #RRGGBB (the brand colour).' },
+      { key: 'asker_color', label: 'Asker\'s hoodie', type: 'text', default: '#2F6F6A', help: '#RRGGBB' },
+      { key: 'asker_skin', label: 'Asker\'s skin', type: 'select', default: 'brown', options: ['light', 'tan', 'brown', 'dark'] },
+      { key: 'asker_voice', label: 'Asker\'s voice', type: 'text', default: '', help: 'A second voice, for the asker\'s lines only ("el:<voice id>" or the voice\'s name; the same kind of voice as the reel\'s). A new reel gets the user\'s other voice by itself: leave it alone. "none" = no second voice.' },
+      { key: 'asker_speaks', label: 'Asker speaks', type: 'toggle', default: false, help: 'Only without a second voice. Off = the asker\'s lines are speech bubbles and only the AI character is heard. On = the reel\'s voice reads them too.' },
+      { key: 'captions', label: 'Captions', type: 'select', default: 'line', options: ['line', 'words', 'off'], help: 'line = a few words at a time with the word being said lit up; words = one to three words popping in.' },
+      { key: 'highlight', label: 'Highlight colour', type: 'select', default: 'yellow', options: ['yellow', 'accent', 'green', 'white'], help: 'The word being said, the open tab and *marked* words.' },
+      { key: 'video', label: 'Screen recording', type: 'file', fileKind: 'video', default: '', help: 'The recording screen lines show on the board (record_screen makes one; krypt_tools names a tool\'s bundled one).' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.12, min: 0, max: 1.5, step: 0.02 },
+      ...VOICE_FIELDS.map((f) => (f.key === 'sfx_volume' ? { ...f, default: 0.4 } : f.key === 'bed' ? { ...f, default: 'lofi' } : f.key === 'bed_volume' ? { ...f, default: 0.3 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice.' },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      { key: 'theme', label: 'Look', type: 'select', default: 'dark', options: ['dark', 'light'], hidden: true },
+      { key: 'card_by', label: 'Card maker line', type: 'text', default: 'by Krypt', help: 'Small line under the product name on card lines.' },
+      ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
+    ],
+  },
 ];
+
+/** The band of the 1080x1920 frame a preset keeps its content in (top and bottom y): the part that makes the square, 4:5 and 2:3 pictures. */
+export const contentBand = (preset: string): { top: number; bottom: number } => (preset === 'slides' ? { top: 225, bottom: 1575 } : { top: 220, bottom: 1680 });
+
+/**
+ * The seconds of a reel to save as the pictures of a photo post: one per slide, panel or beat, once everything on it
+ * has landed. Empty for presets without beats (give times yourself).
+ */
+export function slideTimes(preset: string, f: Fields): number[] {
+  if (!isVoiced(preset)) return [];
+  return storyBeats(f).map((b) => Math.round((b.start + (preset === 'slides' ? b.dur - 0.05 : Math.max(b.dur - 0.6, b.dur * 0.6))) * 100) / 100);
+}
+
+export interface Area {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * The part of a picture or video frame a slide shows, from the end of its column: "@x,y x2" = 2x around that point,
+ * "@x,y,w,h" = that area (its top-left corner and size). Fractions of the frame; nothing given = all of it.
+ */
+export function areaOf(a: string): Area {
+  const m = /@\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+)\s*,\s*([\d.]+))?(?:\s+x\s*([\d.]+))?\s*$/i.exec(a);
+  if (!m) return { x: 0, y: 0, w: 1, h: 1 };
+  const c = (v: string): number => Math.min(1, Math.max(0, Number(v) || 0));
+  if (m[3] !== undefined) {
+    const w = Math.max(0.05, c(m[3]));
+    const h = Math.max(0.05, c(m[4]));
+    return { x: Math.min(c(m[1]), 1 - w), y: Math.min(c(m[2]), 1 - h), w, h };
+  }
+  const z = m[5] ? Math.min(4, Math.max(1, Number(m[5]) || 1)) : 2;
+  const w = 1 / z;
+  return { x: Math.min(1 - w, Math.max(0, c(m[1]) - w / 2)), y: Math.min(1 - w, Math.max(0, c(m[2]) - w / 2)), w, h: w };
+}
+
+/** A slide's picture column: the file path, without the area that may follow it ("shot.png @0.5,0.3 x2"). */
+export function imageRef(a: string): { path: string; area: Area } {
+  const m = /^(.*?)\s+(@[\d.,\sx]+)$/i.exec(a.trim());
+  return m ? { path: m[1].trim(), area: areaOf(m[2]) } : { path: a.trim(), area: { x: 0, y: 0, w: 1, h: 1 } };
+}
 
 export const presetById = (id: string): PresetMeta | undefined => PRESETS.find((p) => p.id === id);
 
@@ -498,7 +667,10 @@ export function timingFor(presetId: string, f: Fields): Timing {
     case 'story':
     case 'narrated':
     case 'meme':
-    case 'stickman': {
+    case 'stickman':
+    case 'blox':
+    case 'duo':
+    case 'slides': {
       const b = storyBeats(f);
       body = b.length ? b[b.length - 1].start + b[b.length - 1].dur : 3;
       if (f.loop === true) return { body, cta: 0, total: body };
@@ -565,6 +737,8 @@ export interface StoryBeat {
   key: string;
   /** The ElevenLabs clip this line is rendered with ('' = not an ElevenLabs reel). */
   elKey: string;
+  /** The ElevenLabs voice that line is bought in (the reel's, or the asker's on ask reels); '' = not an ElevenLabs line. */
+  elVoice: string;
   /** Length of the generated line in seconds (0 = none yet). */
   voDur: number;
   /** When the line starts, seconds into the beat (lead + any pause). */
@@ -578,7 +752,7 @@ export interface StoryBeat {
   fx: Fx[];
   /** Layout named in its flags (meme panels: top / impact / over), '' = the reel's. */
   layout: string;
-  /** Other flags a preset reads itself (stickman: cam=close, push, win=a, who=b). */
+  /** Other flags a preset reads itself (stickman and blox: cam=close, push, win=a, who=b). */
   tags: string[];
   /** When each spoken word starts, seconds into the voice clip (from ElevenLabs' timings; absent = estimate). */
   voWords?: number[];
@@ -591,6 +765,8 @@ export const VO_TAIL = 0.45;
 /** Flag tokens: spaces between them; commas too, except inside an effect's point (zoom=0.5,0.3). */
 const flagTokens = (raw: string): string[] => raw.toLowerCase().split(/\s+/).flatMap((t) => (/=\d*\.?\d+,\d/.test(t) ? [t] : t.split(','))).filter(Boolean);
 const LAYOUTS = ['top', 'impact', 'over'];
+/** Flags a slideshow's photo slide reads itself: where and how its text sits, and how the picture is changed. */
+export const SLIDE_FLAG = /^(?:pos=\d{1,3}|style=(?:outline|shadow|plain|box)|flip|bw|warm|cool|grain|dim=\d*\.?\d+|blur=\d*\.?\d+)$/;
 
 function beatFlags(raw: string): { theme: '' | 'light' | 'dark'; wipe: boolean; pause: number; speed: number | null; fx: Fx[]; layout: string; tags: string[] } {
   const out = { theme: '' as '' | 'light' | 'dark', wipe: false, pause: 0, speed: null as number | null, fx: [] as Fx[], layout: '', tags: [] as string[] };
@@ -610,7 +786,7 @@ function beatFlags(raw: string): { theme: '' | 'light' | 'dark'; wipe: boolean; 
     else if (tok.startsWith('speed=')) {
       const s = Number(tok.slice(6));
       if (Number.isFinite(s) && s > 0) out.speed = Math.min(1.5, Math.max(0.7, s));
-    } else if (STICK_FLAG.test(tok)) out.tags.push(tok);
+    } else if (STICK_FLAG.test(tok) || SLIDE_FLAG.test(tok) || DUO_FLAG.test(tok) || BLOX_FLAG.test(tok)) out.tags.push(tok);
     // Anything else (an old per-line voice name) is ignored: one voice per reel.
   }
   return out;
@@ -619,7 +795,7 @@ function beatFlags(raw: string): { theme: '' | 'light' | 'dark'; wipe: boolean; 
 /** Whether a column holds only flags (never spoken). */
 const flagsOnly = (s: string): boolean => {
   const toks = flagTokens(s);
-  return toks.length > 0 && toks.every((t) => /^(?:light|dark|wipe|pause=[\d.]+|speed=[\d.]+)$/.test(t) || LAYOUTS.includes(t) || STICK_FLAG.test(t) || !!parseFx(t));
+  return toks.length > 0 && toks.every((t) => /^(?:light|dark|wipe|pause=[\d.]+|speed=[\d.]+)$/.test(t) || LAYOUTS.includes(t) || STICK_FLAG.test(t) || SLIDE_FLAG.test(t) || DUO_FLAG.test(t) || BLOX_FLAG.test(t) || !!parseFx(t));
 };
 
 /** A beat row's spoken line and its flags. */
@@ -667,16 +843,25 @@ export function storyBeats(f: Fields): StoryBeat[] {
   // ElevenLabs lines are bought at render; until every line has one, the whole reel uses the free stand-in (one voice per reel).
   const standin = el ? cleanTune({ ...elTune, voice: str(f, 'voice_standin') || 'am_michael', speed: num(f, 'voice_speed', 1.2) }) : elTune;
   const elSpeed = Math.min(ELEVEN_SPEED.max, Math.max(ELEVEN_SPEED.min, num(f, 'voice_speed', 1)));
-  const elKeyOf = (say: string): string => (el && voiceOn && say ? clipKey(elTune, elSpeed, say) : '');
+  // Ask reels, the one place a reel has two voices: the asker speaks in their own voice (asker_voice, the same kind
+  // as the reel's). Without one, their lines are speech bubbles (asker_speaks off) or the reel's voice reads them too.
+  const askId = f.asker_voice !== undefined ? voiceId(str(f, 'asker_voice')) : null;
+  const askTune = askId && askId !== elTune.voice && isEleven(askId) === el ? cleanTune({ ...elTune, voice: askId, blend: '', blendAmount: 0 }) : null;
+  const mute = f.asker_speaks === false && !askTune;
+  const lineFor = (r: string[]): { say: string; flagsRaw: string; ask: VoiceTune | null } => {
+    const l = lineOf(r);
+    const asker = flagTokens(l.flagsRaw).includes('who=a');
+    return { ...l, say: mute && asker ? '' : l.say, ask: asker ? askTune : null };
+  };
+  const elKeyOf = (say: string, by: VoiceTune | null): string => (el && voiceOn && say ? clipKey(by ?? elTune, elSpeed, say) : '');
   const allEl = el && voiceOn && !!cache && rows(f, 'beats').every((r) => {
-    const { say } = lineOf(r);
-    return !say || !!cache.clips[elKeyOf(say)];
+    const { say, ask } = lineFor(r);
+    return !say || !!cache.clips[elKeyOf(say, ask)];
   });
   // Not bought yet: the preview has no narration (timed from the text), so nobody hears a voice they did not pick.
   // Only a render that could not buy the lines (voice_free) falls back to the free voice.
   const silent = el && voiceOn && !allEl && !f.voice_free;
   const tune = el && !allEl && !silent ? standin : elTune;
-  const voice = tune.voice;
   const baseSpeed = el && allEl ? elSpeed : num(f, 'voice_speed', 1.2);
   const look = str(f, 'theme') === 'dark' ? 'dark' : 'light';
   const kinetic = str(f, 'motion') !== 'calm';
@@ -687,11 +872,13 @@ export function storyBeats(f: Fields): StoryBeat[] {
     const secs = Number(r[0]);
     let dur = Number.isFinite(secs) && secs > 0 ? Math.min(12, Math.max(0.6, secs)) : 3;
     const headline = r[1] ?? '';
-    const { say, flagsRaw } = lineOf(r);
+    const { say, flagsRaw, ask } = lineFor(r);
     const fl = beatFlags(flagsRaw);
     const speed = el && allEl ? baseSpeed : (fl.speed ?? baseSpeed);
-    const elKey = elKeyOf(say);
-    const key = voiceOn && say && !silent ? (el && allEl ? elKey : clipKey(tune, speed, say)) : '';
+    const elKey = elKeyOf(say, ask);
+    // A render that fell back to the free voice reads both speakers in it.
+    const lineTune = ask && tune === elTune ? ask : tune;
+    const key = voiceOn && say && !silent ? (el && allEl ? elKey : clipKey(lineTune, speed, say)) : '';
     const vo = key ? cache?.clips[key] : undefined;
     const est = silent && say ? elSpeechSecs(say, elSpeed) : 0;
     const voStart = lead + fl.pause;
@@ -709,11 +896,12 @@ export function storyBeats(f: Fields): StoryBeat[] {
       a: r[3] ?? '',
       b: r[4] ?? '',
       say,
-      voice,
-      tune,
+      voice: lineTune.voice,
+      tune: lineTune,
       speed,
       key,
       elKey,
+      elVoice: elKey ? (ask ?? elTune).voice : '',
       voDur: vo?.dur ?? est,
       voStart,
       theme: fl.theme || look,
@@ -730,8 +918,13 @@ export function storyBeats(f: Fields): StoryBeat[] {
 }
 
 /** Story reels with screen beats: the second of the screen recording to show at reel time t, or null (no screen beat now). */
-export function storyVideoTime(f: Fields, t: number, beats = storyBeats(f), videoLen = 0): number | null {
+export function storyVideoTime(f: Fields, t: number, beats = storyBeats(f), videoLen = 0, still = false): number | null {
   if (!str(f, 'video')) return null;
+  // Slideshows: a screen slide is one frame of the recording, the same in the picture and in the video version.
+  if (still) {
+    const s = beats.find((x) => t >= x.start && t < x.start + x.dur) ?? beats[beats.length - 1];
+    return s && s.visual === 'screen' ? Math.max(0, screenStart(s.a)) : null;
+  }
   // Narrated reels: the background video runs under everything, looped.
   if (str(f, 'bg') === 'video') {
     const start = Math.max(0, num(f, 'bg_start', 0));
@@ -740,6 +933,11 @@ export function storyVideoTime(f: Fields, t: number, beats = storyBeats(f), vide
   }
   const b = beats.find((x) => t >= x.start && t < x.start + x.dur) ?? beats[beats.length - 1];
   if (!b) return null;
+  // Ask reels: the board keeps a recording running under the lines that follow the one that opened it.
+  if (f.parts !== undefined) {
+    const h = beats[duoLines(beats)[beats.indexOf(b)]?.held ?? -1];
+    return h && h.visual === 'screen' ? Math.max(0, screenStart(h.a) + Math.min(t, b.start + b.dur) - h.start) : null;
+  }
   // Story and meme screen beats: a = the start second. Stickman beats: a laptop / monitor / screen / phone prop's value.
   const from = b.visual === 'screen' ? screenStart(b.a) : stickScreenStart(b.b);
   if (from === null) return null;

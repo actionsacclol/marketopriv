@@ -108,6 +108,8 @@ export default function Autopilot() {
       setAi(s.ai);
       setTimes(s.times);
     }
+    // The picked AI is not on this computer and another one is (a Codex-only setup starts out on Claude Code): pick that one.
+    if (!s.on) setAi((cur) => (s.ais.find((x) => x.id === cur)?.found ? cur : (s.ais.find((x) => x.found)?.id ?? cur)));
     void window.marketo.mcp.clients().then(setClients);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -142,6 +144,14 @@ export default function Autopilot() {
   });
   const changed = st.on && (st.ai !== ai || st.times.join() !== [...times].sort().join());
   const ready = st.supported && pick.found && connected && times.length > 0 && db.igAccounts.length > 0;
+  // What is still missing, said out loud: greyed-out buttons alone read as "this does not work with my AI".
+  const missing = !st.supported
+    ? []
+    : [
+        ...(!pick.found ? [`${pick.name} was not found on this computer (step 1 says how to get it)`] : !connected ? [`${pick.name} is not connected to Marketo yet: press Connect in step 1`] : []),
+        ...(times.length ? [] : ['pick at least one time in step 2']),
+        ...(db.igAccounts.length ? [] : ['add an account first (Accounts page)']),
+      ];
 
   return (
     <Page
@@ -179,13 +189,19 @@ export default function Autopilot() {
                     <Power className="h-4 w-4" /> Turn off
                   </GhostButton>
                 )}
-                <GhostButton disabled={busy || st.running || !ready} onClick={() => void act(() => window.marketo.autopilot.runNow(), 'Started a run. Its report shows up below when it ends.')}>
+                <GhostButton disabled={busy || st.running || !ready} onClick={() => void act(() => window.marketo.autopilot.runNow(ai), 'Started a run. Its report shows up below when it ends.')}>
                   <Play className="h-4 w-4" /> Run once now
                 </GhostButton>
                 <GhostButton small onClick={() => void window.marketo.autopilot.openFolder()}>
                   <FolderOpen className="h-3.5 w-3.5" /> Files
                 </GhostButton>
               </div>
+              {!ready && !st.on && missing.length > 0 && (
+                <p className="flex items-start gap-1.5 text-xs text-amber-300">
+                  <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>Can't start yet: {missing.join('; ')}.</span>
+                </p>
+              )}
             </Card>
           </Section>
 
@@ -205,8 +221,14 @@ export default function Autopilot() {
                         {x.id === 'claude' && <span className="rounded-full bg-krypt-purple/20 px-2 py-0.5 text-[10px] text-krypt-purple">Recommended</span>}
                       </div>
                       <div className="text-[11px] text-krypt-muted">
-                        {!x.found ? 'Not installed on this computer.' : c?.connected ? 'Installed and connected to Marketo.' : 'Installed, not connected to Marketo yet.'}
-                        {x.note ? ` ${x.note}` : ''}
+                        {!x.found
+                          ? x.id === 'codex'
+                            ? 'Its command-line program was not found. The ChatGPT app or an editor extension is not enough for scheduled runs: install the Codex CLI (in a terminal: npm install -g @openai/codex), run codex once to sign in, then press Refresh.'
+                            : 'Not found on this computer. Install Claude Code (claude.com/claude-code), open it once to sign in, then press Refresh.'
+                          : c?.connected
+                            ? 'Installed and connected to Marketo.'
+                            : 'Installed, not connected to Marketo yet.'}
+                        {x.found && x.note ? ` ${x.note}` : ''}
                       </div>
                     </div>
                     {x.found && c && !c.connected && (
@@ -219,8 +241,8 @@ export default function Autopilot() {
               })}
             </Card>
             {!st.ais.some((x) => x.found) && (
-              <p className="mt-2 text-xs text-krypt-muted">
-                Install Claude Code (claude.com/claude-code) and sign in to it once in a terminal, then press Refresh.
+              <p className="mt-2 text-xs text-amber-300">
+                Scheduled runs need one of these as a command-line program on this computer. Connecting an AI on the AI page lets you talk to Marketo yourself; autopilot starts the program by itself, so it has to be installed too.
               </p>
             )}
           </Section>

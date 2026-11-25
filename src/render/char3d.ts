@@ -48,7 +48,7 @@ export interface CharOut {
 }
 
 // ── Pose ───────────────────────────────────────────────────────────────────
-interface Pose {
+export interface Pose {
   lean: number;
   twist: number;
   tilt: number;
@@ -134,7 +134,7 @@ function hash(n: number): number {
   return x - Math.floor(x);
 }
 
-function poseAt(f: CharFrame): Pose {
+export function poseAt(f: Pick<CharFrame, 'action' | 'local' | 't' | 'talk'>): Pose {
   const k = spring(Math.max(0, f.local) / 0.45);
   let p = mix(NEUTRAL, actionPose(f.action, f.local, f.talk), Math.min(1.08, k));
   // Breathing, a nod on the words, blinks.
@@ -147,7 +147,7 @@ function poseAt(f: CharFrame): Pose {
 }
 
 // ── Rig ────────────────────────────────────────────────────────────────────
-interface Rig {
+export interface Rig {
   root: THREE.Group;
   hips: THREE.Group;
   torso: THREE.Group;
@@ -170,8 +170,10 @@ interface Rig {
   headAnchor: THREE.Object3D;
 }
 
-interface Kit {
+export interface Kit {
   mat: (color: string, opts?: { glossy?: boolean }) => THREE.Material;
+  /** A person instead of the robot: skin, hair and a hoodie (the asker in duo reels). */
+  person?: { skin: string; hair: string };
   outline?: THREE.Material;
   seg: number;
   shadows: boolean;
@@ -193,8 +195,9 @@ function snapVertices(m: THREE.Material): THREE.Material {
   return m;
 }
 
-function buildRig(kit: Kit): Rig {
+export function buildRig(kit: Kit): Rig {
   const { seg } = kit;
+  const P = kit.person;
   const body: THREE.Material[] = [];
   const limbs: THREE.Material[] = [];
   const glow: THREE.MeshBasicMaterial[] = [];
@@ -205,16 +208,16 @@ function buildRig(kit: Kit): Rig {
     return m;
   };
   const bodyMat = kit.mat('#8B5CF6');
-  const headMat = kit.mat('#A78BFA');
+  const headMat = kit.mat(P ? P.skin : '#A78BFA');
   const limbMat = kit.mat('#7C3AED');
   body.push(bodyMat, headMat);
   limbs.push(limbMat);
   const bellyMat = kit.mat('#EDE9FE');
   const darkMat = kit.mat('#1A1626', { glossy: true });
-  const handMat = kit.mat('#F5F3FF');
+  const handMat = kit.mat(P ? P.skin : '#F5F3FF');
   const footMat = kit.mat('#2A2340');
   const badgeMat = kit.mat('#FACC15', { glossy: true });
-  const eyeMat = new THREE.MeshBasicMaterial({ color: '#7DF9E9' });
+  const eyeMat = new THREE.MeshBasicMaterial({ color: P ? '#15121C' : '#7DF9E9' });
   const antMat = new THREE.MeshBasicMaterial({ color: '#C084FC' });
   glow.push(eyeMat, antMat);
 
@@ -248,7 +251,8 @@ function buildRig(kit: Kit): Rig {
   const badge = mk(new THREE.CylinderGeometry(0.075, 0.075, 0.04, seg * 1.5), badgeMat);
   badge.rotation.x = Math.PI / 2;
   badge.position.set(0.17, 0.66, 0.36);
-  torso.add(trunk, belly, badge);
+  torso.add(trunk);
+  if (!P) torso.add(belly, badge);
 
   const neck = new THREE.Group();
   neck.position.y = 0.95;
@@ -256,50 +260,72 @@ function buildRig(kit: Kit): Rig {
   const head = new THREE.Group();
   head.position.y = 0.04;
   neck.add(head);
-  const skull = mk(new RoundedBoxGeometry(1.16, 0.96, 0.96, Math.max(2, seg / 2), 0.3), headMat);
+  const skull = mk(P ? new RoundedBoxGeometry(0.86, 0.9, 0.84, Math.max(2, seg / 2), 0.27) : new RoundedBoxGeometry(1.16, 0.96, 0.96, Math.max(2, seg / 2), 0.3), headMat);
   skull.position.y = 0.48;
-  const face = mk(new RoundedBoxGeometry(0.92, 0.62, 0.12, Math.max(1, seg / 4), 0.06), darkMat, false);
-  face.position.set(0, 0.46, 0.44);
-  head.add(skull, face);
-  for (const side of [-1, 1]) {
-    const ear = mk(new THREE.CylinderGeometry(0.15, 0.15, 0.12, seg * 1.5), darkMat);
-    ear.rotation.z = Math.PI / 2;
-    ear.position.set(0.6 * side, 0.46, 0);
-    head.add(ear);
+  head.add(skull);
+  if (P) {
+    // Hair: a cap over the top and the back of the head; small ears; a nose.
+    const hairMat = kit.mat(P.hair);
+    const top = mk(new RoundedBoxGeometry(0.92, 0.36, 0.9, Math.max(1, seg / 4), 0.14), hairMat);
+    top.position.set(0, 0.84, -0.03);
+    const back = mk(new RoundedBoxGeometry(0.92, 0.6, 0.34, Math.max(1, seg / 4), 0.12), hairMat);
+    back.position.set(0, 0.62, -0.3);
+    const nose = mk(new THREE.SphereGeometry(0.055, Math.max(5, seg / 2), Math.max(4, seg / 2)), headMat, false);
+    nose.position.set(0, 0.43, 0.44);
+    head.add(top, back, nose);
+    for (const side of [-1, 1]) {
+      const ear = mk(new THREE.SphereGeometry(0.09, Math.max(5, seg / 2), Math.max(4, seg / 2)), headMat);
+      ear.position.set(0.44 * side, 0.46, -0.02);
+      head.add(ear);
+    }
+  } else {
+    const face = mk(new RoundedBoxGeometry(0.92, 0.62, 0.12, Math.max(1, seg / 4), 0.06), darkMat, false);
+    face.position.set(0, 0.46, 0.44);
+    head.add(face);
+    for (const side of [-1, 1]) {
+      const ear = mk(new THREE.CylinderGeometry(0.15, 0.15, 0.12, seg * 1.5), darkMat);
+      ear.rotation.z = Math.PI / 2;
+      ear.position.set(0.6 * side, 0.46, 0);
+      head.add(ear);
+    }
   }
   const stalk = mk(new THREE.CylinderGeometry(0.025, 0.03, 0.26, Math.max(5, seg)), darkMat);
   stalk.position.y = 1.07;
   const antenna = new THREE.Mesh(new THREE.SphereGeometry(0.08, seg, seg), antMat);
   antenna.position.y = 1.23;
   head.add(stalk, antenna);
+  stalk.visible = antenna.visible = !P;
   const headAnchor = new THREE.Object3D();
   headAnchor.position.set(0, 0.5, 0.4);
   head.add(headAnchor);
 
   // Face: glowing eyes on the screen, brows, mouth.
-  const fz = 0.505;
+  const fz = P ? 0.43 : 0.505;
+  // A person's features are smaller and closer together than the robot's screen face.
+  const fs = P ? 0.7 : 1;
+  const ex = P ? 0.17 : 0.2;
   const eyes = [-1, 1].map((side) => {
-    const e = new THREE.Mesh(new THREE.SphereGeometry(0.1, seg, seg), eyeMat);
-    e.position.set(0.2 * side, 0.53, fz);
+    const e = new THREE.Mesh(new THREE.SphereGeometry(0.1 * fs, seg, seg), eyeMat);
+    e.position.set(ex * side, 0.53, fz);
     head.add(e);
     return e;
   });
   const happyEyes = [-1, 1].map((side) => {
-    const e = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.026, 6, Math.max(8, seg * 1.5), Math.PI), eyeMat);
-    e.position.set(0.2 * side, 0.5, fz);
+    const e = new THREE.Mesh(new THREE.TorusGeometry(0.085 * fs, 0.026 * fs, 6, Math.max(8, seg * 1.5), Math.PI), eyeMat);
+    e.position.set(ex * side, 0.5, fz);
     e.visible = false;
     head.add(e);
     return e;
   });
   const brows = [-1, 1].map((side) => {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.04, 0.02), eyeMat);
-    b.position.set(0.2 * side, 0.69, fz);
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.19 * (P ? 0.85 : 1), 0.04, 0.02), eyeMat);
+    b.position.set(ex * side, 0.69, fz);
     head.add(b);
     return b;
   });
-  const mouthOpen = new THREE.Mesh(new THREE.SphereGeometry(0.1, seg, seg), eyeMat);
+  const mouthOpen = new THREE.Mesh(new THREE.SphereGeometry(0.1 * fs, seg, seg), eyeMat);
   mouthOpen.position.set(0, 0.31, fz);
-  const smile = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.024, 6, Math.max(8, seg * 1.5), Math.PI), eyeMat);
+  const smile = new THREE.Mesh(new THREE.TorusGeometry(0.1 * fs, 0.024 * fs, 6, Math.max(8, seg * 1.5), Math.PI), eyeMat);
   smile.position.set(0, 0.35, fz);
   head.add(mouthOpen, smile);
 
@@ -326,7 +352,7 @@ function buildRig(kit: Kit): Rig {
   return { root, hips, torso, head, lShoulder, rShoulder, lElbow, rElbow, lLeg: legs[1], rLeg: legs[0], eyes, happyEyes, brows, mouthOpen, smile, antenna, body, limbs, glow, headAnchor };
 }
 
-function applyPose(r: Rig, p: Pose, talk: number): void {
+export function applyPose(r: Rig, p: Pose, talk: number): void {
   r.hips.position.y = 0.62 + p.lift;
   r.torso.rotation.set(p.lean * D, p.twist * D, p.tilt * D);
   r.head.rotation.set(p.headPitch * D, p.headYaw * D, p.headRoll * D);
@@ -386,7 +412,7 @@ interface Stage {
 
 const stages = new Map<Art, Stage>();
 
-function makeRenderer(w: number, h: number, aa: boolean): THREE.WebGLRenderer {
+export function makeRenderer(w: number, h: number, aa: boolean): THREE.WebGLRenderer {
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;

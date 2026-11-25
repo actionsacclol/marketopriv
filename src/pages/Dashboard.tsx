@@ -163,7 +163,8 @@ function describe(a: McpActivity): { text: string; icon: typeof Zap; site?: Site
       return { text: `Reading the page${on}`, icon: Eye, site, quiet: true };
     case 'browser_attach_reel':
     case 'browser_attach_image':
-      return { text: `Attached a ${a.tool.endsWith('reel') ? 'video' : 'picture'}${on}`, icon: Send, site, quiet: false };
+    case 'browser_attach_slides':
+      return { text: `Attached ${a.tool.endsWith('reel') ? 'a video' : a.tool.endsWith('slides') ? 'a slideshow' : 'a picture'}${on}`, icon: Send, site, quiet: false };
     case 'mark_posted':
       return { text: 'Posted a reel', icon: Send, quiet: false };
     case 'create_reel':
@@ -176,6 +177,14 @@ function describe(a: McpActivity): { text: string; icon: typeof Zap; site?: Site
       return { text: 'Rendered a reel', icon: Clapperboard, quiet: false };
     case 'render_image':
       return { text: 'Saved an image for a post', icon: Clapperboard, quiet: false };
+    case 'find_images':
+      return { text: 'Searched Pinterest for pictures', icon: Eye, quiet: true };
+    case 'save_images':
+      return { text: 'Saved pictures for a slideshow', icon: Clapperboard, quiet: false };
+    case 'find_slideshows':
+      return { text: 'Studied TikTok slideshows', icon: Eye, quiet: true };
+    case 'render_slides':
+      return { text: 'Saved a slideshow as pictures', icon: Clapperboard, quiet: false };
     case 'preview_reel':
       return { text: 'Checked a reel frame by frame', icon: Eye, quiet: true };
     case 'log_session':

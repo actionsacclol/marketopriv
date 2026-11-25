@@ -1,7 +1,8 @@
 import type { ActionResult, Brand, Db, IgAccount, PromoteMode, PromoteModeSave } from '@shared/types';
 import { CLIPS_BRAND, EMPTY_BRAND, isKryptBrand, kryptBrandFor } from '@shared/brand';
 
-// What a profile promotes: Krypt's tools, the user's own business, or a clip channel. Each mode keeps its own copy
+// What a profile is for: Krypt's tools, the user's own business, a clip channel, or a long-form YouTube channel
+// (long videos made in Krypt Editor; shared/longform.ts; known only by settings.promoting). Each mode keeps its own copy
 // (the brand form, and every account's styles), so switching away and back restores it as it was.
 
 export const clipsOnly = (a?: Pick<IgAccount, 'styles'>): boolean => a?.styles?.length === 1 && a.styles[0] === 'clipping';
@@ -38,7 +39,7 @@ export async function savePromoting(db: Db, from: PromoteMode, to: PromoteMode, 
     const back = modes[to]?.styles;
     for (const a of db.igAccounts) {
       const saved = back?.[a.id];
-      // [] = the account's default style (main); a clip channel runs the clipping style alone.
+      // [] = the starting point (every built-in style on); a clip channel runs the clipping style alone.
       const next = saved ? { styles: saved.styles ?? [], ...(saved.styleMix ? { styleMix: saved.styleMix } : {}) } : to === 'clips' ? { styles: ['clipping'] } : clipsOnly(a) ? { styles: [] } : null;
       if (!next) continue;
       const s = await window.marketo.db.saveAccount({ id: a.id, ...next });

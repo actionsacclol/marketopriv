@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import type { BrowserStatus, Fields, IgAccount, NetProfile, Network, Reel, SessionAction, Site, UiFocus, VoteStory } from '../../shared/types';
+import { MAX_SLIDES, SHAPE_SIZE } from '../../shared/types';
+import { SLIDE_SITES } from '../../shared/slides';
 import * as perf from '../perf';
 import { setBanner } from '../campaignBanner';
 import { resolveYtChannel } from '../ytChannel';
@@ -28,13 +30,16 @@ import { goalLine } from '../../shared/goals';
 import { ytWarmupLine } from '../../shared/warmup';
 import { ARTS } from '../../shared/character';
 import { KRYPT_DISCORD, activeCreator, cleanInvite, isKryptBrand } from '../../shared/brand';
+import { EDITOR_SERVER, EDITOR_URL, LONGFORM_SOFT_CAP, NEXT_STEP, isLongform, longformPlan, longformState } from '../../shared/longform';
 import { kryptFollowLine, kryptFollowNow, kryptRepostDue, kryptRepostLine, kryptVisitDue, kryptVisitsLine } from '../../shared/kryptFollow';
 import { CLIP_RANGE_LABEL, CLIP_SITE_LABEL, YT_MAX_SECONDS, clipKey, clock, parseClipSource, parseYouTube, sameMoment, spanOf, type MomentSpan } from '../../shared/clipping';
 import type { ClipSource } from '../../shared/types';
 import * as clips from '../clips';
 import * as mediaFolders from '../mediaFolders';
+import * as images from '../images';
+import * as slideshows from '../slideshows';
 import { briefText, lessonsText, trainingRules, trainingText } from '../../shared/training';
-import { TONE_STYLES, allStyles, cleanStyles, nextStyle, styleById, styleMix, styleName, stylesOf } from '../../shared/styles';
+import { TONE_STYLES, allStyles, cleanStyles, mixWindow, nextStyle, styleById, styleMix, styleName, styleNeeds, stylesOf } from '../../shared/styles';
 import { removeReels } from '../reelFiles';
 import * as screenRec from '../screen';
 import { postGroups, postKey, postLine, siteOfUrl, similarPosts } from '../../shared/posts';
@@ -110,13 +115,29 @@ function reelPlanNote(): string {
     const s = styleById(id);
     return s ? styleName(s, b).label : id;
   };
+  const told = new Set<string>();
   for (const a of d.igAccounts) {
-    const mix = styleMix(a);
+    // Styles that are on but cannot be made for this account (no streamers picked, not a Krypt tool) stay out of the rotation.
+    const mix = styleMix(a).filter((m) => !styleNeeds(m.id, a, b));
     if (mix.length < 2) continue;
     const ids = new Set(mix.map((m) => m.id));
-    const recent = [...d.reels].sort((x, y) => y.createdAt.localeCompare(x.createdAt)).map((r) => r.style ?? 'main').filter((s) => ids.has(s)).slice(0, 10);
-    const due = nextStyle(mix, recent);
-    out.push(`Style for the next reel on ${a.handle}: "${label(due)}". Its mix${a.styleMix ? ' (set by the user on the Styles page)' : ' (the default: main half, the others the rest)'}: ${mix.map((m) => `${label(m.id)} ${m.share}%`).join(', ')}; the last ${recent.length} reels: ${mix.map((m) => `${label(m.id)} ${recent.filter((x) => x === m.id).length}`).join(', ')}. A reel the user asked for in another style is made in that one.`);
+    const recent = [...d.reels].sort((x, y) => y.createdAt.localeCompare(x.createdAt)).map((r) => r.style ?? 'main').filter((s) => ids.has(s)).slice(0, mixWindow(mix));
+    // A comment vote story whose votes are counted waits for its next part: that goes before the rotation, or the story stalls.
+    const waiting = ids.has('vote') && voteWaiting();
+    const due = waiting ? 'vote' : nextStyle(mix, recent);
+    const made = (id: string): number => recent.filter((x) => x === id).length;
+    // With many styles on, the line names the big shares and the ones made lately, not all of them.
+    const few = mix.length <= 8;
+    const big = mix.filter((m) => few || m.share >= 5);
+    const rest = mix.length - big.length;
+    const shares = `${big.map((m) => `${label(m.id)} ${m.share}%`).join(', ')}${rest ? `${big.length ? ', ' : ''}the other ${rest} styles that are on share the rest` : ''}`;
+    const lately = mix.filter((m) => few || made(m.id)).map((m) => `${label(m.id)} ${made(m.id)}`).join(', ');
+    out.push(`Style for the next reel on ${a.handle}: "${label(due)}"${waiting ? ' (its vote story has a counted vote and waits for the next part, so that goes first)' : ''}. Its mix${a.styleMix ? ' (set by the user on the Styles page)' : ' (the default: main half, the others the rest)'}: ${shares}; the last ${recent.length} reels: ${lately || 'none yet'}. A reel the user asked for in another style is made in that one. If "${label(due)}" cannot be made today (it needs a recording, footage or a product this account does not have), make the reel in the main style and say so in the report.`);
+    const st = styleById(due);
+    if (st && st.id !== 'main' && !rulesInline() && !told.has(st.id)) {
+      told.add(st.id);
+      out.push(`How to make a "${label(due)}" reel: ${st.rules}`);
+    }
   }
   return out.join('\n');
 }
@@ -239,16 +260,16 @@ const S = {
   list_presets: z.object({ preset: z.string().optional().describe('A preset id: its fields, types and defaults. Leave out for the list.') }),
   list_reels: z.object({ status: z.enum(['draft', 'rendered', 'posted']).optional() }),
   get_reel: z.object({ id: reelId }),
-  list_formats: z.object({}),
+  list_formats: z.object({ style: z.string().optional().describe('A channel style (label or id): returns how to make a reel in that style (its rules) and the format it starts from, instead of every format.') }),
   create_reel: z.object({
-    preset: z.string().optional().describe('Preset id: story, list, post, stats, versus, terminal, clip, narrated (Reddit-style / greentext story over a moving background), meme (meme panels with effects), stickman (a hand-drawn stick figure, or two for versus clips, acting it out); not needed with format'),
+    preset: z.string().optional().describe('Preset id: story, list, post, stats, versus, terminal, clip, narrated (Reddit-style / greentext story over a moving background), meme (meme panels with effects), stickman (a hand-drawn stick figure, or two for versus clips, acting it out), blox (one or two blocky game-style 3D avatars acting it out: rants, skits, dances), slides (a slideshow), duo (a person asks, a 3D AI character answers, with a board of parts); not needed with format'),
     format: z.string().optional().describe('Start from a format (list_formats): its preset, beat skeleton and caption. Its numbers are examples; replace them.'),
     title: z.string().optional().describe('Name in the hub (not shown in the video)'),
     fields: fieldsSchema.optional(),
     caption: z.string().optional().describe('Instagram caption to post with it'),
     hashtags: z.array(z.string()).optional(),
     hook_style: z.string().optional().describe(`The kind of opening this reel has, for the hook style test: ${HOOK_STYLE_IDS.join(', ')} (get_performance names the one to use next on each platform).`),
-    style: z.string().optional().describe('The channel style it is made in (the Styles page: krypt/main, vote, tips, retro, toy, wyr, case, quiz, myth, top, chat, tier, screen, clipping, the real-footage ones proof, pov, speed, series, the meme ones reddit, greentext, meme, dumb, and stickman). Default main. It counts in the format test.'),
+    style: z.string().optional().describe('The channel style it is made in (the Styles page: krypt/main, vote, tips, retro, toy, wyr, case, quiz, myth, top, chat, tier, screen, clipping, the real-footage ones proof, pov, speed, series, the meme ones reddit, greentext, meme, dumb, stickman, blox, slides and ask). Default main. It counts in the format test.'),
     vote: voteSchema.optional().describe('For the vote style: which part of which comment vote story this is, and its two options.'),
     like: z.string().optional().describe('A reference video (id or name from list_reference_videos) whose editing style to follow: sets what the preset can take from it (accent, light/dark look, pace) and returns notes on matching the rest. Fields you pass still win.'),
     campaign: campaignRef,
@@ -305,12 +326,17 @@ const S = {
     id: reelId,
     times: z.array(z.number().min(0)).max(8).optional().describe('Seconds to grab. Default: the opening frame, two body beats and the end card.'),
     scale: z.number().min(0.15).max(1).optional().describe('Image size vs 1080x1920. Default 0.35.'),
-    shape: z.enum(['vertical', 'square']).optional().describe('square: preview the 1080x1080 version X gets'),
+    shape: z.enum(['vertical', 'square', 'portrait', 'pin']).optional().describe('square: preview the 1080x1080 version X gets; portrait (4:5) and pin (2:3): how a picture of it comes out'),
   }),
   render_image: z.object({
     id: reelId,
     t: z.number().min(0).optional().describe('Second of the reel to grab (default 1.5: the hook once it has landed). preview_reel first to find the strongest frame.'),
-    shape: z.enum(['square', 'vertical']).optional().describe('square (default) = 1080x1080 for X and feeds; vertical = 1080x1920'),
+    shape: z.enum(['square', 'vertical', 'portrait', 'pin']).optional().describe('square (default) = 1080x1080 for X and feeds; portrait = 1080x1350 (4:5: Instagram, Threads, Facebook); pin = 1080x1620 (2:3: a Pin); vertical = 1080x1920'),
+  }),
+  render_slides: z.object({
+    id: reelId,
+    shape: z.enum(['portrait', 'vertical', 'square', 'pin']).optional().describe('portrait (default) = 1080x1350, 4:5: Instagram, Threads, Facebook, X; vertical = 1080x1920: TikTok; pin = 1080x1620, 2:3: Pinterest; square = 1080x1080'),
+    times: z.array(z.number().min(0)).min(2).max(MAX_SLIDES).optional().describe('The seconds to save, in order. Leave out for a slides, meme, story, narrated or stickman reel: one picture per slide / panel / beat, each once it has landed.'),
   }),
   render_reel: z.object({ id: reelId, shape: z.enum(['vertical', 'square']).optional().describe('vertical (default) = 1080x1920 for Instagram, TikTok and Shorts; square = 1080x1080 for X (the same reel, its content band on a blurred fill; saved next to the vertical one)') }),
   mark_posted: z.object({
@@ -320,6 +346,7 @@ const S = {
     posted_at: iso.optional(),
     caption: z.string().optional(),
     trial: z.boolean().optional().describe('Posted as a Trial Reel (Instagram)'),
+    kind: z.enum(['video', 'slides']).optional().describe('slides = it went up as a photo post of its slides (browser_attach_slides). Default video.'),
     handle: z.string().optional().describe('The account that posted it (its Instagram handle, also for its X / TikTok / YouTube). Default: the active account.'),
   }),
   record_screen: z.object({
@@ -329,10 +356,23 @@ const S = {
     name: z.string().optional().describe('File name for the recording'),
   }),
   list_media: z.object({
-    kind: z.enum(['backgrounds', 'memes', 'campaigns']).describe("backgrounds = videos to play behind narrated reels (the user's Backgrounds folder); memes = the user's meme templates, reaction pictures and clips (the Memes folder); campaigns = Content Rewards campaigns' logos and footage (query: the campaign title)"),
+    kind: z.enum(['backgrounds', 'memes', 'campaigns', 'images']).describe("backgrounds = videos to play behind narrated reels (the user's Backgrounds folder); memes = the user's meme templates, reaction pictures and clips (the Memes folder); campaigns = Content Rewards campaigns' logos and footage (query: the campaign title); images = pictures for photo slideshows (the Images folder: saved with save_images or the user's own)"),
     query: z.string().optional().describe('Only files whose name or sub-folder has these words'),
     look: z.boolean().optional().describe('Also return small pictures of up to 10 of the images (from offset), to pick ones that fit the joke'),
     offset: z.number().int().min(0).optional().describe('With look: skip this many images (to see the next 10)'),
+  }),
+  find_images: z.object({
+    query: z.string().min(2).describe('What the picture shows plus the look, the way people search Pinterest: "messy desk night aesthetic", "gym mirror selfie", "cozy gaming setup purple"'),
+    count: z.number().int().min(1).max(24).optional().describe('How many to return (default 12)'),
+  }),
+  find_slideshows: z.object({
+    query: z.string().optional().describe('A creator ("@name"): lists their photo slideshows with slide counts, likes, views and saves, most liked first. (Hashtag pages show only videos signed out; find slideshow creators in the account\'s TikTok tab: search the niche, Photos.)'),
+    url: z.string().optional().describe('A TikTok photo post link (tiktok.com/@name/photo/...): returns its slides to look at, its caption, sound and numbers'),
+    count: z.number().int().min(1).max(30).optional().describe('With query: how many to list (default 12)'),
+  }),
+  save_images: z.object({
+    ids: z.array(z.string()).min(1).max(20).describe('The ids of the pictures to keep, from find_images'),
+    folder: z.string().optional().describe('Sub-folder of Images to put them in (default: the search words)'),
   }),
   find_clips: z.object({
     handle: z.string().optional().describe('The account whose clipping streamers to read (Styles page). Default: the active account.'),
@@ -432,6 +472,10 @@ const S = {
     variety: z.enum(['proven', 'balanced', 'experimental']).optional().describe('How much the runs experiment with openings, art styles and voices (Styles page): proven = always the best so far, balanced = test then lean on the winner, experimental = keep rotating. Only with the user\'s say-so.'),
     per_thread: z.number().int().min(1).optional().describe("The most comments, replies and messages an account sends into one thread (a post's comments, an X or Threads conversation, a DM chat). Recommended 2 (the soft cap). Only when the user gives a number; over 2, warn them plainly that long back-and-forths are how AI accounts end up replying to each other and how accounts get flagged."),
     reel_pick: z.enum(['ai', 'me']).optional().describe('Who picks each reel\'s topic (Create > Next run): ai = the AI, with the queue first; me = only the user\'s queue. Only with the user\'s say-so.'),
+    longform: z
+      .object({ per_week: z.number().int().min(0).max(99).optional(), length: z.enum(['5-7', '8-12', '12-20']).optional().describe('Minutes each'), visibility: z.enum(['public', 'unlisted']).optional() })
+      .optional()
+      .describe(`The long-form channel's plan (Create > Long videos): long videos a week (recommended up to ${LONGFORM_SOFT_CAP}; the user's number stands), how long each is, and how a finished one goes up. Only when the user asks.`),
     voice_test: z.array(z.string()).max(4).optional().describe('The ElevenLabs voices ("el:<id>") that rotate with the default voice in the voice test. Replaces the list; an empty list ends the test. Only when the user asks to add or drop a voice.'),
   }),
   set_next_run: z.object({ text: z.string().max(2000).describe("The user's instructions for the next autopilot run, in their words. An empty string clears them.") }),
@@ -477,7 +521,7 @@ const S = {
           title: z.string().optional().describe('What it is in one line: the title, or the first line of the caption. Needed for a post not in the log yet.'),
           topic: z.string().optional().describe('The story or angle, specific enough to recognise a repeat (e.g. "GTA 6 trailer pumped DacityCoin", "Krypt Trader: how the Kalshi bot picks a side")'),
           tools: z.array(z.string()).optional().describe('krypt_tools ids it features (bot, mirror, trader, larp, ...)'),
-          kind: z.enum(['video', 'short', 'text', 'image', 'live']).optional(),
+          kind: z.enum(['video', 'short', 'text', 'image', 'slides', 'live']).optional().describe('slides = a photo post of several pictures (a carousel / slideshow)'),
           views: z.number().int().min(0).optional(),
           likes: z.number().int().min(0).optional(),
           comments: z.number().int().min(0).optional(),
@@ -536,7 +580,7 @@ const S = {
     pinterest_watch_only: z.boolean().optional().describe('Watch only on Pinterest: no saves, reactions, follows, comments or Pins there'),
     niche: z.string().optional(),
     style_mix: z.record(z.string(), z.number().min(0).max(100)).optional().describe('The share of reels each of its styles gets, in percent, by style label or id, e.g. {"main": 60, "vote": 40} (Styles page). An empty object goes back to the default. Only with the user\'s say-so.'),
-    styles: z.array(z.string()).optional().describe('Channel styles the account runs, main first (Styles page): krypt/main, vote, tips, retro, toy, ... reddit, greentext, meme, dumb, stickman. Only with the user\'s say-so.'),
+    styles: z.array(z.string()).optional().describe('Channel styles the account runs, main first (Styles page): krypt/main, vote, tips, retro, toy, ... reddit, greentext, meme, dumb, stickman, blox, slides, ask. Only with the user\'s say-so.'),
     tone: z.enum(['clean', 'edgy', 'raw']).optional().describe("How rough its reddit, greentext, meme and dumb videos may be: clean (no swearing), edgy (dark humour, mild swearing, strong words censored), raw (swearing allowed; never slurs). The user's call: only when they ask."),
     status: z.enum(['warming', 'active', 'paused']).optional(),
     created_on: z.string().optional().describe('YYYY-MM-DD the account was made'),
@@ -590,6 +634,12 @@ const S = {
     path: z.string().describe("An image file (.png/.jpg/.webp) inside Marketo's render folder (get_overview names it) or the app's own folders, e.g. a profile photo or cover you made there"),
   }),
   browser_attach_reel: z.object({ handle: browserHandle, site, id: reelId.describe('A rendered reel (render_reel first)') }),
+  browser_attach_slides: z.object({
+    handle: browserHandle,
+    site,
+    id: reelId.describe('The reel whose slides go up as pictures'),
+    ref: z.number().int().optional().describe('Only when the answer asks for it: the element number of the page\'s photo upload button ("Add photo", "Upload"), from a fresh browser_snapshot. Do not click that button yourself: it opens a file dialog only the hub can fill.'),
+  }),
   save_long_video: z.object({
     id: z.string().optional().describe('To change one: its id (list_long_videos). Leave out to start a new one.'),
     handle: z.string().optional().describe("The account whose YouTube channel it goes to (default: the active one). A new video needs it."),
@@ -606,6 +656,11 @@ const S = {
     thumbnail_text: z.string().max(60).optional().describe('2 to 5 big words for the thumbnail; wrap one in *stars* for the accent colour. Not the title repeated.'),
     thumbnail_bg: z.string().optional().describe('A picture or video (a frame of it) behind the thumbnail text: absolute path'),
     thumbnail_side: z.string().optional().describe("A second picture on the thumbnail's right (a product screenshot): absolute path"),
+    thumbnail_path: z.string().optional().describe('A finished 1280x720 thumbnail made elsewhere (Krypt Editor make_thumbnail): absolute path. render_thumbnail draws one here instead'),
+    stats: z
+      .object({ views: z.number().min(0), likes: z.number().min(0).optional(), comments: z.number().min(0).optional(), ctr: z.number().min(0).max(100).optional().describe('Impressions click-through rate, percent'), avg_viewed: z.number().min(0).max(100).optional().describe('Average percentage viewed'), subs: z.number().optional().describe('Subscribers it brought') })
+      .optional()
+      .describe("An uploaded video's numbers as YouTube Studio shows them now (Content and Analytics). Only what you read there"),
     project_path: z.string().optional().describe('The Krypt Editor project (.krypt)'),
     video_path: z.string().optional().describe('The exported MP4 (Krypt Editor export_video)'),
     status: z.enum(['script', 'narrated', 'edited', 'ready', 'uploaded']).optional(),
@@ -629,7 +684,7 @@ export const TOOLS: ToolDef[] = [
   { name: 'list_presets', title: 'List presets', kind: 'read', where: 'main', description: 'The reel presets, one line each; with preset, that one\'s fields, types and defaults.', input: S.list_presets },
   { name: 'list_reels', title: 'List reels', kind: 'read', where: 'main', description: 'Reels in the hub with status, length, render path and latest metrics.', input: S.list_reels },
   { name: 'get_reel', title: 'Get reel', kind: 'read', where: 'main', description: 'One reel\'s full field values, caption and timing.', input: S.get_reel },
-  { name: 'list_formats', title: 'List formats', kind: 'read', where: 'main', description: 'Reel formats to start from (Would you copy this?, 30-second explainer, Myth vs data, Paper-trade diary, Same-day news, POV meme, for the meme styles Reddit story, Greentext, Meme slideshow, Dumb edit, and for the stickman style Stickman explainer and Stickman versus): when to use each, the job of every beat and hooks to test. Their content is example data to replace.', input: S.list_formats },
+  { name: 'list_formats', title: 'List formats', kind: 'read', where: 'main', description: 'Reel formats to start from (Would you copy this?, 30-second explainer, Myth vs data, Paper-trade diary, Same-day news, POV meme, for the meme styles Reddit story, Greentext, Meme slideshow, Dumb edit, for the stickman style Stickman explainer and Stickman versus, and for the blox style Blocky rant, Blocky skit and Blocky dance): when to use each, the job of every beat and hooks to test. Their content is example data to replace.', input: S.list_formats },
   { name: 'create_reel', title: 'Create reel', kind: 'write', where: 'main', description: 'Create a reel from a format (recommended) or a preset. Missing fields use the defaults (examples: replace every example line and number with real content for the product this reel is about). The hub opens it in Studio.', input: S.create_reel },
   { name: 'update_reel', title: 'Update reel', kind: 'write', where: 'main', description: 'Change a reel\'s fields, title, caption, hashtags or style. A rendered reel goes back to draft when its content changes.', input: S.update_reel },
   { name: 'duplicate_reel', title: 'Duplicate reel', kind: 'write', where: 'main', description: 'Copy a reel (for variations / A-B hooks).', input: S.duplicate_reel },
@@ -641,6 +696,7 @@ export const TOOLS: ToolDef[] = [
   { name: 'preview_reel', title: 'Preview frames', kind: 'read', where: 'renderer', description: 'Render still frames of a reel as images, to check layout and copy before rendering. If you cannot see images, get_reel shows the exact text of every beat instead.', input: S.preview_reel },
   { name: 'render_image', title: 'Render image', kind: 'export', where: 'renderer', description: "Save one frame of a reel as a full-size PNG in the output folder (square by default) for an image post: X, Threads, a Facebook photo or a Pin. Returns the file path to give browser_attach_image.", input: S.render_image },
   { name: 'render_reel', title: 'Render reel', kind: 'export', where: 'renderer', description: 'Render the reel to an MP4 (H.264/AAC) in the output folder: 1080x1920 for Instagram, TikTok and Shorts, or with shape "square" the 1080x1080 version X gets. Returns the file path.', input: S.render_reel },
+  { name: 'render_slides', title: 'Save slides', kind: 'export', where: 'renderer', description: "Save a reel's slides as pictures (2-10 JPEGs in a folder of their own) for a photo post people swipe through: an Instagram carousel, a TikTok photo post, a multi-photo post on Threads, Facebook or X. Made for slides reels (preset slides); also works on meme, story, narrated and stickman reels (one picture per panel or beat). Returns the files and small copies to check. Then browser_attach_slides.", input: S.render_slides },
   { name: 'mark_posted', title: 'Mark posted', kind: 'write', where: 'main', description: 'Record that a reel went live on Instagram, X, TikTok, Facebook, Threads, Pinterest or as a YouTube Short (platform "youtube"), with its URL.', input: S.mark_posted },
   { name: 'set_next_run', title: 'Next run instructions', kind: 'write', where: 'main', description: "Save what the user wants the next autopilot run to do (the hub's Create > Next run page). Only when the user asks for it (\"next run, make a reel about ...\"); write it in their words, never your own plan. The next run reads it first, once. Replaces what was there; an empty text clears it.", input: S.set_next_run },
   { name: 'save_style', title: 'Make or change a style', kind: 'write', where: 'main', description: "Make a channel style of the user's own (it appears on the Styles page), or change one they made (id). Use it when the user asks for a new kind of video: write the rules from what they describe. The built-in styles cannot be changed; build a new one on top of one (base). A style is used once an account runs it (save_account styles), which is the user's call.", input: S.save_style },
@@ -652,6 +708,9 @@ export const TOOLS: ToolDef[] = [
   { name: 'post_failed', title: 'Post did not go up', kind: 'write', where: 'main', description: "A post you pressed Post / Share / Publish on never showed up on the profile (or in the platform's Published list): gives today's post slot back so it can be tried once more. Only after you looked, at least two minutes after sending. Refused when a post was recorded as live there since (mark_posted / log_posts), and after two a day per platform.", input: S.post_failed },
   { name: 'list_media', title: 'Backgrounds and memes', kind: 'read', where: 'main', description: "The user's own media for the meme styles: background videos (Backgrounds folder) for narrated reels, and meme templates, reaction pictures and clips (Memes folder) for meme reels. Returns file paths to put in a reel (fields.video, or an image panel's a); with look, small pictures of the images.", input: S.list_media },
   { name: 'find_clips', title: 'Find stream clips', kind: 'read', where: 'main', description: "Clipping style: the top Twitch / Kick clips (by views, last day or week) of the streamers set for the account on the Styles page, read off their clips pages. Each has its address, title, length and views, and whether a reel already uses it. save_clip the one to cut. With video (a YouTube address the user gave, in chat or in the reel queue): that video's most replayed parts off YouTube's own replay graph, with chapters, for save_clip with start and seconds.", input: S.find_clips },
+  { name: 'find_images', title: 'Find pictures', kind: 'read', where: 'main', description: 'Search Pinterest for pictures for a photo slideshow (read in a hidden window of the hub, signed out: no account is used and nothing counts toward a warm-up). Returns each picture small, with an id, its shape and what its Pin says. Pick by looking: one look for the whole slideshow, upright pictures, no text or watermark on them, no recognisable faces. Then save_images.', input: S.find_images },
+  { name: 'find_slideshows', title: 'Study slideshows', kind: 'read', where: 'main', description: "Study TikTok photo slideshows (read in a hidden window of the hub, signed out: no account is used). With query \"@creator\": that creator's photo posts with their numbers, most liked first. With url: one post's slides as pictures, its caption, sound and numbers, to see what its hook is, how it is built and how it looks. Use what works (the hook's angle, the structure, the slide count, the look) for our own slideshow with our own words and pictures; never copy a post's sentences or reuse its slides.", input: S.find_slideshows },
+  { name: 'save_images', title: 'Save pictures', kind: 'export', where: 'main', description: "Save pictures from find_images into the Images folder at full size and return their file paths, for a slideshow's photo slides (beats: seconds | text | photo | <path>). Each picture must be changed before it is posted: our own words on it, plus a crop, flip, tint or grain (the slides style's rules).", input: S.save_images },
   { name: 'save_clip', title: 'Save stream clip', kind: 'export', where: 'renderer', description: 'Clipping style: download one Twitch / Kick clip (the video its page plays), or record a part of a YouTube video off its page (start, seconds; up to 90 s, in real time), save it as an MP4 in the output folder, caption its speech on this computer and return frames to find the facecam. Then create_reel with preset clip, fit split (the clipping style\'s rules say how).', input: S.save_clip },
   { name: 'record_screen', title: 'Record screen', kind: 'export', where: 'renderer', description: 'Record one app window (never the whole screen) for a few seconds, for screen-tutorial reels: optionally opens the app first by its Start menu name. Saves a seekable MP4 in the output folder and returns frames so you can pick the seconds. Only record Krypt apps or the user\'s own; trading tools in paper / demo mode only.', input: S.record_screen },
   { name: 'record_votes', title: 'Record votes', kind: 'write', where: 'main', description: 'Comment vote story: save how many people picked A and B on a posted part (read from its comments on every platform it is on; each person once). The most votes decide the next part; get_overview says what is next.', input: S.record_votes },
@@ -700,6 +759,7 @@ export const TOOLS: ToolDef[] = [
   { name: 'render_kip', title: 'Render Kip', kind: 'export', where: 'renderer', description: "Render Kip, the mascot, presenting each narrated section of a long video: one 720x1280 MP4 per section on a green screen (#00d800), its mouth moving with that section's narration, its moves from the section's kip field (or automatic). Put them in the edit over the footage with chroma_key on.", input: S.render_kip },
   { name: 'browser_attach_long', title: 'Attach long video', kind: 'write', where: 'main', description: "Put a long video's MP4 into YouTube Studio's upload dialog (site youtube; open Studio's Create > Upload videos first, or the hub opens it).", input: S.browser_attach_long },
   { name: 'browser_attach_reel', title: 'Attach reel', kind: 'write', where: 'main', description: "Put a rendered reel's MP4 into Instagram's Create dialog (open the dialog first; the hub then sets its crop to Original, the full vertical frame, and says so: never change it to 1:1 or 4:5), with site \"x\" into X's compose dialog (it opens it itself), with site \"tiktok\" into TikTok Studio's uploader, with site \"facebook\" into Meta Business Suite's Reels composer, with site \"threads\" into a new thread, with site \"pinterest\" into the Pin creation tool (each opens it itself), or with site \"youtube\" into YouTube Studio's upload dialog (it opens the dialog itself) to post it as a Short. Publishing still needs the user's approval on the final Share / Publish click.", input: S.browser_attach_reel },
+  { name: 'browser_attach_slides', title: 'Attach slides', kind: 'write', where: 'main', description: "Put a reel's saved slides (render_slides) into a platform's composer as ONE photo post people swipe through: Instagram (a carousel; open the Create dialog first, the hub then sets the crop to Original), TikTok (a photo post, shape vertical; if its web uploader takes only video on this account the answer says so), Threads, Facebook (Meta Business Suite's post composer) and X (up to 4 pictures); those four open their composer themselves. Its answer gives the steps to post. Not for YouTube or Pinterest (one picture a Pin).", input: S.browser_attach_slides },
   { name: 'browser_attach_image', title: 'Attach image', kind: 'write', where: 'main', description: "Put an image (profile photo, Page cover, Pin image) into the page's open image picker: open the upload first (e.g. Edit profile picture > Upload photo). Only image files inside Marketo's render folder or its own folders. Saving the profile still asks the user.", input: S.browser_attach_image },
   { name: 'show', title: 'Show page', kind: 'read', where: 'main', description: 'Switch the hub to a page (and a reel in Studio) so the user sees it.', input: S.show },
 ];
@@ -709,18 +769,42 @@ export function annotationsFor(def: ToolDef): Record<string, boolean | string> {
 }
 
 /** The rules every connected AI gets, built from the brand profile. Also the top of get_overview, for apps that don't pass server instructions on. */
+/** Uploading a long video through Studio; `vis` says which visibility to pick. */
+const longUpload = (vis: string): string =>
+  `Studio > Create > Upload videos, browser_attach_long, type the title and description, upload the thumbnail (browser_attach_image with the thumbnail's file and the ref of Studio's thumbnail upload button), "No, it's not made for kids", Next to Visibility, pick ${vis}, and wait until the dialog no longer says "Checking ..." (YouTube's copyright and policy checks, often 10 minutes or more; browser_wait and look again) before Save: saving during the checks risks a strike. The hub marks the video uploaded when Save goes through; then save_long_video with url. A long video's Save is not a Short: the Shorts limit and post gap don't apply to it.`;
+
 /** How a long video is made, given with list_long_videos (not in every conversation's instructions). */
-const LONG_VIDEO_STEPS = `Long videos (YouTube, 16:9, 5-20 min): The edit is done in Krypt Editor (its own MCP tools; the user installs it and connects it to their AI): if its tools are missing, tell the user. Steps: (1) research and save_long_video with the title (search words first, under 70 characters), sections (one per chapter: heading, the exact narration, what is on screen), description and tags. Every fact is checked first; no numbers that were not measured; tool features only from krypt_tools. Write for the ear: short sentences, one idea each, a hook in the first 15 seconds that says what the viewer gets, and the Krypt tool where it really fits (usually the last third), never a hard sell. (2) narrate_long_video (one voice, the user's default). (3) Kip presents: give each section kip moves that match its words, then render_kip. (4) Krypt Editor: set_canvas 16:9, import the section MP3s in order onto one audio track, build the picture over each (screen recordings with record_screen, the tool's bundled recording, title cards as chapters with chapter: true, key points), then, as the last step of the build, edit_track add a new video track for Kip (the newest video track draws in front of the others): each section's Kip clip at that section's start, update_clip chroma_key enabled (green #00d800, similarity about 0.38), scale about 0.55, pos_y about 0.22 (pos is in whole canvas widths/heights from the centre, so 0.5 is already the edge). Text and shapes always draw over video, so Kip goes where no card, panel or text is: bottom-left (pos_x about -0.4) while a key-points panel fills the right, bottom-right (pos_x about 0.4) otherwise. A full-screen card or panel hides him: where nothing is under it, delete its full-screen backing shape (the canvas colour shows instead) so Kip stays visible; chapter cards can cover him, which is why each clip starts after its card. Check every section with preview_frames that he is on screen. Keep it moving, never a still frame for more than a few seconds: animate_clip motion zoom-in or pan on every screen recording and picture (alternate them), add_transitions on scene changes (one family, skip_jump_cuts), entrances on cards and overlays, a short zoom on the exact setting the voice names (set_keyframes). Check it with preview_frames, export_video with loudness -14 into the video's folder, get_chapters for the description; save_long_video with project_path, video_path, the description with chapters, status edited. Check every frame of screen recordings for private data. (5) render_thumbnail (thumbnail_text: 2-5 words, one in *stars*; thumbnail_bg / thumbnail_side pictures), look at it, fix and render again until it reads at phone size. (6) Upload: Studio > Create > Upload videos, browser_attach_long, type the title and description, upload the thumbnail (browser_attach_image with the thumbnail's file and the ref of Studio's thumbnail upload button), "No, it's not made for kids", Next to Visibility, pick what the user asked (Unlisted unless they said public), and wait until the dialog no longer says "Checking ..." (YouTube's copyright and policy checks, often 10 minutes or more; browser_wait and look again) before Save: saving during the checks risks a strike. The hub marks the video uploaded when Save goes through; then save_long_video with url. A long video's Save is not a Short: the Shorts limit and post gap don't apply to it.`;
+const LONG_VIDEO_STEPS = `Long videos (YouTube, 16:9, 5-20 min): The edit is done in Krypt Editor (its own MCP tools; the user installs it and connects it to their AI): if its tools are missing, tell the user. Steps: (1) research and save_long_video with the title (search words first, under 70 characters), sections (one per chapter: heading, the exact narration, what is on screen), description and tags. Every fact is checked first; no numbers that were not measured; tool features only from krypt_tools. Write for the ear: short sentences, one idea each, a hook in the first 15 seconds that says what the viewer gets, and the Krypt tool where it really fits (usually the last third), never a hard sell. (2) narrate_long_video (one voice, the user's default). (3) Kip presents: give each section kip moves that match its words, then render_kip. (4) Krypt Editor: set_canvas 16:9, import the section MP3s in order onto one audio track, build the picture over each (screen recordings with record_screen, the tool's bundled recording, title cards as chapters with chapter: true, key points), then, as the last step of the build, edit_track add a new video track for Kip (the newest video track draws in front of the others): each section's Kip clip at that section's start, update_clip chroma_key enabled (green #00d800, similarity about 0.38), scale about 0.55, pos_y about 0.22 (pos is in whole canvas widths/heights from the centre, so 0.5 is already the edge). Text and shapes always draw over video, so Kip goes where no card, panel or text is: bottom-left (pos_x about -0.4) while a key-points panel fills the right, bottom-right (pos_x about 0.4) otherwise. A full-screen card or panel hides him: where nothing is under it, delete its full-screen backing shape (the canvas colour shows instead) so Kip stays visible; chapter cards can cover him, which is why each clip starts after its card. Check every section with preview_frames that he is on screen. Keep it moving, never a still frame for more than a few seconds: animate_clip motion zoom-in or pan on every screen recording and picture (alternate them), add_transitions on scene changes (one family, skip_jump_cuts), entrances on cards and overlays, a short zoom on the exact setting the voice names (set_keyframes). Check it with preview_frames, export_video with loudness -14 into the video's folder, get_chapters for the description; save_long_video with project_path, video_path, the description with chapters, status edited. Check every frame of screen recordings for private data. (5) render_thumbnail (thumbnail_text: 2-5 words, one in *stars*; thumbnail_bg / thumbnail_side pictures), look at it, fix and render again until it reads at phone size. (6) Upload: ${longUpload('what the user asked (Unlisted unless they said public)')}`;
+
+/**
+ * Long-form mode (the profile runs a channel of long videos): who does what, and the steps. Krypt Editor makes the
+ * video with its own tools; Marketo decides what to make and owns the packaging, the upload and the comments.
+ */
+function longformSteps(): string {
+  const d = store.get();
+  const plan = longformPlan(d.settings);
+  const link = d.brand.site ? `, the link ${d.brand.site}` : '';
+  return `Long-form channel: this profile runs a YouTube channel of long videos (16:9, about ${plan.length} minutes each). Who does what: Marketo (these tools) decides what video to make, and owns the title, description, tags, thumbnail, the upload and the comments. Krypt Editor (its own tools, named ${EDITOR_SERVER}) makes the video itself. When the ${EDITOR_SERVER} tools are missing, do the Marketo parts, then stop and tell the user: they install Krypt Editor (${EDITOR_URL.replace(/^https:\/\//, '')}), open it and connect it to this AI from its AI agents button.
+(1) Decide from the channel, never from a guess. browser_open site youtube, then in Studio read Content (what is up, and each video's views), Analytics (which videos pull views and hold viewers; its Research tab shows what viewers search for) and Comments (what people ask for). list_long_videos has what was made already: never the same topic twice. Save each uploaded video's numbers as you read them (save_long_video with stats): the next pick leans on them. A new channel has no numbers yet: search the web for what works in the niche now, and what viewers ask that nobody answers well. Pick the one video a viewer of the channel's best would click.
+(2) save_long_video with the title (search words first, under 70 characters, nothing the video does not pay off), the topic, the script as sections (heading, the exact narration, what is on screen), tags and thumbnail_text. Every fact is checked against a source you read; no numbers nobody measured. Write for the ear: short sentences, one idea each, and an opening that says in the first 15 seconds what the viewer gets.
+(3) The voice: when the user has an ElevenLabs default voice (Voices page), narrate_long_video and give Krypt Editor each section's MP3 as that section's audio. When it answers that none is set, Krypt Editor speaks the script itself: leave it to it.
+(4) Krypt Editor makes it (when its tools are there but build_longform is not among them, the user's Krypt Editor is too old to make long videos: do not piece one together by hand, tell the user to update Krypt Editor and stop at the script). Its list_formats, then build_longform with the sections in the format and look that fit this channel (the style and brief in its get_project are the user's own choices: follow them). Look at a few moments with preview_frames and fix what reads badly, save_project, export_video (MP4, loudness -14) into the video's folder (list_long_videos with the id names it), get_chapters. Then save_long_video with project_path, video_path, status edited and the description: two lines on what it covers with the search words in them${link}, the chapters, the picture credits. (The Editor's send_to_marketo with this video's id does the same from its side.) Check every screen recording for private data before it goes in.
+(5) Thumbnail: render_thumbnail (thumbnail_text: 2-5 words, one in *stars*), or the Editor's make_thumbnail and save_long_video with thumbnail_path. Look at it and redo it until it reads at phone size and does not repeat the title.
+(6) Upload: ${longUpload(`${plan.visibility === 'public' ? 'Public' : 'Unlisted'} (the user's plan; a video they asked to see first goes up Unlisted)`)}
+(7) Between videos, every run: Studio's Comments. Answer real questions and comments on the channel's own videos in a line or two, the way a person types; never the same reply twice; leave spam alone; give the good ones a heart. A comment that asks for a video is an idea: keep it in mind for step 1. Nothing is pressed on youtube.com itself.
+A video takes more than one run when time is short: stop after a finished step (the status keeps the place) and say in the report where it stands.`;
+}
 
 export function serverInstructions(): string {
   const b = store.get().brand;
   const krypt = isKryptBrand(b);
+  const longform = isLongform(store.get().settings);
   const creator = activeCreator(b);
-  const invite = (creator?.invite && cleanInvite(creator.invite)) || KRYPT_DISCORD.replace(/^https:\/\//, '');
+  const invite =(creator?.invite && cleanInvite(creator.invite)) || KRYPT_DISCORD.replace(/^https:\/\//, '');
   const brand = b.name
     ? [
-        `The reels are for ${b.name}${b.site ? ` (${b.site})` : ''}. ${b.what}`.trim(),
-        b.niche ? `The account posts about: ${b.niche}.` : '',
+        (longform ? `${b.name} is a long-form YouTube channel${b.site ? ` (${b.site})` : ''}: long videos are this profile's main work. ${b.what}` : `The reels are for ${b.name}${b.site ? ` (${b.site})` : ''}. ${b.what}`).trim(),
+        b.niche ? `${longform ? 'The channel covers' : 'The account posts about'}: ${b.niche}.` : '',
         b.voice ? `Voice: ${b.voice}` : '',
         b.never ? `Never: ${b.never}` : '',
         b.disclaimer ? `Disclaimer for reels that need it: "${b.disclaimer}"` : '',
@@ -746,7 +830,7 @@ ${brand}${pack}
 
 How to work:
 - get_overview first, then get_performance (what worked, the user's feedback, learnings) and get_playbook (hook rules, caption template, checklist, product notes).${krypt ? '' : ' The built-in playbook was written for a crypto account: its rules apply to any brand; where it names Krypt products or crypto topics, use this brand profile instead.'} list_formats has the proven structures, list_presets the presets (with preset: <id>, its fields).
-- Make a reel: create_reel with a format (or a preset) and the fields to change. Formats and presets come filled with example content: replace every example line and number with real, sourced content for the product the reel is about (the reddit, greentext, meme and dumb styles are made-up stories and jokes on purpose, as their style rules say; stickman scenes are made-up, the facts in them are not). preview_reel to look at frames, update_reel to fix, render_reel for the MP4. One voice per reel: new ones start with the user's voice from the Voices page, so leave the voice fields alone unless the user asks.
+- Make a reel: create_reel with a format (or a preset) and the fields to change. Formats and presets come filled with example content: replace every example line and number with real, sourced content for the product the reel is about (the reddit, greentext, meme and dumb styles are made-up stories and jokes on purpose, as their style rules say; stickman and blocky-avatar scenes are made-up, the facts in them are not). preview_reel to look at frames, update_reel to fix, render_reel for the MP4. One voice per reel: new ones start with the user's voice from the Voices page, so leave the voice fields alone unless the user asks.
 - "Make it like this": for a reference video the user points at (Research > Reference videos, or a file path for add_reference_video), get_reference_video, then create_reel with like: <its id> written to its timing, and note_reference_video what you saw. ${REF_RULES}
 - make_hook_variants gives 2-4 openings of one reel to test; render each, they post as separate Trial Reels.
 ${hooksNote()}
@@ -771,7 +855,7 @@ ${stylesNote()}
   Threads: signs in with the Instagram account, so its standing is Instagram's: stay well under. Video threads and short text threads; replies that add to the conversation grow it.
   Pinterest: a search engine: searchable titles and descriptions, the link on every Pin, a fitting board. Warm-up is searching the niche and saving good Pins.
   YouTube: Shorts through Studio (a vertical video of 3 minutes or less is a Short; 3 a day per channel recommended). Outside Studio only links and search, plus a Krypt visit's likes. Several channels can share one Google sign-in (save_account youtube_channel); the hub switches Studio to the account's channel itself, and those accounts take turns in the one tab: finish one upload before starting another. Never switch channels in Studio's menu.
-- Long videos (YouTube 16:9, Create > Long videos): only when the user asks or get_today says one is due. list_long_videos first: it gives the steps.
+${longform ? "- Long videos (YouTube 16:9, Create > Long videos) are this profile's main work: get_today's LONG-FORM CHANNEL part says what is due, and list_long_videos gives the steps and who does what (Krypt Editor makes the video; these tools pick it, package it, upload it and answer the comments). Reels and Shorts only where get_today shows a post target above 0." : '- Long videos (YouTube 16:9, Create > Long videos): only when the user asks or get_today says one is due. list_long_videos first: it gives the steps.'}
 - Profiles: each profile is a separate set (accounts, brand, reels, post log, Training, learnings). Every tool works on the open one; never carry a rule, learning or reel from one into another. use_profile only when the user or a run's instructions name a profile; then get_overview and get_today again.
 - Sending a post: after Post / Share / Publish the hub stays on the page 8-40 s so the upload finishes; don't open another page on that platform in the same step. Only a post you can see on the profile (or the Published list) is posted: check, then mark_posted or log_posts with its link. Not there after a couple of minutes: post_failed gives the slot back (at most twice a day per platform) and the report says an upload was lost.
 - After a reel is live: mark_posted with its URL (trial: true for Trial Reels). From 24h on, open its Insights and record_reel_metrics; then get_performance, and add_learning for what a comparison shows.${(store.get().campaigns ?? []).some((c) => c.on) ? `\n${CAMPAIGN_RULES}` : ''}`;
@@ -805,6 +889,17 @@ function styleTag(style?: string, vote?: z.infer<typeof voteSchema>): Partial<Re
 function postedAt(r: Reel): string {
   const all = [r.postedAt, r.shortsPostedAt, r.xPostedAt, r.tiktokPostedAt, ...Object.values(r.links ?? {}).map((l) => l?.at)].filter((x): x is string => !!x).sort();
   return all[0] ?? '';
+}
+
+/** Whether a comment vote story has its votes counted and its next part not made yet. */
+function voteWaiting(): boolean {
+  const parts = store.get().reels.filter((r) => r.vote);
+  const series = [...new Set(parts.map((r) => r.vote!.series.toLowerCase()))];
+  return series.some((key) => {
+    const mine = parts.filter((r) => r.vote!.series.toLowerCase() === key).sort((x, y) => x.vote!.part - y.vote!.part || x.createdAt.localeCompare(y.createdAt));
+    const v = mine[mine.length - 1].vote!;
+    return !!v.winner && !v.finale;
+  });
 }
 
 /** Where each comment vote story stands: what to count, what to make next. */
@@ -908,26 +1003,47 @@ function netPatch(prev: NetProfile | undefined, on: boolean | undefined, handle:
   return p;
 }
 
-/** " · styles: Krypt (main), Comment vote story (vote)" for an account line. */
+/** " · styles: Krypt (main), Comment vote story (vote)" for an account line. With many on, just their labels. */
 function styleNote(a: IgAccount): string {
   const b = store.get().brand;
-  return ` · styles: ${stylesOf(a)
+  const on = stylesOf(a)
     .map((id) => styleById(id))
-    .filter((x): x is NonNullable<typeof x> => !!x)
+    .filter((x): x is NonNullable<typeof x> => !!x);
+  const tone = on.some((x) => TONE_STYLES.includes(x.id)) ? ` · tone: ${a.tone ?? 'clean'}` : '';
+  if (on.length > 6) return ` · styles (${on.length} on): ${on.map((x) => styleName(x, b).label).join(', ')}${tone}`;
+  return ` · styles: ${on
     .map((x) => {
       const n = styleName(x, b);
       return `${n.name} (${n.label})`;
     })
-    .join(', ')}${stylesOf(a).some((id) => TONE_STYLES.includes(id)) ? ` · tone: ${a.tone ?? 'clean'}` : ''}`;
+    .join(', ')}${tone}`;
 }
 
-/** The channel styles part of the instructions: how to run the ones the accounts use. */
-function stylesNote(): string {
+/** The styles the accounts run, plus any the next-run note or the queue asks for by name. */
+function stylesInUse(): Set<string> {
   const d = store.get();
   const used = new Set(d.igAccounts.flatMap((a) => stylesOf(a)));
   // A style the next-run note or the queue asks for by name ("…, clipping style": the YouTube clip box on Create > Next run) gets its rules too.
   const asked = [d.nextRun?.note?.text ?? '', ...(d.nextRun?.queue ?? []).map((q) => q.text)].join(' ').toLowerCase();
   for (const x of allStyles()) if (asked.includes(`${x.id} style`)) used.add(x.id);
+  return used;
+}
+
+/**
+ * Whether every style in use has its rules written out in the instructions. With a few styles on, yes. With many
+ * (they all start on), that text would be re-read on every turn of every run, so the rules come when they are
+ * needed instead: get_today gives the due style's, list_formats gives any other's.
+ */
+function rulesInline(): boolean {
+  const used = stylesInUse();
+  return allStyles().filter((x) => x.id !== 'main' && used.has(x.id)).reduce((n, x) => n + x.rules.length, 0) <= 6000;
+}
+
+/** The channel styles part of the instructions: how to run the ones the accounts use. */
+function stylesNote(): string {
+  const d = store.get();
+  const used = stylesInUse();
+  const inline = rulesInline();
   const label = (id: string): string => {
     const x = styleById(id)!;
     const n = styleName(x, d.brand);
@@ -936,9 +1052,9 @@ function stylesNote(): string {
   const rules = allStyles().filter((x) => x.id !== 'main' && used.has(x.id)).map((x) => `  - ${label(x.id)}: ${x.rules}`);
   const others = allStyles().filter((x) => !used.has(x.id)).map((x) => label(x.id));
   return [
-    `- Channel styles (the Styles page; the user can say "run the vote style on @x"): each account line says which styles it runs, its main style first. With more than one, get_today names the style the next reel is in (from the mix the user set on the Styles page; with none set the main style gets about half), one style per reel, and pass style to create_reel. Change an account's styles (save_account styles) only when the user asks.`,
-    rules.length ? `  How to make the styles in use:\n${rules.join('\n')}` : '',
-    others.length ? `  Other styles the user can turn on: ${others.join(', ')}.` : '',
+    `- Channel styles (the Styles page, where the user switches each one on or off; every built-in style starts on; the user can also say "run the vote style on @x"): each account line says which styles it runs, its main style first. With more than one, get_today names the style the next reel is in (from the mix the user set on the Styles page; with none set the main style gets about half), one style per reel, and pass style to create_reel. Change an account's styles (save_account styles) only when the user asks.`,
+    !rules.length ? '' : inline ? `  How to make the styles in use:\n${rules.join('\n')}` : `  How to make a style: get_today gives the rules of the style that is due. For a reel in any other style, list_formats with style: <its label> returns that style's rules and its format; read them before create_reel. Never make a styled reel from memory of another style's rules.`,
+    others.length ? `  Styles the user switched off (never make these unless they ask for one): ${others.join(', ')}.` : '',
     '  The user can also have styles of their own (the Styles page, "New style"): when they ask for a new kind of video, save_style makes one from a description (delete_style removes one); it is used once an account runs it.',
   ]
     .filter(Boolean)
@@ -1100,7 +1216,7 @@ function voiceNote(): string {
   const saved = d.voices.length ? ` Voices the user saved (set fields.voice to the name): ${d.voices.map((v) => `"${v.name}" (${describeTune(v)})`).join(', ')}.` : '';
   const el = d.settings.eleven?.voices?.length ? ` ElevenLabs is connected (the user's key): its voices are bought only when you render_reel; previews have no narration (timed from the text), so preview timing shifts a little at render. Keep spoken lines tight (about 450 characters a reel) to stay in the user's credit budget; the hub drops to a cheaper model when a day runs ahead of its share, and render_reel says when it did. A reel is never voiced by anything but its own voice: when ElevenLabs keeps failing or the month's budget is spent, render_reel stops with "Not rendered" (bought lines are kept). Then try again later in the run, and if it still fails, leave the reel unposted and end the report with NEEDS YOU; never post it with another voice or no voice. Their ElevenLabs voices: ${d.settings.eleven.voices.slice(0, 12).map((v) => `"${v.name}"${v.category === 'cloned' || v.category === 'professional' ? ' (cloned)' : ''}`).join(', ')}.` : ` ElevenLabs is not connected, so narration uses the free on-device voice. Marketo recommends ElevenLabs for more natural narration (the user's own plan and key, connected on the Voices page; only paid for when a reel is rendered). While you help the user set Marketo up, or when they ask about better voices, recommend it once and give this sign-up link, saying plainly that it is Krypt's affiliate link and Krypt may earn a commission: ${ELEVEN_SIGNUP_URL} . Do not bring it up again after that.`;
   const pool = voiceTestPool();
-  const test = pool.length ? ` Voice test is on: story reels rotate fields.voice between ${pool.map((v) => `${elLabel(v)} ("${v}")`).join(', ')}, one voice per reel; get_performance says which voice is next on each platform. Leave voice_speed at 1 for them.` : '';
+  const test = pool.length ? ` Voice test is on: story reels rotate fields.voice between ${pool.map((v) => `${elLabel(v)} ("${v}")`).join(', ')}, one voice per reel (ask reels add the asker's voice themselves); get_performance says which voice is next on each platform. Leave voice_speed at 1 for them.` : '';
   return `Narrator voice for new story reels: ${describeTune(d.settings.voice ?? DEFAULT_TUNE)}${d.settings.voice ? (pool.length ? ' (the user\'s default; the voice test below decides each reel\'s voice)' : ' (the user chose it on the Voices page; keep it unless they ask for another)') : ''}.${saved}${el}${test} The user hears and tunes voices on the Voices page.`;
 }
 
@@ -1212,14 +1328,14 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
   },
 
   list_media: (a: z.infer<typeof S.list_media>) => {
-    const name = a.kind === 'memes' ? 'Memes' : a.kind === 'campaigns' ? 'Campaigns' : 'Backgrounds';
+    const name = a.kind === 'memes' ? 'Memes' : a.kind === 'campaigns' ? 'Campaigns' : a.kind === 'images' ? 'Images' : 'Backgrounds';
     if (a.kind === 'campaigns' && !mediaFolders.list('campaigns', a.query ?? '').length)
       return ok(`Nothing in the Campaigns folder (${mediaFolders.folder('campaigns')})${a.query ? ' matching that' : ''}. Campaign files (logos, footage) are downloaded by the user from the campaign page into its folder (Create > Campaigns > Folder). If a campaign needs one, put it in the report as NEEDS YOU.`);
     const dir = mediaFolders.folder(a.kind);
     const files = mediaFolders.list(a.kind, a.query ?? '');
     if (!files.length)
       return ok(
-        `The ${name} folder (${dir}) has ${a.query ? 'nothing matching that' : 'nothing in it yet'}. ${a.kind === 'backgrounds' ? 'Use a built-in background (bg runner, bounce or slice), or save a part of a YouTube video the user gave with save_clip and use that.' : 'Use the mascot (char panels), text panels or a part of a saved clip (screen panels) instead.'} The user fills it on the Styles page (Open folder) or by dropping files into ${dir}.`,
+        `The ${name} folder (${dir}) has ${a.query ? 'nothing matching that' : 'nothing in it yet'}. ${a.kind === 'backgrounds' ? 'Use a built-in background (bg runner, bounce or slice), or save a part of a YouTube video the user gave with save_clip and use that.' : a.kind === 'images' ? 'find_images searches Pinterest for pictures and save_images puts the ones you pick here.' : 'Use the mascot (char panels), text panels or a part of a saved clip (screen panels) instead.'} The user fills it on the Styles page (Open folder) or by dropping files into ${dir}.`,
       );
     const lines = files.map((f, i) => `${i + 1}. ${f.path} (${f.type}, ${f.mb} MB)`);
     const images: Array<{ data: string; mimeType: string }> = [];
@@ -1237,7 +1353,58 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
     const note = a.look ? (shown.length ? `\nPictures, in order: files ${shown.join(', ')}.` : '\n(No pictures could be shown.)') : '';
     return { ok: true, text: `${name} folder: ${dir}\n${lines.join('\n')}${note}`, images: images.length ? images : undefined };
   },
-  list_formats: () => ok(`${FORMATS.map(formatSummary).join('\n\n')}\n\ncreate_reel with format: <id> starts from one. Every number in a format is an example (the dateline says so): replace them all with real data before rendering.`),
+  find_images: async (a: z.infer<typeof S.find_images>) => {
+    const list = await images.search(a.query, a.count ?? 12);
+    const pics = await images.thumbs(list);
+    const shape = (f: images.FoundImage): string => (f.h > f.w * 1.15 ? 'upright' : f.w > f.h * 1.15 ? 'wide' : 'square');
+    const lines = list.map((f, i) => `${i + 1}. id ${f.id} · ${shape(f)}${pics[i] ? '' : ' · (no preview)'}${f.alt ? ` · ${f.alt}` : ''}`);
+    const shown = pics.filter((p): p is { data: string; mimeType: string } => !!p);
+    return {
+      ok: true,
+      text: `Pinterest pictures for "${a.query}" (${list.length}), previews in this order:\n${lines.join('\n')}\nPick the ones that fit and save_images with their ids. Upright ones fill a slide; a wide one gets cropped hard. Skip any with words, logos, watermarks or a recognisable face on them. Not what you wanted: search again with other words (add the look: "dark", "film", "minimal", "aesthetic").`,
+      images: shown.length ? shown : undefined,
+    };
+  },
+
+  find_slideshows: async (a: z.infer<typeof S.find_slideshows>) => {
+    if (a.url) {
+      const s = await slideshows.read(a.url);
+      const st = s.stats;
+      const nums = [st.views !== undefined ? `${fmtNum(st.views)} views` : '', st.likes !== undefined ? `${fmtNum(st.likes)} likes` : '', st.comments !== undefined ? `${fmtNum(st.comments)} comments` : '', st.saves !== undefined ? `${fmtNum(st.saves)} saves` : '', st.shares !== undefined ? `${fmtNum(st.shares)} shares` : ''].filter(Boolean).join(', ');
+      return {
+        ok: true,
+        text: `@${s.author}: ${s.count} slides${nums ? ` · ${nums}` : ''}${s.music ? ` · sound: ${s.music}` : ''}\nCaption: ${s.caption || '(none)'}\n${s.slides.length ? `Its slides below, in order${s.slides.length < s.count ? ` (the first ${s.slides.length})` : ''}.` : '(Its slides would not load.)'} Note what makes it work: the hook on slide 1, what each slide adds, how many words a slide, where the words sit, the look of the pictures, how it ends. Then make ours with that shape (format slides-photo): our own words, pictures from find_images, our topic. add_references keeps the link and what you saw.`,
+        images: s.slides.length ? s.slides : undefined,
+      };
+    }
+    if (!a.query) throw new Error('Pass query ("@creator") to list a creator\'s slideshows, or url (one photo post) to study it.');
+    const list = await slideshows.search(a.query, a.count ?? 12);
+    const line = (p: slideshows.FoundSlideshow): string => [p.url, p.slides ? `${p.slides} slides` : '', p.likes !== undefined ? `${fmtNum(p.likes)} likes` : '', p.views !== undefined ? `${fmtNum(p.views)} views` : '', p.saves !== undefined ? `${fmtNum(p.saves)} saves` : '', p.text].filter(Boolean).join(' · ');
+    return ok(`TikTok photo slideshows for "${a.query}" (${list.length}), most liked first:\n${list.map((p, i) => `${i + 1}. ${line(p)}`).join('\n')}\nfind_slideshows with url: <one of these> shows its slides. Study two or three of the most liked before writing ours.`);
+  },
+
+  save_images: async (a: z.infer<typeof S.save_images>) => {
+    const r = await images.save(a.ids, a.folder);
+    const parts: string[] = [];
+    if (r.saved.length) parts.push(`Saved ${r.saved.length} picture${r.saved.length === 1 ? '' : 's'}:\n${r.saved.map((s, i) => `${i + 1}. ${s.path} (${s.w}x${s.h})`).join('\n')}`);
+    if (r.missing.length) parts.push(`Not from a search in this run of the hub (find_images again): ${r.missing.join(', ')}.`);
+    if (r.failed.length) parts.push(`Would not download: ${r.failed.join(', ')}. Pick others.`);
+    if (!r.saved.length) throw new Error(parts.join('\n'));
+    parts.push('Use each as a photo slide (preset slides, beats: seconds | the words on it | photo | <path> | a smaller line | | flags). These are other people\'s pictures: every one gets our own words and at least one change (a crop "@x,y,w,h" after the path, flip, warm / cool / bw, grain, dim) so the slide is ours, and never a picture with a watermark, a logo or a recognisable person.');
+    return ok(parts.join('\n'));
+  },
+
+  list_formats: (a: z.infer<typeof S.list_formats>) => {
+    const tail = 'create_reel with format: <id> starts from one. Every number in a format is an example (the dateline says so): replace them all with real data before rendering.';
+    if (!a.style?.trim()) return ok(`${FORMATS.map(formatSummary).join('\n\n')}\n\n${tail}`);
+    const st = styleById(a.style);
+    if (!st) throw new Error(`No style "${a.style}". Styles: ${allStyles().map((x) => x.label).join(', ')} (krypt = main).`);
+    const n = styleName(st, store.get().brand);
+    // The style's own format, plus the others made for it (their ids start with the same word: blox-rant, blox-skit…).
+    const stem = st.format?.split('-')[0];
+    const mine = FORMATS.filter((f) => f.id === st.format || (!!stem && stem.length > 3 && f.id.startsWith(`${stem}-`)));
+    return ok([`${n.name} (${n.label}): ${st.about}`, `How to make it: ${st.id === 'main' ? 'the main style: everything in the instructions describes it.' : st.rules}`, mine.length ? `Its format${mine.length > 1 ? 's' : ''}:\n\n${mine.map(formatSummary).join('\n\n')}\n\n${tail}` : 'It has no format of its own: start from a preset (list_presets) as its rules say.', 'Pass style to create_reel so the reel is counted in this style.'].join('\n\n'));
+  },
 
   list_presets: (a: { preset?: string }) => {
     if (!a.preset) return ok(`${PRESETS.map((p) => `${p.id}: ${p.tagline}`).join('\n')}\n\nlist_presets with preset: <id> gives its fields.`);
@@ -1375,7 +1542,7 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
     const at = a.posted_at ?? new Date().toISOString();
     const by = store.findAccount(a.handle ?? store.get().settings.handle).handle;
     const extra: Partial<Reel> = { ...(platform === 'instagram' && a.trial !== undefined ? { trial: a.trial } : {}), ...(a.caption !== undefined ? { caption: a.caption } : {}) };
-    const { reel, submission: sub } = store.markPosted(a.id, platform, a.url, at, by, extra);
+    const { reel, submission: sub } = store.markPosted(a.id, platform, a.url, at, by, extra, a.kind ?? 'video');
     ctx.focus({ page: 'library', reelId: reel.id });
     if (!sub) return ok(`Marked posted: ${reelLine(reel)}.`);
     const c = store.findCampaign(sub.campaignId);
@@ -1695,8 +1862,12 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
   },
 
   set_settings: (a: z.infer<typeof S.set_settings>) => {
-    const s = store.updateSettings({ ...(a.handle ? { handle: a.handle } : {}), ...(a.output_dir ? { outputDir: a.output_dir } : {}), ...(a.fps ? { fps: a.fps } : {}), ...(a.voice_test ? { voiceTest: a.voice_test } : {}), ...(a.variety ? { variety: a.variety } : {}), ...(a.reel_pick ? { reelPick: a.reel_pick } : {}), ...(a.per_thread ? { perThread: a.per_thread } : {}) });
+    const s = store.updateSettings({ ...(a.handle ? { handle: a.handle } : {}), ...(a.output_dir ? { outputDir: a.output_dir } : {}), ...(a.fps ? { fps: a.fps } : {}), ...(a.voice_test ? { voiceTest: a.voice_test } : {}), ...(a.variety ? { variety: a.variety } : {}), ...(a.reel_pick ? { reelPick: a.reel_pick } : {}), ...(a.per_thread ? { perThread: a.per_thread } : {}), ...(a.longform ? { longform: { ...longformPlan(store.get().settings), ...(a.longform.per_week !== undefined ? { perWeek: a.longform.per_week } : {}), ...(a.longform.length ? { length: a.longform.length } : {}), ...(a.longform.visibility ? { visibility: a.longform.visibility } : {}) } } : {}) });
     const pool = voiceTestPool();
+    if (a.longform) {
+      const p = longformPlan(s);
+      return ok(`Long-form plan: ${p.perWeek} long video${p.perWeek === 1 ? '' : 's'} a week, about ${p.length} minutes each, uploaded as ${p.visibility}.${p.perWeek > LONGFORM_SOFT_CAP ? ` ${p.perWeek} a week is over the recommended ${LONGFORM_SOFT_CAP} (one a day): tell the user plainly that many near-alike long videos can read as mass-produced to YouTube. It is their number and it stands.` : ''}${isLongform(s) ? '' : ' This profile is not in the long-form mode (Setup > What you are promoting), so the plan waits until it is.'}`);
+    }
     return ok(`Settings: per-thread cap ${store.perThreadCap()} (comments, replies and messages an account sends into one thread), handle ${s.handle}, output ${s.outputDir}, ${s.fps} fps, variety ${s.variety ?? 'balanced'}, reel topics picked by ${s.reelPick === 'me' ? 'the user (their queue only)' : 'the AI (the queue first)'}.${a.voice_test ? (pool.length ? ` Voice test: ${pool.map((v) => elLabel(v)).join(', ')}.` : ' Voice test: off.') : ''}`);
   },
 
@@ -1772,7 +1943,11 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
     );
     const wanted = nextRunNote();
     if (wanted) out.push(wanted);
-    const reelPlan = reelPlanNote();
+    const longNote = longformNote(extraRun);
+    if (longNote) out.push(longNote);
+    // A long-form channel with no post target anywhere makes no reels: the reel plan stays out.
+    const noReels = !!longNote && d.igAccounts.every((a) => sitesOf(a).every((site) => postTarget(a, site, d.sessions, today, d.reels).wanted === 0));
+    const reelPlan = noReels ? 'No reels or Shorts in this profile for now: every post target is 0 (the user sets a number on the Accounts page if they want Shorts).' : reelPlanNote();
     if (reelPlan) out.push(reelPlan);
     const rules = trainingRules(d);
     if (rules) out.push(rules);
@@ -1870,9 +2045,11 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
               ? 'no posting: the user set the post limit to 0 here'
               : 'no posting yet in this warm-up phase'
             : `posts ${t.done}/${t.target} today${t.done >= t.target ? ' (target met)' : ` (${t.target - t.done} to go)`}${t.wanted > t.ceiling ? ` (the user's target is ${t.wanted}; today's post limit is ${t.ceiling})` : ''}${t.target - t.done > 0 && perRun > 1 ? ` · THIS RUN: up to ${perRun} posts here, ${gapMin > 0 ? `at least ${gapMin} min apart` : 'no set spacing (still not back to back)'}` : ''}`;
-        const parts = [postBit];
+        // A long-form channel with no Shorts target: the long videos are the work here, and the Shorts warm-up and goal stay out.
+        const longOnly = !!longNote && site === 'youtube' && t.wanted === 0;
+        const parts = [longOnly ? 'no Shorts here (the target is 0): the long videos above are the work on this channel' : postBit];
         if (site === 'youtube' && !extraRun) {
-          const warm = ytWarmupLine(a);
+          const warm = longOnly ? '' : ytWarmupLine(a);
           if (warm) parts.push(warm);
           const krypt = a.status === 'paused' ? [] : kryptFollowNow(a, site);
           if (krypt.length) parts.push(kryptFollowLine(site, krypt));
@@ -1919,7 +2096,7 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
           const inbox = d.sessions.filter((x) => x.kind === 'inbox' && (x.site ?? 'instagram') === site && sameHandle(x.handle, a.handle) && localDate(x.startedAt) === today);
           parts.push(inbox.length ? `inbox checked ${inbox.length}x today (${plan.done.messages} sent)` : compact ? 'inbox NOT checked today' : `inbox NOT checked today (${INBOX[site]})`);
         }
-        const goal = goalLine(a, site, d.brand);
+        const goal = longOnly ? '' : goalLine(a, site, d.brand);
         if (goal) parts.push(goalRef(goal));
         const mine = a.platformNotes?.[site]?.trim();
         if (mine) parts.push(`THE USER'S INSTRUCTIONS FOR ${L.toUpperCase()} (follow them here): ${mine.replace(/\s*\n+\s*/g, ' / ')}`);
@@ -1944,11 +2121,11 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
       .filter((x) => x.missing.length)
       .sort((x, y) => (y.r.updatedAt ?? '').localeCompare(x.r.updatedAt ?? ''))
       .slice(0, 8);
-    out.push('', ready.length ? `Rendered reels not yet on every platform (newest first; check each fits that platform's content before posting):\n${ready.map((x) => `- ${x.r.id} "${x.r.title}" · not yet on ${x.missing.join(', ')}`).join('\n')}` : 'No rendered reels waiting: make new ones for today\'s targets.');
+    out.push('', ready.length ? `Rendered reels not yet on every platform (newest first; check each fits that platform's content before posting):\n${ready.map((x) => `- ${x.r.id} "${x.r.title}" · not yet on ${x.missing.join(', ')}`).join('\n')}` : noReels ? 'No reels to post: this profile makes none for now.' : 'No rendered reels waiting: make new ones for today\'s targets.');
     const recent = d.posts.filter((p) => Date.now() - Date.parse(p.postedAt ?? p.addedAt) < 14 * 86_400_000);
     const empty = SITES.filter((s) => d.igAccounts.some((acc) => siteOn(acc, s)) && !d.posts.some((p) => p.site === s));
     out.push('', recent.length ? `Posted in the last 14 days (post log; don't repeat these stories, list_posts with query to check an idea):\n${postGroups(recent, 20).map((l) => `- ${l}`).join('\n')}` : 'Nothing in the post log from the last 14 days.');
-    if (empty.length) out.push(`The post log has nothing on ${empty.map((s) => SITE_LABEL[s]).join(', ')} yet: open each profile, read its posts and log_posts them (title, date, story, tools, views) before making new ones.`);
+    if (empty.length && !noReels) out.push(`The post log has nothing on ${empty.map((s) => SITE_LABEL[s]).join(', ')} yet: open each profile, read its posts and log_posts them (title, date, story, tools, views) before making new ones.`);
     const DAY = 86_400_000;
     const due: string[] = [];
     for (const r of d.reels)
@@ -1993,7 +2170,12 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
         }. Any other approval card id (ap_...) has expired: never report it again.`,
       );
     }
-    out.push(
+    if (noReels)
+      out.push(
+        '',
+        "Order: 1) The long video: the LONG-FORM CHANNEL part above says what is due; list_long_videos gives the steps. 2) Studio's Comments on each channel: answer real ones in a line or two, written the way a person types (the hub turns back ones that read as machine-written). 3) The numbers of uploaded videos: save_long_video with stats. 4) log_session for YouTube. A limit the user set themselves is a number they want reached.",
+      );
+    else out.push(
       '',
       (showCamps ? 'Order: 0) Any SUBMIT NOW line above first (Content Rewards takes a post only within 30 minutes of it going up). 1) ' : 'Order: 1) ') +
         'Inbox on each platform: answer real DMs (rules in the instructions), log_session kind "inbox". 2) Engagement on each platform: do its THIS RUN goal above (get_warmup_plan first). Like what you watched and liked, follow niche accounts that post good content; comments and replies are one short line each, written like the ones already under that post, never the same shape twice (the hub turns back ones that read as machine-written); if a feed is off-niche, search the niche (its keywords, hashtags, the accounts you already follow) and engage there. Interleave it with the posts below rather than skipping it. 3) Today\'s post targets: one post per platform per run, unless that platform\'s line above says more for THIS RUN (posts on a platform are spaced by its gap: 2h, 90 min on X, or the user\'s own number; the hub refuses one that comes sooner), spread through the run; post ready reels where they fit, make and render new ones for the rest; read the playbook for what goes on which platform. 4) Reply to comments on recent posts. 5) Metrics due, then record_account_stats per platform. 6) log_session per platform. Stop at a target once it is met. A recommended limit is a ceiling to stay under, never to chase; a limit the user set themselves is a number they want reached.',
@@ -2228,6 +2410,32 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
     return after(browser.toolAttach(a.handle, r.renderPath, `"${r.title}" (${r.renderPath})`, site));
   },
 
+  browser_attach_slides: (a: z.infer<typeof S.browser_attach_slides>) => {
+    const r = store.findReel(a.id);
+    if (a.site === 'rewards') throw new Error('Slides are posted on a platform, then the post link is submitted on contentrewards.com.');
+    const site: Site = a.site ?? 'instagram';
+    const def = SLIDE_SITES[site];
+    if (!def)
+      throw new Error(
+        site === 'youtube'
+          ? `YouTube takes video only, and counts a video of still slides as low-effort: leave YouTube out for "${r.title}" and post one of the account's video styles there.`
+          : `${SITE_LABEL[site]} takes one picture a post, not a slideshow: render_image with shape "pin" at the second of the slide that says the most and browser_attach_image, or post the video version (render_reel, browser_attach_reel).`,
+      );
+    const files = r.slides?.[def.shape];
+    const size = SHAPE_SIZE[def.shape];
+    if (!files?.length) throw new Error(`"${r.title}" has no ${def.shape} slides saved${r.slides ? ' (the shapes it has are for other platforms)' : ' yet'}. render_slides with id "${r.id}" and shape "${def.shape}" first (${SITE_LABEL[site]} gets ${size.w}x${size.h}), then attach again.`);
+    if (files.length > def.max)
+      throw new Error(
+        `${SITE_LABEL[site]} takes ${def.max} pictures a post and "${r.title}" has ${files.length} slides. Post its video version there instead (render_reel${site === 'x' ? ' with shape "square"' : ''}, then browser_attach_reel), or, once the other platforms are done, render_slides with shape "${def.shape}" and times for the ${def.max} slides that tell it best.`,
+      );
+    const c = r.campaignId ? store.get().campaigns?.find((x) => x.id === r.campaignId) : undefined;
+    if (c) {
+      const problems = campaignProblems(r, c, store.findAccount(a.handle ?? store.get().settings.handle), site);
+      if (problems.length) throw new Error(`"${r.title}" can't go up for "${c.title}" yet: ${problems.join('; ')}. update_reel fixes the caption.`);
+    }
+    return browser.toolAttachSlides(a.handle, files, `the ${files.length} slides of "${r.title}"`, site, a.ref);
+  },
+
   browser_attach_image: (a: z.infer<typeof S.browser_attach_image>) => {
     if (a.site === 'rewards') throw new Error('Nothing is uploaded on contentrewards.com; post links are pasted there.');
     return browser.toolAttachImage(a.handle, a.path, a.site, a.ref);
@@ -2254,6 +2462,8 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
       thumbnailText: a.thumbnail_text,
       thumbnailBg: a.thumbnail_bg,
       thumbnailSide: a.thumbnail_side,
+      thumbnailPath: a.thumbnail_path,
+      stats: a.stats ? { views: Math.round(a.stats.views), likes: a.stats.likes, comments: a.stats.comments, ctr: a.stats.ctr, avgViewed: a.stats.avg_viewed, subs: a.stats.subs, at: new Date().toISOString() } : undefined,
       projectPath: a.project_path,
       videoPath: a.video_path,
       status: a.status,
@@ -2267,7 +2477,7 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
   list_long_videos: (a: z.infer<typeof S.list_long_videos>) => {
     if (a.id) return ok(longLine(store.findLongVideo(a.id), true));
     const list = store.get().longVideos ?? [];
-    return ok(`${list.length ? list.map((v) => longLine(v, false)).join('\n') : 'No long videos yet. save_long_video starts one.'}\n\n${LONG_VIDEO_STEPS}`);
+    return ok(`${list.length ? list.map((v) => longLine(v, false)).join('\n') : 'No long videos yet. save_long_video starts one.'}\n\n${isLongform(store.get().settings) ? longformSteps() : LONG_VIDEO_STEPS}`);
   },
 
   narrate_long_video: async (a: z.infer<typeof S.narrate_long_video>) => {
@@ -2292,7 +2502,7 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
 
 /** Validate a reel id up front for renderer tools, so a typo fails fast without waking the window. */
 export function checkRendererArgs(name: string, args: unknown): void {
-  if (name === 'preview_reel' || name === 'render_reel' || name === 'render_image') {
+  if (name === 'preview_reel' || name === 'render_reel' || name === 'render_image' || name === 'render_slides') {
     const id = (args as { id?: string })?.id;
     const r = store.findReel(String(id));
     if (!presetById(r.preset)) throw new Error(`Reel ${r.id} uses an unknown preset "${r.preset}".`);
@@ -2303,12 +2513,43 @@ export function checkRendererArgs(name: string, args: unknown): void {
   }
 }
 
+const longStats = (s: import('../../shared/types').LongStats): string =>
+  [`${s.views.toLocaleString('en-US')} views`, s.ctr !== undefined ? `${s.ctr}% click-through` : '', s.avgViewed !== undefined ? `${s.avgViewed}% watched on average` : '', s.likes !== undefined ? `${s.likes} likes` : '', s.comments !== undefined ? `${s.comments} comments` : '', s.subs !== undefined ? `${s.subs >= 0 ? '+' : ''}${s.subs} subscribers` : '', `read ${s.at.slice(0, 10)}`].filter(Boolean).join(', ');
+
+/**
+ * Long-form mode: where each channel stands against the user's plan, for get_today. '' in any other mode.
+ * A new video is due when none is in progress, the week is not full and the last upload is long enough ago.
+ */
+function longformNote(extraRun: boolean): string {
+  const d = store.get();
+  if (!isLongform(d.settings)) return '';
+  const plan = longformPlan(d.settings);
+  const channels = d.igAccounts.filter((a) => a.youtube?.enabled);
+  const head = `LONG-FORM CHANNEL: this profile runs a long-form YouTube channel, and long videos are its main work (list_long_videos has the steps and who does what: Krypt Editor makes the video, these tools pick it, package it, upload it and answer the comments). The user's plan: ${plan.perWeek === 0 ? 'no new long videos for now (0 a week)' : `${plan.perWeek} long video${plan.perWeek === 1 ? '' : 's'} a week`}, about ${plan.length} minutes each, uploaded as ${plan.visibility === 'public' ? 'Public' : 'Unlisted (the user publishes them)'}.${plan.perWeek > LONGFORM_SOFT_CAP ? ` That is more than the recommended ${LONGFORM_SOFT_CAP} a week (one a day): the user's own number, so work to it, and say in the report that many near-alike long videos in a week can read as mass-produced to YouTube.` : ''}`;
+  if (extraRun) return `${head}\nThis is an extra run: no long-video work now.`;
+  if (!channels.length) return `${head}\nNo account has YouTube turned on yet, so there is no channel to make them for: tell the user (Accounts page, or the setup wizard).`;
+  const day = (t: number): string => new Date(t).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric' });
+  const lines = channels.map((a) => {
+    const st = longformState(d.longVideos ?? [], a.id, plan);
+    const name = `${a.handle}${a.youtube?.channelName ? ` "${a.youtube.channelName}"` : ''}`;
+    const week = `${st.week} uploaded in the last 7 days`;
+    if (a.status === 'paused') return `- ${name}: PAUSED, leave it alone.`;
+    if (st.open.length) {
+      const v = st.open[0];
+      return `- ${name}: ${week}. IN PROGRESS: ${v.id} "${v.title}" (${v.status}): carry it on this run (${NEXT_STEP[v.status]}).${st.open.length > 1 ? ` ${st.open.length - 1} more started and waiting: ${st.open.slice(1, 4).map((x) => `${x.id} "${x.title}" (${x.status})`).join(', ')}.` : ''}`;
+    }
+    if (st.due) return `- ${name}: ${week}. A NEW LONG VIDEO IS DUE: pick it from the channel (step 1) and take it as far as this run's time allows.`;
+    return `- ${name}: ${week}. No new video this run${plan.perWeek === 0 ? '' : st.nextAt ? ` (the next comes due about ${day(st.nextAt)}, so they are spread over the week)` : ' (this week is full)'}: the channel work only.`;
+  });
+  return `${head}\n${lines.join('\n')}\nEvery run, on each channel: Studio's Comments (answer real ones, heart the good ones) and the numbers of uploaded videos (save_long_video with stats). A long video takes most of a run: where the time in the USAGE TIER line runs out, stop after a finished step and say in the report where it stands.`;
+}
+
 /** A long video for the AI: one line, or in full. */
 function longLine(v: import('../../shared/types').LongVideo, full: boolean): string {
   const acct = store.get().igAccounts.find((x) => x.id === v.accountId);
   const ch = acct?.youtube?.channelName ?? acct?.handle ?? '?';
   const total = v.sections.reduce((n, x) => n + (x.seconds ?? 0), 0);
-  const head = `${v.id} · "${v.title}" · ${v.status}${v.visibility ? ` (${v.visibility})` : ''} · channel ${ch} · ${v.sections.length} sections${total ? `, ${Math.floor(total / 60)}:${String(Math.round(total % 60)).padStart(2, '0')} narrated` : ''}${v.url ? ` · ${v.url}` : ''}`;
+  const head = `${v.id} · "${v.title}" · ${v.status}${v.visibility ? ` (${v.visibility})` : ''} · channel ${ch} · ${v.sections.length} sections${total ? `, ${Math.floor(total / 60)}:${String(Math.round(total % 60)).padStart(2, '0')} narrated` : ''}${v.uploadedAt ? ` · up since ${v.uploadedAt.slice(0, 10)}` : ''}${v.stats ? ` · ${longStats(v.stats)}` : ''}${v.url ? ` · ${v.url}` : ''}`;
   if (!full) return head;
   return [
     head,

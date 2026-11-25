@@ -1,4 +1,4 @@
-import { ACCENTS, presetById, str, timingFor, type Timing } from '@shared/presets';
+import { ACCENTS, imageRef, presetById, str, timingFor, type Timing } from '@shared/presets';
 import type { Fields } from '@shared/types';
 
 // The reel engine: every frame is a pure function of (preset, fields, t), drawn
@@ -323,13 +323,13 @@ function endCard(ctx: Ctx, env: Env, local: number): void {
   });
 }
 
-function disclaimer(ctx: Ctx, env: Env): void {
+function disclaimer(ctx: Ctx, env: Env, y = 1585): void {
   const d = str(env.fields, 'disclaimer');
   if (!d) return;
   font(ctx, 26, 500, FONT.mono);
   ctx.textAlign = 'center';
   ctx.fillStyle = isLight(env) ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.5)';
-  ctx.fillText(d, W / 2, 1585);
+  ctx.fillText(d, W / 2, y);
 }
 
 // ── Frame ──────────────────────────────────────────────────────────────────
@@ -394,7 +394,9 @@ export function drawReel(ctx: Ctx, input: FrameInput): Timing {
     withAlpha(ctx, 1 - out, () => scaled(ctx, lerp(1, 0.94, easeOut(out)), W / 2, H / 2, () => draw(ctx, { ...env, t: Math.min(input.t, timing.body + 0.3) })));
   }
   if (timing.cta > 0 && input.t >= timing.body + 0.2) endCard(ctx, env, input.t - timing.body - 0.2);
-  disclaimer(ctx, env);
+  // Slideshows write the disclaimer into their own footer, inside the part every picture shape keeps.
+  // Duo reels: on the desk's front, under the two characters.
+  if (input.preset !== 'slides') disclaimer(ctx, env, input.preset === 'duo' ? 1672 : 1585);
   finish(ctx, env);
   // Over the vignette and grain, so the brand's banner shows as they made it.
   if (banner) drawBanner(ctx, banner);
@@ -482,7 +484,8 @@ export function imagePaths(fields: Fields): string[] {
   const out = new Set<string>();
   for (const line of String(fields.beats ?? '').split('\n')) {
     const c = line.split('|').map((x) => x.trim());
-    if ((c[2] ?? '').toLowerCase() === 'image' && c[3]) out.add(c[3]);
+    // A slide's picture can carry a zoom after its path ("shot.png @0.5,0.3 x2").
+    if (['image', 'photo'].includes((c[2] ?? '').toLowerCase()) && c[3]) out.add(imageRef(c[3]).path);
   }
   return [...out];
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { SOFT_PROFILES } from '@shared/perf';
-import { AppWindow, Check, ChevronDown, ChevronUp, Layers, Pencil, Play, Plus, RotateCw, Square, Trash2, X } from 'lucide-react';
+import { AppWindow, Check, ChevronDown, ChevronUp, Chrome, Globe, Layers, Pencil, Play, Plus, RotateCw, Square, Trash2, X } from 'lucide-react';
 import type { ProfilesResult, ProxyRow, ProxyScheme } from '@shared/types';
 import { ProxyForm, Status } from './ProxySection';
 import { Card, GhostButton, PrimaryButton, Toggle } from './ui';
@@ -63,8 +63,10 @@ export function ProfileSelect({ className }: { className?: string }) {
  * Multi run page: every profile on one line (name, Autopilot, proxy, its window, rename / delete), new ones added
  * at the top. A line opens underneath for its proxy settings or to confirm a delete.
  */
-export function MultiRunBoard() {
+export function MultiRunBoard({ onProxies, onChrome }: { onProxies?: () => void; onChrome?: () => void }) {
   const profiles = useApp((s) => s.profiles);
+  // Chrome's own names for the Chrome profiles some profiles were made for (read fresh: one may be minutes old).
+  const [chromeNames, setChromeNames] = useState<Record<string, string> | null>(null);
   const autopilot = useApp((s) => s.autopilot);
   const toast = useApp((s) => s.toast);
   const [name, setName] = useState('');
@@ -85,7 +87,10 @@ export function MultiRunBoard() {
   // Every profile's proxy (any window sets any profile's; another window may change one too).
   const [proxies, setProxies] = useState<Record<string, ProxyRow>>({});
   const names = profiles.map((p) => `${p.id}:${p.name}:${p.active}`).join('|');
-  const loadProxies = (): void => void window.marketo.proxy.list().then((rows) => setProxies(Object.fromEntries(rows.map((r) => [r.id, r]))));
+  const loadProxies = (): void => {
+    void window.marketo.proxy.list().then((rows) => setProxies(Object.fromEntries(rows.map((r) => [r.id, r]))));
+    if (useApp.getState().profiles.some((p) => p.chromeDir)) void window.marketo.chrome.locals().then((rows) => setChromeNames(Object.fromEntries(rows.map((r) => [r.dir, r.name]))));
+  };
   useEffect(loadProxies, [names]);
   // Other profiles start and stop on their own: fresh states as soon as the page opens.
   useEffect(() => {
@@ -149,9 +154,6 @@ export function MultiRunBoard() {
   const rename = async (): Promise<void> => {
     if (!editing) return;
     if (await act(() => window.marketo.app.renameProfile(editing.id, editing.name))) setEditing(null);
-  };
-  const flipMulti = async (on: boolean): Promise<void> => {
-    if (await act(() => window.marketo.app.setProfilesMulti(on))) setMulti((m) => (m ? { ...m, saved: on } : m));
   };
   const toggle = (id: string, what: 'proxy' | 'delete'): void => setOpen((o) => (o?.id === id && o.what === what ? null : { id, what }));
 
@@ -223,15 +225,19 @@ export function MultiRunBoard() {
           <span className="text-xs text-krypt-muted">
             {profiles.length} profile{profiles.length === 1 ? '' : 's'}
           </span>
-          {multi && (
-            <label
-              className="ml-auto flex items-center gap-2"
-              title="Every profile runs in its own Marketo window at the same time, each with its own AI connection and proxy, and the autopilot runs them all together. Off: one window, one profile at a time."
-            >
-              <Toggle on={multi.saved} onChange={(v) => !busy && void flipMulti(v)} />
-              <span className="text-xs text-white/80">Run them all at once (each in its own window)</span>
-            </label>
-          )}
+          {windows && <span className="text-xs text-sky-300/80">all at once, each in its own window</span>}
+          <span className="ml-auto flex flex-wrap items-center gap-2">
+            {onProxies && (
+              <GhostButton small onClick={onProxies}>
+                <Globe className="h-3.5 w-3.5" /> Proxy manager
+              </GhostButton>
+            )}
+            {onChrome && (
+              <GhostButton small onClick={onChrome}>
+                <Chrome className="h-3.5 w-3.5" /> Import Chrome profiles
+              </GhostButton>
+            )}
+          </span>
           {waitingBg.length > 0 && (
             <GhostButton small disabled={busy} onClick={() => void act(() => window.marketo.app.startBackground())}>
               <Play className="h-3.5 w-3.5" /> Start {waitingBg.length} in background
@@ -285,6 +291,11 @@ export function MultiRunBoard() {
                         className={cls('h-2 w-2 shrink-0 rounded-full', p.active ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.8)]' : windows && p.running ? (p.visible === false ? 'bg-krypt-purple shadow-[0_0_8px_rgba(168,85,247,0.8)]' : 'bg-sky-400') : 'bg-white/20')}
                       />
                       <span className="truncate text-sm font-semibold text-white/90">{p.name}</span>
+                      {p.chromeDir && (
+                        <span className="flex shrink-0 items-center gap-1 text-[11px] text-white/40" title="The Chrome profile this profile was made for: its accounts start out in that one">
+                          <Chrome className="h-3 w-3" /> {chromeNames ? (chromeNames[p.chromeDir] ?? 'removed from Chrome') : ''}
+                        </span>
+                      )}
                       {p.active && <span className="shrink-0 text-[11px] text-emerald-300/90">{windows ? 'this window' : 'open'}</span>}
                       {!p.active && windows && p.running && <span className={cls('shrink-0 text-[11px]', p.visible === false ? 'text-violet-300/90' : 'text-sky-300/90')}>{p.visible === false ? 'running in background' : 'window open'}</span>}
                     </div>

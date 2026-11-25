@@ -60,6 +60,9 @@ export const SMM_GUIDE_URL = `https://www.youtube.com/watch?v=${SMM_GUIDE_ID}`;
 /** Proxy-Cheap, Krypt's referral link for static residential (ISP) proxies. Always shown with the note. */
 export const PROXY_CHEAP_URL = 'https://app.proxy-cheap.com/r/rTEBUUXW';
 export const PROXY_CHEAP_NOTE = 'Krypt may earn a commission if you buy through it';
+/** Bright Data, Krypt's second proxy referral link (same kind of IP: static residential / ISP). Always shown with the note. */
+export const BRIGHT_DATA_URL = 'https://get.brightdata.com/01ufawtiidr4';
+export const BRIGHT_DATA_NOTE = 'Krypt may earn a commission if you buy through it';
 
 /** Krypt's own Discord invite: creators join through it, then make their own invite. */
 export const KRYPT_DISCORD = 'https://discord.com/invite/muzFKR657F';

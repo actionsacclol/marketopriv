@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { Copy, FolderOpen, Loader2, Mic, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react';
-import { PRESETS, elVoiceNote, isVoiced, presetById, storyBeats, storyVoiceTrack, timingFor, type PresetField } from '@shared/presets';
+import { Copy, FolderOpen, Images, Loader2, Mic, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react';
+import { PRESETS, elVoiceNote, isVoiced, presetById, slideTimes, storyBeats, storyVoiceTrack, timingFor, type PresetField } from '@shared/presets';
 import { FORMATS } from '@shared/formats';
 import { bannerOf } from '@shared/campaigns';
-import type { FieldValue, Fields, Reel } from '@shared/types';
+import { MAX_SLIDES, type FieldValue, type Fields, type Reel } from '@shared/types';
+import { renderStills } from '../render/export';
 import { Card, GhostButton, Page, PrimaryButton, StatusChip, Toggle } from '../components/ui';
 import { ReelPlayer } from '../components/ReelPlayer';
 import { cancelCurrentRender, renderReel, useApp } from '../state/store';
 import { cls, timeAgo } from '../lib/format';
 import { ensureVoiceover } from '../render/voice';
-import { DEFAULT_TUNE, describeTune, tuneToFields, voiceName } from '@shared/voice';
+import { DEFAULT_TUNE, VOICES, describeTune, tuneToFields, voiceName } from '@shared/voice';
 import { DeleteReelsDialog } from '../components/DeleteReels';
 import { BeatEditor } from '../components/BeatEditor';
 
@@ -153,6 +154,31 @@ export default function Studio() {
     }
   };
 
+  // A slideshow's slides as pictures, in the two shapes photo posts use (4:5 for feeds, full screen for TikTok).
+  const [savingSlides, setSavingSlides] = useState(false);
+  const saveSlides = async (): Promise<void> => {
+    if (!reel || savingSlides) return;
+    setSavingSlides(true);
+    try {
+      const now = { ...reel, fields };
+      const times = slideTimes(now.preset, now.fields).slice(0, MAX_SLIDES);
+      if (times.length < 2) throw new Error('A slideshow needs at least 2 slides.');
+      let dir = '';
+      for (const shape of ['portrait', 'vertical'] as const) {
+        const stills = await renderStills(now, times, 1, shape, true);
+        const r = await window.marketo.render.saveSlides(reel.id, stills.map((s) => s.data), shape);
+        if (!r.ok || !r.data) throw new Error(r.message ?? 'Saving the slides failed.');
+        if (!dir) dir = r.data[0];
+      }
+      toast('ok', `Saved ${times.length} slides as pictures (4:5 and full screen).`);
+      if (dir) void window.marketo.app.showItemInFolder(dir);
+    } catch (e) {
+      toast('error', (e as Error).message);
+    } finally {
+      setSavingSlides(false);
+    }
+  };
+
   // Story voice-over: regenerate shortly after the lines or voices change.
   const [voiceStatus, setVoiceStatus] = useState('');
   const needsVoice = !!reel && isVoiced(reel.preset) && (fields.voiceover === true || fields.sfx === true || (!!fields.bed && fields.bed !== 'none')) && !storyVoiceTrack(fields);
@@ -282,6 +308,11 @@ export default function Studio() {
                     </GhostButton>
                   </div>
                 )}
+                {reel.preset === 'slides' && !rendering && (
+                  <GhostButton onClick={() => void saveSlides()} disabled={!!job || savingSlides} className="flex w-full items-center justify-center gap-2">
+                    {savingSlides ? <Loader2 className="h-4 w-4 animate-spin" /> : <Images className="h-4 w-4" />} Save slides as pictures
+                  </GhostButton>
+                )}
                 {reel.renderPath && (
                   <button onClick={() => void window.marketo.app.showItemInFolder(reel.renderPath!)} className="flex w-full items-center gap-2 truncate text-left font-mono text-[11px] text-krypt-muted hover:text-white">
                     <FolderOpen className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{reel.renderPath}</span>
@@ -297,6 +328,20 @@ export default function Studio() {
                     </label>
                     {isStory && f.key === 'beats' ? (
                       <BeatEditor preset={reel?.preset} value={String(fields.beats ?? f.default)} onChange={(v) => setField('beats', v)} starts={starts} onSeek={(t) => setSeek((s) => ({ t, n: (s?.n ?? 0) + 1 }))} help={f.help} />
+                    ) : f.key === 'asker_voice' ? (
+                      // A second voice of the same kind as the reel's (ElevenLabs with ElevenLabs, built-in with built-in).
+                      <select className="input" value={String(fields.asker_voice ?? '') || 'none'} onChange={(e) => setField('asker_voice', e.target.value)}>
+                        <option value="none" className="bg-krypt-panel">
+                          No second voice
+                        </option>
+                        {(String(fields.voice ?? '').startsWith('el:') ? (db.settings.eleven?.voices ?? []).map((v) => [`el:${v.id}`, v.name]) : VOICES.map((v) => [v[0], v[1]]))
+                          .filter(([id]) => id !== String(fields.voice ?? ''))
+                          .map(([id, name]) => (
+                            <option key={id} value={id} className="bg-krypt-panel">
+                              {name}
+                            </option>
+                          ))}
+                      </select>
                     ) : (
                       <FieldInput field={f} value={fields[f.key] ?? f.default} onChange={(v) => setField(f.key, v)} />
                     )}

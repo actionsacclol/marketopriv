@@ -6,7 +6,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AccountInput, AccountSnapshot, AgentConfig, Brand, Campaign, Submission, Db,Fields, IgAccount, Learning, PostLog, Reel, ReelFeedback, Reference, RefVideo, Session, SessionAction, Settings, Site, TrainingBrief, TrainingNote, TrainingTopic, LongVideo } from '../shared/types';
+import type { AccountInput, AccountSnapshot, AgentConfig, Brand, Campaign, Submission, Db,Fields, IgAccount, Learning, PostLog, Reel, ReelFeedback, Reference, RefVideo, Session, SessionAction, Settings, Site, StillShape, TrainingBrief, TrainingNote, TrainingTopic, LongVideo } from '../shared/types';
 import { mergePosts, postKey, reelPosts } from '../shared/posts';
 import { REWARDS_SITES, SUBMIT_WINDOW_MS, campaignIdOf, campaignUrl, isKryptAccountOn } from '../shared/campaigns';
 import { defaultsFor, isVoiced, normalizeFields, presetById } from '../shared/presets';
@@ -14,10 +14,11 @@ import { formatById } from '../shared/formats';
 import { hookLine } from '../shared/score';
 import { BRIEF_MAX_CHARS, topicKeyOf, trainingOf } from '../shared/training';
 import { cleanLimits, forgetDayIndex, linkPatch, localDate, normalizeHandle, sameHandle } from '../shared/warmup';
-import { cleanTune, tuneToFields, voiceId, type SavedVoice, type VoiceTune } from '../shared/voice';
+import { cleanTune, isEleven, tuneToFields, voiceId, type SavedVoice, type VoiceTune } from '../shared/voice';
 import { cleanSayAs, setSayAs } from '../shared/pronounce';
 import { EMPTY_BRAND, KRYPT_BRAND, cleanInvite, creatorProblem } from '../shared/brand';
 import { cleanClipping } from '../shared/clipping';
+import { cleanLongform } from '../shared/longform';
 
 let file = '';
 let db: Db;
@@ -191,7 +192,9 @@ export function saveLongVideo(input: Partial<LongVideo> & { id?: string }): Long
     if (input.id && i < 0) throw new Error(`No long video "${input.id}".`);
     const clean = Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) as Partial<LongVideo>;
     if (i >= 0) {
-      list[i] = { ...list[i], ...clean, updatedAt: t };
+      // The moment it went up is kept: the long-form plan counts uploads by the week.
+      const wentUp = clean.status === 'uploaded' && list[i].status !== 'uploaded';
+      list[i] = { ...list[i], ...clean, ...(wentUp ? { uploadedAt: t } : {}), updatedAt: t };
       return list[i];
     }
     if (!clean.title?.trim()) throw new Error('A long video needs a title.');
@@ -310,10 +313,10 @@ function queueSubmission(d: Db, r: Reel, site: Site, url: string, at: string, by
 }
 
 /** A reel went live: its link on the reel, the post log, and a Content Rewards submission if it was made for a campaign. */
-export function markPosted(id: string, site: Site, url: string, at: string, by: string, extra: Partial<Reel> = {}): { reel: Reel; submission: Submission | null } {
+export function markPosted(id: string, site: Site, url: string, at: string, by: string, extra: Partial<Reel> = {}, kind: 'video' | 'slides' = 'video'): { reel: Reel; submission: Submission | null } {
   const r0 = findReel(id);
   const { reel } = updateReel(id, { status: 'posted', postedBy: by, ...linkPatch(r0, site, url, at), ...extra });
-  logPosts([{ site, handle: by, url, postedAt: at, title: reel.title, kind: 'video', reelId: reel.id, source: 'marketo' }]);
+  logPosts([{ site, handle: by, url, postedAt: at, title: reel.title, kind, reelId: reel.id, source: 'marketo' }]);
   const submission = commit((d) => queueSubmission(d, reel, site, url, at, by));
   return { reel, submission };
 }
@@ -357,7 +360,22 @@ function expandVoice(given: Fields): Fields {
     else out.voice = voiceId(out.voice) ?? out.voice;
   }
   if (typeof out.voice_blend === 'string') out.voice_blend = out.voice_blend.trim() ? (voiceId(out.voice_blend) ?? out.voice_blend) : 'none';
+  if (typeof out.asker_voice === 'string' && out.asker_voice.trim()) out.asker_voice = voiceId(out.asker_voice) ?? out.asker_voice.trim();
   return out;
+}
+
+/**
+ * Ask reels: the asker talks in the user's other ElevenLabs voice (their default
+ * and the voice test, whichever the reel itself is not in). Nothing to give = ''
+ * (speech bubbles). A voice the caller set, or "none", is left alone.
+ */
+function withAskerVoice(keys: string[], f: Fields, given: Fields): Fields {
+  if (!keys.includes('asker_voice') || given.asker_voice !== undefined) return f;
+  const main = String(f.voice ?? '');
+  const cur = String(f.asker_voice ?? '');
+  if (cur && cur !== main) return f;
+  const pool = [db.settings.voice?.voice ?? '', ...(db.settings.voiceTest ?? [])].filter((v) => isEleven(v));
+  return { ...f, asker_voice: isEleven(main) ? (pool.find((v) => v !== main) ?? '') : '' };
 }
 
 /** New reel from a preset, or from a format (its preset + skeleton fields + caption). */
@@ -368,7 +386,9 @@ export function createReel(presetId: string, title?: string, fields: Fields = {}
   if (!p) throw new Error(`Unknown preset "${presetId}". list_presets shows them.`);
   // New narrated reels start with the user's voice (Voices page), unless the format or the caller says otherwise.
   const voice = db.settings.voice && p.fields.some((x) => x.key === 'voice') ? { ...tuneToFields(db.settings.voice), ...(p.fields.some((x) => x.key === 'voice_standin') && db.settings.eleven?.standin ? { voice_standin: db.settings.eleven.standin } : {}) } : {};
-  const { fields: f, warnings } = normalizeFields(p, expandVoice(fields), { ...defaultsFor(p), ...(p.brandFree ? {} : brandDefaults(p.fields.map((x) => x.key))), ...voice, ...(fmt?.fields ?? {}) });
+  const made = normalizeFields(p, expandVoice(fields), { ...defaultsFor(p), ...(p.brandFree ? {} : brandDefaults(p.fields.map((x) => x.key))), ...voice, ...(fmt?.fields ?? {}) });
+  const warnings = made.warnings;
+  const f = withAskerVoice(p.fields.map((x) => x.key), made.fields, fields);
   const t = now();
   const reel: Reel = { id: newId('reel'), title: title?.trim() || `${fmt?.name ?? p.name} ${db.reels.length + 1}`, preset: p.id, fields: f, status: 'draft', ...(fmt ? { format: fmt.id, caption: fmt.caption } : {}), createdAt: t, updatedAt: t };
   commit((d) => d.reels.unshift(reel));
@@ -385,6 +405,7 @@ export function filesCleaned(ids: string[]): void {
       if (set.has(r.id)) {
         delete r.renderPath;
         delete r.squarePath;
+        delete r.slides;
         r.filesCleaned = t;
       }
   });
@@ -398,10 +419,14 @@ export function updateReel(id: string, patch: Partial<Reel>): { reel: Reel; warn
   if (patch.fields || patch.preset) {
     const p = presetById(next.preset)!;
     const n = normalizeFields(p, expandVoice(patch.fields ?? {}), r.fields);
-    next.fields = n.fields;
+    next.fields = withAskerVoice(p.fields.map((x) => x.key), n.fields, patch.fields ?? {});
     warnings = n.warnings;
     // Content changed after a render: the file on disk no longer matches.
     if (r.status === 'rendered') next.status = 'draft';
+    // Its saved slides are pictures of the old content (the files stay; the next save replaces them).
+    // The voice cache is the hub's own bookkeeping, not content.
+    const shown = (f: Fields): string => JSON.stringify({ ...f, vo_cache: '', voice_free: '' });
+    if (r.slides && shown(next.fields) !== shown(r.fields)) delete next.slides;
   }
   commit((d) => {
     d.reels = d.reels.map((x) => (x.id === id ? next : x));
@@ -515,6 +540,16 @@ export function deleteVoice(id: string): void {
   commit((d) => {
     d.voices = d.voices.filter((x) => x.id !== id);
   });
+}
+
+/** A reel's slides were saved as pictures in one shape (a photo post can go up from them). */
+export function markSlides(id: string, shape: StillShape, files: string[]): Reel {
+  const r = findReel(id);
+  const next: Reel = { ...r, slides: { ...(r.slides ?? {}), [shape]: files }, status: r.status === 'draft' ? 'rendered' : r.status, renderedAt: r.renderedAt ?? now(), updatedAt: now() };
+  commit((d) => {
+    d.reels = d.reels.map((x) => (x.id === id ? next : x));
+  });
+  return next;
 }
 
 /** The square (X) version of a reel was rendered. */
@@ -858,7 +893,7 @@ export function deleteReference(id: string): void {
 
 // ── Learnings ──────────────────────────────────────────────────────────────
 // ── Next run (Create > Next run) ───────────────────────────────────────────
-import { cleanMix, setCustomStyles, styleById, stylesOf as stylesOfAccount } from '../shared/styles';
+import { cleanMix, savedStyles, setCustomStyles, styleById, stylesOf as stylesOfAccount } from '../shared/styles';
 import type { CustomStyle, StyleInput } from '../shared/types';
 
 export const NEXT_RUN_MAX = 2000;
@@ -924,7 +959,7 @@ export function deleteStyle(idOrLabel: string): CustomStyle {
         if (!a.styles.length) delete a.styles;
       }
       if (a.styleMix && s.id in a.styleMix) {
-        const mix = cleanMix({ ...a.styleMix, [s.id]: 0 }, stylesOfAccount(a));
+        const mix = cleanMix(a.styleMix, stylesOfAccount(a), false);
         if (mix) a.styleMix = mix;
         else delete a.styleMix;
       }
@@ -1178,8 +1213,15 @@ export function saveAccount(input: AccountInput): IgAccount {
   const { setup, ...rest } = input;
   const next: IgAccount = { ...base, ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)), id: base.id, handle, setup: { ...base.setup, ...(setup ?? {}) }, createdAt: base.createdAt, updatedAt: t };
   if (next.chromeProfile === '') delete next.chromeProfile;
+  // A clip channel's accounts only clip: a new one added there starts with the clipping style alone, not every style.
+  if (!existing && !input.styles && db.settings.promoting === 'clips') next.styles = ['clipping'];
+  // A long-form channel is about its long videos: a new account there starts with no Shorts a day (the user can set a number).
+  if (!existing && db.settings.promoting === 'longform' && next.targets?.youtube === undefined) next.targets = { ...(next.targets ?? {}), youtube: 0 };
+  // Every built-in style on is the starting point, saved as "nothing set", so styles added by a later version start on too.
+  if (next.styles && (!next.styles.length || !savedStyles(next.styles))) delete next.styles;
   if (next.styleMix) {
-    const mix = cleanMix(next.styleMix, stylesOfAccount(next));
+    // A mix that came with this save is the whole mix; one carried along while the styles changed keeps its gaps.
+    const mix = cleanMix(next.styleMix, stylesOfAccount(next), input.styleMix !== undefined);
     if (mix) next.styleMix = mix;
     else delete next.styleMix;
   }
@@ -1268,6 +1310,11 @@ export function updateSettings(patch: Partial<Settings>): Settings {
       else delete next.voice;
     }
     if ('sayAs' in patch) next.sayAs = cleanSayAs(patch.sayAs ?? []);
+    if ('longform' in patch) {
+      if (patch.longform) next.longform = cleanLongform(patch.longform);
+      else delete next.longform;
+    }
+    if ('promoting' in patch && !['krypt', 'own', 'clips', 'longform'].includes(String(patch.promoting))) delete next.promoting;
     if ('voiceTest' in patch) {
       const test = [...new Set((patch.voiceTest ?? []).filter((v) => /^el:[A-Za-z0-9]{8,40}$/.test(v) && v !== next.voice?.voice))].slice(0, 4);
       if (test.length) next.voiceTest = test;

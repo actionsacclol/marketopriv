@@ -272,7 +272,7 @@ export const STYLES: ChannelStyle[] = [
       "Music: bed goofy or phonk (sfx on), or the user's own music file. loop on. Voice off, unless a panel's joke is spoken.",
       TONE_RULE,
       FREE_RULE,
-      "Posted as a video (photo slideshows are not posted by the hub yet). Post caption: a short relatable line and 3-5 niche hashtags.",
+      "Posted as a video; where the account also runs the slides style, the same panels can go up as a photo post (render_slides, browser_attach_slides). Post caption: a short relatable line and 3-5 niche hashtags.",
     ].join(' '),
   },
   {
@@ -308,6 +308,64 @@ export const STYLES: ChannelStyle[] = [
       "Trading and prediction-market tools: the figure hands the work to a robot prop (\"AI trades for you, easy\"), never the bot's screens, never a chart going up, P&L, wins, profit or \"bet\"; a plain risk line on screen or in the voice (\"It can lose too.\") and disclaimer \"Not financial advice.\".",
       "Our own figure only: never a look-alike of an existing stick-figure character (Alan Becker's coloured figures or the animator-fights-the-drawing idea, Henry Stickmin's bean head and hat), no meme characters, no real people.",
       "Narrated ones use a realistic AI voice: turn on TikTok's AI-generated label and Meta's AI info label when posting them. Post caption: the hook as a question, the series name when it is one (\"Windows crimes #4\"), the tool named once, 3-5 hashtags.",
+    ].join(' '),
+  },
+  {
+    id: 'blox',
+    label: 'blox',
+    name: 'Blocky avatars',
+    about: 'Blocky game avatars act it out, the way Roblox-style story, rant and skit shorts do: a narrated rant with a new move on every line, a wordless two-avatar skit with chat bubbles, or one avatar dancing under a line everyone relates to. Our own avatar, worlds and moves, drawn by the hub.',
+    preview: 'blox-rant',
+    bestOn: 'Shorts, TikTok, Reels',
+    format: 'blox-rant',
+    rules: [
+      "create_reel preset blox, rotating three formats. blox-rant (25-45 s, narrated): one avatar, a complaint or a small story the viewer knows from their own life, told in first person; one or two short sentences a beat, a new move on every beat and a camera change every second or third (cam=close on the punchline, cam=low for the big moment, cam=far for the opener or a walk), one big word on the turn, captions words, the user's voice, bed goofy or lofi low. blox-skit (12-25 s, wordless): two avatars named in names (\"Me;My PC\", \"Day 1 me;Day 30 me\"), every beat \"moveA/moveB\", voiceover off, captions title with one short setup line, what they say as bubble props (2-6 lowercase words, the way people type in a game chat), a fall, shock or cheer as the punchline with one effect on it (boom, shake), bed goofy or phonk, loop on. blox-dance (7-12 s, wordless): one avatar on dance, groove and spin for the whole clip under one relatable line as the title caption (\"me after fixing *one* bug\"), a new camera on each beat (cam=far, orbit, cam=low, push), bed phonk; the loop is the point, and the post caption does the talking.",
+      "The avatar is the channel. Keep one look (the avatar field), one name and one world per series so people recognise it, and change the world or the time of day between series. A product or tool is the thing the avatar ends up using: type at the desk, then a screen=second panel with its real recording (krypt_tools names a Krypt tool's bundled one, or record_screen; look at every frame for private data first). It is never the hook.",
+      "Every video different (platforms cut reach for whole accounts whose videos look mass-produced): a new script with a real point, different moves, props, cameras and a different hook each time, never the same opening twice, and keep mixing in the account's other styles.",
+      "Scenes and characters are made up; every fact, setting, menu path and tool feature said in them is real (krypt_tools for Krypt tools). Numbers only with a source.",
+      "Trading and prediction-market tools: the avatar hands the work to the robot prop (\"AI trades for you, easy\"), never the bot's screens, never a chart going up, P&L, wins, profit or \"bet\", no coin or trophy prop on those reels; a plain risk line on screen or in the voice (\"It can lose too.\") and disclaimer \"Not financial advice.\".",
+      "Our own avatars and worlds only. Never the Roblox name or logo on the video or in a name tag, nothing that reads as made in or endorsed by Roblox, no copy of a known avatar, creator's character, face or catalog item, no real game's map or footage. Game hashtags (#roblox) only when the reel's topic really is that game.",
+      "A lot of young people watch this look: keep it clean whatever the account's tone. No swearing, nothing sexual, no gore, no bullying, nothing that asks kids to buy, click or message.",
+      "Narrated ones use a realistic AI voice: turn on TikTok's AI-generated label and Meta's AI info label when posting them. Post caption: the hook in other words or as a question, one line that invites a reply (\"which one are you?\"), 3-5 niche hashtags.",
+    ].join(' '),
+  },
+  {
+    id: 'ask',
+    label: 'ask',
+    name: 'Ask the AI',
+    about: "A person asks, your AI character answers: two 3D characters at a desk, a claim everyone repeats, checked in three named parts on a board above them. Reads like an episode of a show, and every episode ends on \"send this to the friend who...\".",
+    preview: 'ask-explainer',
+    bestOn: 'Reels, TikTok, Shorts',
+    format: 'ask-explainer',
+    rules: [
+      "create_reel format ask-explainer (preset duo), 45-70 s. The cold open, full screen, under 6 seconds: the AI character says a claim or a number people in the niche already repeat (a chip line puts it in the corner), the asker's bubble asks what the viewer is thinking (\"is that true?\", \"wait, which one?\"), the AI promises the parts (\"Let me show you. Three parts.\"). Then the board: part=1, part=2, part=3, each named in the parts field, 3-5 short lines a part and a new diagram every line or two (steps, number, bars, stamp, card, a screen line with the real recording). The last part is the honest check (\"Is it real?\", \"Does it matter?\", \"What it costs\") and lands on a stamp. The last line is the end card.",
+      "Two voices, in this style only: the AI character has the reel's voice and the asker the user's other voice, which the hub puts in asker_voice by itself (leave both voice fields alone). Then the asker's lines are heard and the asker may open the reel with the claim (\"people say X. is that true?\"); with no second voice their lines are bubbles.",
+      "The asker is the viewer. Every 8-12 seconds a bubble with the doubt a real person would have (\"so it's free?\", \"and if it breaks?\", \"so am I rich?\"): 2-6 lowercase words, never a setup for the product. The AI answers it straight, also when the answer is no (\"No. But...\").",
+      "Topic: something people already argue about or want right now (a launch, a setting, a claim going round, a way to save time or money), answered with checked facts; a tool is the \"how\" in the middle part, shown with its real recording (krypt_tools), never the hook. One idea a reel. Lines of 3-9 words, written to be heard; numbers only with a source.",
+      "Every reel different: a new claim, new part names, a different room, sign, board title and diagrams. Keep the two characters and their colours the same within a series so the account is recognisable, and keep mixing in the account's other styles.",
+      "Trading and prediction-market tools: no \"people make $X\" claim as the hook, no chart going up, P&L, wins or profit on the board; \"AI trades for you, easy\" in words, the check part says plainly that it can lose, disclaimer \"Not financial advice.\".",
+      "Our own two characters, rooms and words only: never another channel's characters, mascot, set or lines, and the AI character keeps its own name (char_name), never the name or look of a real AI product.",
+      "The end card's next step is something the account really does: a keyword to comment (\"Comment *TWEAK* for the steps\") only when the steps are in the caption or the pinned comment and the run answers those comments (the per-thread limit applies); otherwise \"Follow for *part two*\" or the tool's link. Never promise a DM.",
+      "Post caption: the hook as two short sentences, one line on what the reel shows, the same next step as the end card, \"send this to the friend who...\", 4-5 niche hashtags. It is narrated by an AI voice: turn on TikTok's AI-generated label and Meta's AI info label.",
+    ].join(' '),
+  },
+  {
+    id: 'slides',
+    label: 'slides',
+    name: 'Slideshow',
+    about: 'A post people swipe through: a cover that makes them stop, then one idea a slide (a tip, a step, a setting, a screenshot), and a last slide worth saving. Goes up as pictures on Instagram, TikTok, Threads, Facebook and X; Pinterest gets it as a short video with music.',
+    preview: 'slides-tips',
+    bestOn: 'Instagram, TikTok, Threads, Facebook, X',
+    format: 'slides-tips',
+    rules: [
+      "create_reel preset slides (or format slides-tips / slides-steps): 5-8 slides, 10 at most. Slide 1 is the cover and does the whole job of a hook: a number or a claim the viewer wants proven (\"4 Windows settings to turn *off* today\"), 3-9 words, one *word* in the highlight colour. Then one idea a slide: a headline of 2-6 words and at most two short lines under it, big enough to read on a phone without zooming. The last slide is the payoff: the thing to save or send, or an end slide with the link.",
+      "Show, don't list: every second or third slide is an image slide (a real screenshot of the setting, the menu, the result; \"@x,y x2\" zooms onto the part that matters) or a screen slide (one frame of a recording: record_screen or a Krypt tool's bundled one; look at it for private data first). Words-only slideshows read as filler. Vary look, font and align between posts so no two look stamped out.",
+      "Photo slideshows (format slides-photo; the look most TikTok slideshows have): every slide a photo slide, a picture filling it with a few words written on it. Pictures: find_images searches Pinterest, save_images keeps the ones you pick (list_media kind images shows what is already saved). One look for the whole post (same mood, light and colours), upright pictures, none with words, logos, watermarks or a recognisable person. They are other people's pictures, so every slide is made ours: our own words on it plus at least one change (a crop after the path \"@x,y,w,h\", flip, warm / cool / bw, grain, dim), and never the same picture in two posts. Words in lowercase, 3-12 a slide, the way people type on TikTok; slide 1 is the hook; pos= keeps them off the busy part of the picture. Alternate photo slideshows with the designed ones.",
+      "Study before writing: find_slideshows with \"@creator\" lists a creator's slideshows with their likes and saves, and with a post's link shows its slides (creators in the niche are found in the account's TikTok tab: search, Photos). Look at two or three that did well and take the shape that works (the hook's angle, how many slides, how many words, the look), then write ours from scratch: never a post's own sentences, never its slides. add_references keeps what you saw.",
+      "Write the way people type: short, plain, no \"unlock\", \"game-changer\", \"here's why\", no emoji rows. Every fact, setting and menu path is real and checked (krypt_tools for Krypt tools; never a feature it does not list). The product, if any, is one slide near the end, never the cover.",
+      "Trading and prediction-market tools: \"AI trades for you, easy\" in words only, never the bot's screens, a chart going up, P&L, wins or profit; a plain risk line (\"It can lose too.\") and disclaimer \"Not financial advice.\" (on every other slideshow the disclaimer field stays empty). Never \"open source\" or \"free to use\" for Krypto Bot or Krypto Mirror.",
+      "Posting: preview_reel, then render_slides (shape portrait for Instagram, Threads, Facebook and X; vertical for TikTok) and look at every picture, then browser_attach_slides per platform and mark_posted with kind slides. X takes 4 pictures: more than that goes up there as the square video. Pinterest gets the video (render_reel; its music is made by the hub) or one slide as a 2:3 picture (render_image shape pin). TikTok only as a photo post: when its uploader takes only video on this account, leave TikTok out for that slideshow. YouTube never (both count a video of still slides as low-effort): post another style there. One slideshow counts as that platform's post for the run, with the same gap as a reel.",
+      "Post caption: the cover line in other words, a reason to save or send it (\"save this for your next reinstall\"), 3-5 niche hashtags. Not every post: keep mixing in the account's video styles.",
     ].join(' '),
   },
 ];
@@ -349,8 +407,31 @@ export function styleName(s: ChannelStyle, brand: Pick<Brand, 'name'>): { name: 
   return { name: brand.name.trim() ? `${brand.name.trim()} stories` : s.name, label: 'main' };
 }
 
-/** The styles an account runs, main first (missing = just the main style). */
-export const stylesOf = (a: Pick<IgAccount, 'styles'>): string[] => (a.styles?.length ? a.styles : ['main']);
+/** Every built-in style, main first. */
+export const BUILT_IN = (): string[] => STYLES.map((s) => s.id);
+
+/**
+ * The styles an account runs, main first. Nothing saved = every built-in style: they all start on, and the user
+ * switches off the ones they do not want (Styles page). Once they switch one, the account keeps its own list.
+ */
+export const stylesOf = (a: Pick<IgAccount, 'styles'>): string[] => (a.styles?.length ? a.styles : BUILT_IN());
+
+/** A list of styles as saved: nothing when it is exactly the built-in ones (so a style added later starts on too). */
+export function savedStyles(ids: string[]): string[] | undefined {
+  const all = BUILT_IN();
+  return ids.length === all.length && all.every((id) => ids.includes(id)) ? undefined : ids;
+}
+
+/**
+ * Why an account cannot make a style that is switched on, or '' when it can. The run's plan leaves these out of the
+ * rotation, and the Styles page says what is missing.
+ */
+export function styleNeeds(id: string, a: Pick<IgAccount, 'clipping'>, brand: Pick<Brand, 'name'>): string {
+  const base = styleById(id)?.base ?? id;
+  if (base === 'clipping' && !a.clipping?.sources?.length) return 'Pick streamers to clip first';
+  if ((base === 'series' || base === 'versus') && !isKryptBrand(brand)) return "Only for Krypt's tools";
+  return '';
+}
 
 /** Clean a list of style names/ids into ids; throws on an unknown one. */
 export function cleanStyles(input: string[]): string[] {
@@ -372,19 +453,31 @@ export function styleMix(a: Pick<IgAccount, 'styles' | 'styleMix'>): Array<{ id:
   if (ids.length === 1) return [{ id: ids[0], share: 100 }];
   const own = a.styleMix ?? {};
   const set = ids.some((id) => Number(own[id]) > 0);
-  const raw = ids.map((id, i) => (set ? Math.max(0, Number(own[id]) || 0) : i === 0 ? ids.length - 1 : 1));
+  // A style switched on after the mix was saved has no number yet: it gets the smallest share in the mix, so it is tried.
+  const least = Math.min(...ids.map((id) => Number(own[id]) || 0).filter((n) => n > 0));
+  const raw = ids.map((id, i) => (set ? (id in own ? Math.max(0, Number(own[id]) || 0) : least) : i === 0 ? ids.length - 1 : 1));
   const total = raw.reduce((n, x) => n + x, 0) || 1;
-  return ids.map((id, i) => ({ id, share: Math.round((raw[i] / total) * 100) }));
+  // Whole percents, but never 0 for a style that has a share: with many styles on, each one's is small.
+  return ids.map((id, i) => ({ id, share: raw[i] > 0 ? Math.max(1, Math.round((raw[i] / total) * 100)) : 0 }));
 }
+
+/** How many of the latest reels the rotation looks at: ten, or enough for every style in the mix to come up. */
+export const mixWindow = (mix: Array<{ share: number }>): number => Math.max(10, mix.filter((m) => m.share > 0).length * 2);
 
 /** The style the next reel should be in so the recent reels match the mix: the one furthest behind its share. */
 export function nextStyle(mix: Array<{ id: string; share: number }>, recent: string[]): string {
   let best = mix[0].id;
   let gap = -Infinity;
+  // `recent` is newest first. Between styles equally far behind, the one made longest ago goes first, so with many
+  // styles on the turns go round instead of back to the top of the list.
+  const age = (id: string): number => {
+    const i = recent.indexOf(id);
+    return i < 0 ? Infinity : i;
+  };
   for (const m of mix) {
     if (m.share <= 0) continue;
     const g = (m.share / 100) * (recent.length + 1) - recent.filter((x) => x === m.id).length;
-    if (g > gap + 1e-9) {
+    if (g > gap + 1e-9 || (Math.abs(g - gap) <= 1e-9 && age(m.id) > age(best))) {
       gap = g;
       best = m.id;
     }
@@ -392,10 +485,16 @@ export function nextStyle(mix: Array<{ id: string; share: number }>, recent: str
   return best;
 }
 
-/** A mix as saved: whole percents for the styles the account runs, scaled to 100. null when it says nothing (back to the default). */
-export function cleanMix(input: Record<string, unknown>, ids: string[]): Record<string, number> | null {
-  const raw = ids.map((id) => Math.max(0, Math.min(100, Number(input[id]) || 0)));
+/**
+ * A mix as saved: whole percents for the styles the account runs, scaled to 100. null when it says nothing (back to
+ * the default). `whole` = the mix was just set (by the user or their AI): a style it leaves out gets 0. Otherwise it
+ * is an older mix carried along while the styles changed: a style it never mentioned stays unmentioned (styleMix
+ * gives those a small share), and styles no longer run drop out.
+ */
+export function cleanMix(input: Record<string, unknown>, ids: string[], whole = true): Record<string, number> | null {
+  const keep = whole ? ids : ids.filter((id) => id in input);
+  const raw = keep.map((id) => Math.max(0, Math.min(100, Number(input[id]) || 0)));
   const total = raw.reduce((n, x) => n + x, 0);
   if (ids.length < 2 || total <= 0) return null;
-  return Object.fromEntries(ids.map((id, i) => [id, Math.round((raw[i] / total) * 100)]));
+  return Object.fromEntries(keep.map((id, i) => [id, Math.round((raw[i] / total) * 100)]));
 }

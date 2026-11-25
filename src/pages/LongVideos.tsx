@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { Clapperboard, Copy, Download, ExternalLink, FolderOpen, Image as ImageIcon, Sparkles, Trash2 } from 'lucide-react';
+import { Clapperboard, Copy, ExternalLink, FolderOpen, Image as ImageIcon, Sparkles, Trash2 } from 'lucide-react';
 import type { LongVideo, LongStatus } from '@shared/types';
+import { isLongform, longformPlan, longformState } from '@shared/longform';
 import { Card, Empty, GhostButton, Page, PrimaryButton, Section } from '../components/ui';
+import { EditorReadyCard, LongformPlanFields } from '../components/Longform';
 import { useApp } from '../state/store';
 import { cls } from '../lib/format';
 
@@ -54,6 +56,7 @@ function VideoCard({ v }: { v: LongVideo }) {
           <div className="font-mono text-xs text-krypt-muted">
             {acct?.youtube?.channelName ?? acct?.handle ?? 'no channel'} · {v.sections.length} sections{total ? ` · ${clock(total)} narrated` : ''}
             {v.visibility ? ` · ${v.visibility}` : ''}
+            {v.stats ? ` · ${v.stats.views.toLocaleString('en-US')} views${v.stats.ctr !== undefined ? ` · ${v.stats.ctr}% click-through` : ''}${v.stats.avgViewed !== undefined ? ` · ${v.stats.avgViewed}% watched` : ''}` : ''}
           </div>
           <Steps status={v.status} />
         </div>
@@ -113,7 +116,6 @@ function VideoCard({ v }: { v: LongVideo }) {
 }
 
 const LENGTHS = ['5-7 minutes', '8-12 minutes', '12-20 minutes'] as const;
-const EDITOR_URL = 'https://krypt.cc/tools/editor';
 
 /** Tell Kip what video to make: he writes, narrates, presents, edits, makes the thumbnail and uploads it. */
 function AskKip() {
@@ -124,18 +126,24 @@ function AskKip() {
   const channels = db.igAccounts.filter((a) => a.youtube?.enabled);
   const [text, setText] = useState('');
   const [acct, setAcct] = useState(() => channels.find((a) => a.handle === db.settings.handle)?.id ?? channels[0]?.id ?? '');
-  const [length, setLength] = useState<(typeof LENGTHS)[number]>('5-7 minutes');
-  const [publicToo, setPublic] = useState(false);
+  // A long-form channel starts from its plan: the plan's length, and Public when the plan says so.
+  const long = isLongform(db.settings);
+  const plan = longformPlan(db.settings);
+  const [length, setLength] = useState<(typeof LENGTHS)[number]>(long ? (`${plan.length} minutes` as (typeof LENGTHS)[number]) : '5-7 minutes');
+  const [publicToo, setPublic] = useState(long && plan.visibility === 'public');
   const [sending, setSending] = useState(false);
   const a = channels.find((x) => x.id === acct);
-  const send = (): void => {
+  const send = (pick = false): void => {
     const topic = text.trim();
-    if (!topic || !a) return;
+    if ((!topic && !pick) || !a) return;
     if (!kip?.available) return toast('warn', kip?.reason ?? 'Kip is not set up yet: open the Kip page first.');
     if (kip.busy) return toast('warn', 'Kip is busy with something else. Send it again when he is done.');
+    const channel = `${a.handle}'s channel${a.youtube?.channelName ? ` "${a.youtube.channelName}"` : ''}`;
     const say = [
-      `Make a long YouTube video (${length}, 16:9) for ${a.handle}'s channel${a.youtube?.channelName ? ` "${a.youtube.channelName}"` : ''}: ${topic}`,
-      'Follow the "Long videos" steps in get_overview: research and script, narration, Kip presenting every section (render_kip, moves matched to the words), the edit in Krypt Editor with plenty of motion, the thumbnail, the title and description.',
+      pick ? `Pick the next long YouTube video (${length}, 16:9) for ${channel} from the channel itself, then make it.` : `Make a long YouTube video (${length}, 16:9) for ${channel}: ${topic}`,
+      long
+        ? 'Follow the long-form steps list_long_videos gives: you pick and package it with the Marketo tools, and build the video in Krypt Editor with its own tools.'
+        : 'Follow the "Long videos" steps list_long_videos gives: research and script, narration, Kip presenting every section (render_kip, moves matched to the words), the edit in Krypt Editor with plenty of motion, the thumbnail, the title and description.',
       publicToo ? 'Upload it as Public.' : 'Upload it as Unlisted, so I can watch it first.',
     ].join('\n');
     setSending(true);
@@ -184,7 +192,12 @@ function AskKip() {
         <GhostButton small onClick={() => go('kip')}>
           Kip page
         </GhostButton>
-        <PrimaryButton onClick={send} disabled={!text.trim() || sending || !!kip?.busy}>
+        {long && (
+          <GhostButton small onClick={() => send(true)} disabled={sending || !!kip?.busy}>
+            Let Kip pick one
+          </GhostButton>
+        )}
+        <PrimaryButton onClick={() => send()} disabled={!text.trim() || sending || !!kip?.busy}>
           {kip?.busy ? 'Kip is busy' : 'Make it'}
         </PrimaryButton>
       </div>
@@ -193,28 +206,56 @@ function AskKip() {
   );
 }
 
-/** Long videos are cut in Krypt Editor: the ad for it. */
-function EditorCard() {
+/** Long-form mode: the plan, and where each channel stands against it this week. */
+function PlanCard() {
+  const db = useApp((s) => s.db!);
+  const plan = longformPlan(db.settings);
+  const channels = db.igAccounts.filter((a) => a.youtube?.enabled);
   return (
-    <Card className="space-y-2.5 border-krypt-purple/30">
-      <div className="flex items-center gap-2 text-sm font-semibold text-white">
-        <Clapperboard className="h-4 w-4 text-krypt-purple" /> Long videos need Krypt Editor
-      </div>
-      <p className="text-sm leading-relaxed text-white/80">
-        Kip edits long videos in Krypt Editor, our free video editor for Windows and macOS: chapters, key points, Kip on screen, motion on every shot, -14 LUFS export.
-      </p>
-      <p className="text-sm leading-relaxed text-white/80">Install it, open it, and connect it to your AI from its AI panel, the same way you connected Marketo. Keep it open while Kip works.</p>
-      <PrimaryButton onClick={() => void window.marketo.app.openExternal(EDITOR_URL)}>
-        <Download className="h-4 w-4" /> Get Krypt Editor
-      </PrimaryButton>
+    <Card className="space-y-3">
+      <div className="text-sm font-semibold text-white">The channel plan</div>
+      <LongformPlanFields />
+      {channels.length > 0 && (
+        <div className="space-y-1 border-t border-white/5 pt-3">
+          {channels.map((a) => {
+            const st = longformState(db.longVideos ?? [], a.id, plan);
+            const what = st.open.length
+              ? `in progress: "${st.open[0].title}"`
+              : st.due
+                ? 'a new one is due: the next run starts it'
+                : plan.perWeek === 0
+                  ? 'none planned'
+                  : st.nextAt
+                    ? `next due ${new Date(st.nextAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric' })}`
+                    : 'this week is full';
+            return (
+              <div key={a.id} className="flex items-baseline gap-2 text-xs">
+                <span className="min-w-0 truncate font-semibold text-white">{a.youtube?.channelName ?? a.handle}</span>
+                <span className="font-mono text-krypt-muted">
+                  {st.week}/{plan.perWeek} this week
+                </span>
+                <span className="min-w-0 flex-1 truncate text-krypt-muted">{what}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </Card>
   );
 }
 
 export default function LongVideos() {
   const list = useApp((s) => s.db!.longVideos) ?? [];
+  const long = useApp((s) => isLongform(s.db!.settings));
   return (
-    <Page title="Long videos" subtitle="Long YouTube videos (16:9, 5-20 minutes): your AI writes the script, narrates it, edits it in Krypt Editor, makes the thumbnail and uploads it.">
+    <Page
+      title="Long videos"
+      subtitle={
+        long
+          ? 'Your long-form channel: your AI picks each video from the channel, builds it in Krypt Editor, and Marketo uploads it and looks after the comments.'
+          : 'Long YouTube videos (16:9, 5-20 minutes): your AI writes the script, narrates it, edits it in Krypt Editor, makes the thumbnail and uploads it.'
+      }
+    >
       <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
         <div className="space-y-4">
           <AskKip />
@@ -227,16 +268,28 @@ export default function LongVideos() {
           )}
         </div>
         <div className="space-y-4">
-        <EditorCard />
+        {long && <PlanCard />}
+        <EditorReadyCard />
         <Section title="How it works">
-          <Card className="space-y-2.5 text-sm leading-relaxed text-white/80">
-            <p>1. Your AI researches and writes the script, chapter by chapter, with the title, description and tags.</p>
-            <p>2. It narrates it in your default voice (ElevenLabs, about one credit per character).</p>
-            <p>3. Kip presents it: he talks along with the voice and acts out each part.</p>
-            <p>4. It edits the video in Krypt Editor: 16:9, chapters, screen recordings, key points, motion on every shot.</p>
-            <p>5. It draws the thumbnail, then uploads through YouTube Studio: unlisted unless you say public.</p>
-            <p className="text-xs text-krypt-muted">Each step shows up here. Everything is saved in your render folder under "Long videos".</p>
-          </Card>
+          {long ? (
+            <Card className="space-y-2.5 text-sm leading-relaxed text-white/80">
+              <p>1. Your AI reads the channel in YouTube Studio: what got views, what viewers search for, what the comments ask for. It picks the next video from that.</p>
+              <p>2. It writes the script, the title, the description and the tags.</p>
+              <p>3. It builds the video in Krypt Editor: narration (your ElevenLabs voice if you set one, else the Editor's own), pictures, captions, chapters, export.</p>
+              <p>4. It makes the thumbnail and uploads through YouTube Studio, the way your plan says.</p>
+              <p>5. Between videos it answers comments and saves each video's numbers, which decide what comes next.</p>
+              <p className="text-xs text-krypt-muted">Each step shows up here. Everything is saved in your render folder under "Long videos".</p>
+            </Card>
+          ) : (
+            <Card className="space-y-2.5 text-sm leading-relaxed text-white/80">
+              <p>1. Your AI researches and writes the script, chapter by chapter, with the title, description and tags.</p>
+              <p>2. It narrates it in your default voice (ElevenLabs, about one credit per character).</p>
+              <p>3. Kip presents it: he talks along with the voice and acts out each part.</p>
+              <p>4. It edits the video in Krypt Editor: 16:9, chapters, screen recordings, key points, motion on every shot.</p>
+              <p>5. It draws the thumbnail, then uploads through YouTube Studio: unlisted unless you say public.</p>
+              <p className="text-xs text-krypt-muted">Each step shows up here. Everything is saved in your render folder under "Long videos".</p>
+            </Card>
+          )}
         </Section>
         </div>
       </div>

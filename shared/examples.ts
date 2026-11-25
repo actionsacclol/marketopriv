@@ -392,6 +392,38 @@ export const EXAMPLES: Example[] = [
     preset: 'stickman',
     fields: { disclaimer: '' },
   },
+  {
+    id: 'blox-rant',
+    name: 'Blocky rant',
+    about: 'A blocky avatar rants to the camera: a new move on every line, a sign, a desk, a trophy, the camera cutting in on the punchline.',
+    tags: ['3D', 'avatars', 'narrated'],
+    preset: 'blox',
+    fields: { disclaimer: '' },
+  },
+  {
+    id: 'blox-skit',
+    name: 'Blocky skit',
+    about: 'Two blocky avatars with name tags and chat bubbles, one of them falls over at the punchline. Wordless, music only, loops.',
+    tags: ['3D', 'avatars', 'skit'],
+    preset: 'blox',
+    fields: { ...(formatById('blox-skit')?.fields ?? {}) },
+  },
+  {
+    id: 'slides-tips',
+    name: 'Slideshow',
+    about: 'A list people swipe through and save: a cover with the hook, one point a slide, a closing slide. Posted as pictures to swipe through; this is its video version.',
+    tags: ['slideshow', 'carousel', 'tips'],
+    preset: 'slides',
+    fields: { disclaimer: '' },
+  },
+  {
+    id: 'ask-explainer',
+    name: 'Ask the AI',
+    about: "A person asks and your AI character answers, in a small 3D room: the claim, three named parts on a board, an honest check, a send-this ending.",
+    tags: ['3D', 'explainer', 'characters'],
+    preset: 'duo',
+    fields: { disclaimer: '' },
+  },
 ];
 
 export const exampleById = (id: string): Example | undefined => EXAMPLES.find((e) => e.id === id);

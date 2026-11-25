@@ -9,8 +9,9 @@ import * as store from './store';
 //   Campaigns/    one sub-folder per Content Rewards campaign: its logo, footage and other reference files
 // The user fills them (Styles page > Open folder); the AI lists them with list_media.
 
-export type MediaKind = 'backgrounds' | 'memes' | 'campaigns';
-const FOLDER: Record<MediaKind, string> = { backgrounds: 'Backgrounds', memes: 'Memes', campaigns: 'Campaigns' };
+//   Images/       pictures for photo slideshows: saved from a Pinterest search (find_images) or dropped in by the user
+export type MediaKind = 'backgrounds' | 'memes' | 'campaigns' | 'images';
+const FOLDER: Record<MediaKind, string> = { backgrounds: 'Backgrounds', memes: 'Memes', campaigns: 'Campaigns', images: 'Images' };
 const VIDEO = new Set(['.mp4', '.mov', '.webm', '.mkv', '.m4v']);
 const IMAGE = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp']);
 const MAX = 400;

@@ -1,6 +1,6 @@
-import type { McpToolCall, McpToolResult } from '@shared/types';
+import { MAX_SLIDES, SHAPE_SIZE, type McpToolCall, type McpToolResult, type StillShape } from '@shared/types';
 import { recordScreen } from './recorder';
-import { elVoiceNote, hasSound, isVoiced, storyBeats, timingFor } from '@shared/presets';
+import { elVoiceNote, hasSound, isVoiced, slideTimes, storyBeats, timingFor } from '@shared/presets';
 
 const SILENT_NOTE = ' WARNING: this reel has no sound at all (no voice, no music). Silent videos do badly on TikTok, Shorts and Reels: make it a story reel (voiced, with sound effects and music) unless the user asked for a silent one.';
 import { reelById, renderReel, useApp } from '../state/store';
@@ -89,7 +89,7 @@ export async function runAgentTool(call: McpToolCall, progress: (fraction: numbe
     return { ok: true, text: `Rendered Kip for ${todo.length} section${todo.length === 1 ? '' : 's'} (720x1280, green screen #00d800):\n${lines.join('\n')}\nIn the edit: a new video track added last (it draws in front), each clip at its section's start, chroma_key on, scale about 0.55, pos_y 0.22, pos_x -0.4 (bottom-left) beside a key-points panel or 0.4 (bottom-right) otherwise. Text and shapes draw over video, so no full-screen shape may cover him: check with preview_frames.` };
   }
 
-  const args = (call.args ?? {}) as { id?: string; times?: number[]; scale?: number; shape?: 'vertical' | 'square'; t?: number };
+  const args = (call.args ?? {}) as { id?: string; times?: number[]; scale?: number; shape?: StillShape; t?: number };
   let reel = reelById(args.id ?? null);
   if (!reel) return { ok: false, text: `No reel "${args.id}".` };
   if (call.tool === 'preview_reel') reel = await ensureVoiceover(reel, (s) => progress(0, s));
@@ -115,10 +115,33 @@ export async function runAgentTool(call: McpToolCall, progress: (fraction: numbe
     return { ok: true, text: `Saved the ${shape} frame at ${still.t}s of "${reel.title}" → ${r.data}`, images: [{ data: (await renderStills(reel, [still.t], 0.35, shape))[0].data, mimeType: 'image/png' }] };
   }
 
+  if (call.tool === 'render_slides') {
+    const shape = args.shape ?? 'portrait';
+    // A voiced reel's beats are as long as their lines: the voice comes first so each picture is taken at the right moment.
+    if (reel.fields.voiceover === true) reel = await ensureVoiceover(reel, (s) => progress(0, s));
+    const own = slideTimes(reel.preset, reel.fields);
+    const times = (args.times?.length ? args.times : own).slice(0, MAX_SLIDES);
+    if (!times.length) return { ok: false, text: `A ${reel.preset} reel has no slides of its own: pass times (the seconds to save, 2 to ${MAX_SLIDES}; preview_reel helps pick them), or make the slideshow with preset slides.` };
+    if (times.length < 2) return { ok: false, text: 'A slideshow is at least 2 pictures. One picture is render_image.' };
+    progress(0.1, 'Drawing the slides');
+    const stills = await renderStills(reel, times, 1, shape, true);
+    const saved = await window.marketo.render.saveSlides(reel.id, stills.map((s) => s.data), shape);
+    if (!saved.ok || !saved.data) return { ok: false, text: saved.message ?? 'Saving the slides failed.' };
+    const size = SHAPE_SIZE[shape];
+    const cut = !args.times?.length && own.length > MAX_SLIDES ? ` Only the first ${MAX_SLIDES} of its ${own.length} slides were saved: a photo post takes ${MAX_SLIDES} here, so shorten it or pass times.` : '';
+    // Small copies to look at: every slide has to read at phone size.
+    const small = await renderStills(reel, times, 0.3, shape);
+    return {
+      ok: true,
+      text: `Saved ${saved.data.length} slides of "${reel.title}" (${shape}, ${size.w}x${size.h}) → ${saved.data[0].replace(/[\\/][^\\/]+$/, '')}\n${saved.data.map((p, i) => `${i + 1}. ${p}`).join('\n')}${cut}\nLook at them below: each slide one idea, the words big enough to read on a phone, nothing cut off. Then browser_attach_slides with this reel's id and the platform puts them all into its composer as one photo post. Shapes: portrait for Instagram, Threads, Facebook and X (up to 4 there); vertical for TikTok (save that shape too before attaching there).`,
+      images: small.map((s) => ({ data: s.data, mimeType: 'image/png' })),
+    };
+  }
+
   if (call.tool === 'render_reel') {
     if (call.client !== 'Kip') useApp.getState().go('studio', reel.id);
     const t0 = performance.now();
-    const r = await renderReel(reel, (ratio, phase) => progress(ratio, `Rendering${args.shape === 'square' ? ' the square version' : ''} (${phase})`), args.shape ?? 'vertical');
+    const r = await renderReel(reel, (ratio, phase) => progress(ratio, `Rendering${args.shape === 'square' ? ' the square version' : ''} (${phase})`), args.shape === 'square' ? 'square' : 'vertical');
     const voiceNotes = takeVoiceNotes();
     const mute = hasSound(reel.preset, reel.fields) ? '' : SILENT_NOTE;
     return { ok: true, text: `Rendered ${args.shape === 'square' ? 'the square (X) version of ' : ''}"${reel.title}" → ${r.path} (${r.seconds.toFixed(1)}s, ${(r.bytes / 1e6).toFixed(1)} MB, took ${((performance.now() - t0) / 1000).toFixed(1)}s).${voiceNotes.length ? `\nVoice: ${voiceNotes.join(' ')}` : ''}${mute}` };

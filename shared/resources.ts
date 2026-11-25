@@ -10,6 +10,8 @@ import {
   CLIPPING_GUIDE_URL,
   GUIDE_VIDEO_ID,
   GUIDE_VIDEO_URL,
+  BRIGHT_DATA_NOTE,
+  BRIGHT_DATA_URL,
   PROXY_CHEAP_NOTE,
   PROXY_CHEAP_URL,
   PROXY_GUIDE_ID,
@@ -86,14 +88,22 @@ export const RESOURCES: ResourceSection[] = [
   {
     id: 'proxies',
     title: 'Proxies',
-    about: 'A proxy per profile keeps each set of accounts on one fixed IP (Multi run > Proxy).',
+    about: 'A proxy per profile keeps each set of accounts on one fixed IP (Multi run > Proxies).',
     items: [
       {
         title: 'Proxy-Cheap',
-        about: 'Get static residential IPs (also called ISP proxies): one fixed home IP per profile that never changes, which is what Marketo needs. Not rotating or datacenter proxies. Use one IP per profile, and its HTTP details (host, port, user name, password) in Multi run > Proxy.',
+        about: 'Get static residential IPs (also called ISP proxies): one fixed home IP per profile that never changes, which is what Marketo needs. Not rotating or datacenter proxies. Use one IP per profile, and paste the list your order gives you (host, port, user name, password) into Multi run > Proxies.',
         url: PROXY_CHEAP_URL,
         button: 'Get static residential IPs',
         affiliate: PROXY_CHEAP_NOTE,
+        extra: { label: 'Watch the setup guide', url: PROXY_GUIDE_URL },
+      },
+      {
+        title: 'Bright Data',
+        about: 'Another place to get proxies. Pick its ISP (static residential) proxies: one fixed IP per profile that never changes. Not rotating or datacenter proxies. Paste the whole list into Multi run > Proxies and Marketo checks each one and hands them out.',
+        url: BRIGHT_DATA_URL,
+        button: 'Get ISP proxies',
+        affiliate: BRIGHT_DATA_NOTE,
         extra: { label: 'Watch the setup guide', url: PROXY_GUIDE_URL },
       },
     ],

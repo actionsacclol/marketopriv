@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { ArrowRight, Boxes, Briefcase, Check, ImageIcon, Scissors, Wand2, X } from 'lucide-react';
+import { ArrowRight, Boxes, Briefcase, Check, Clapperboard, ImageIcon, Scissors, Wand2, X } from 'lucide-react';
 import type { Brand, PromoteMode } from '@shared/types';
 import { brandFor, clipsOnly, modeOf, savePromoting } from '../lib/promoteMode';
 import { ClipSources } from '../components/ClipSourcesEditor';
 import { UsageTierCard } from '../components/AiUsage';
 import { PerformanceCard } from '../components/PerformanceCard';
+import { EditorReadyCard, LongformPlanFields } from '../components/Longform';
 
-const MODE_TITLE: Record<PromoteMode, string> = { krypt: 'Krypt tools, and get paid', own: 'My own business or product', clips: 'Clip streamers' };
+const MODE_TITLE: Record<PromoteMode, string> = { krypt: 'Krypt tools, and get paid', own: 'My own business or product', clips: 'Clip streamers', longform: 'A long-form YouTube channel' };
 import { KRYPT_TOOLS } from '@shared/kryptPack';
 import { NETWORKS } from '@shared/warmup';
 import { Card, GhostButton, Page, PrimaryButton, Section, Toggle } from '../components/ui';
@@ -32,6 +33,17 @@ export const FIELDS: Array<{ key: keyof Brand & ('name' | 'what' | 'site' | 'nic
   { key: 'never', label: 'Never say or claim', placeholder: 'e.g. health claims, competitor names, prices', long: true },
   { key: 'disclaimer', label: 'Small print (optional)', placeholder: 'e.g. Not financial advice.' },
 ];
+
+/** The same form for a long-form YouTube channel: it describes a channel, not a product. */
+const CHANNEL_WORDS: Partial<Record<(typeof FIELDS)[number]['key'], { label: string; placeholder: string; help?: string }>> = {
+  name: { label: 'Channel name', placeholder: 'e.g. Quiet History' },
+  what: { label: 'What the channel is about, who watches it, and the kind of video', placeholder: 'e.g. Calm history explainers for people who like long stories. Faceless, drawn in a stickman style, one narrator.' },
+  site: { label: 'Link for descriptions (optional)', placeholder: 'example.com', help: 'Goes into video descriptions.' },
+  niche: { label: 'Topics the videos cover', placeholder: 'e.g. lost cities, strange inventions, forgotten wars' },
+  voice: { label: 'How the videos should sound', placeholder: 'e.g. Calm and curious. Short sentences. No hype.' },
+  never: { label: 'Never say or claim', placeholder: 'e.g. medical advice, politics, anything that cannot be sourced' },
+};
+export const fieldsFor = (mode: PromoteMode): typeof FIELDS => (mode === 'longform' ? FIELDS.map((x) => ({ ...x, help: undefined, ...(CHANNEL_WORDS[x.key] ?? {}) })) : FIELDS);
 
 function Step({ n, done, title, children, action }: { n: number; done: boolean; title: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
@@ -105,12 +117,13 @@ export default function Setup() {
       <div className="grid gap-6 xl:grid-cols-[1fr_420px]">
         <div>
           <Section title="What you are promoting" description="Change it any time. Press Save below to switch.">
-            <div className="grid gap-2 lg:grid-cols-3">
+            <div className="grid gap-2 sm:grid-cols-2">
               {(
                 [
                   { m: 'krypt', icon: <Boxes className="h-4 w-4" />, about: 'Everything about krypt.cc is built in. Join the creator program below.' },
                   { m: 'own', icon: <Briefcase className="h-4 w-4" />, about: 'You describe it in the form below.' },
                   { m: 'clips', icon: <Scissors className="h-4 w-4" />, about: "A clip channel: Twitch and Kick streamers' top clips as captioned videos." },
+                  { m: 'longform', icon: <Clapperboard className="h-4 w-4" />, about: 'Full-length videos made in Krypt Editor. Marketo picks them, uploads them and runs the channel.' },
                 ] as const
               ).map((o) => (
                 <button
@@ -130,13 +143,26 @@ export default function Setup() {
               <p className="mt-2 text-xs text-amber-200/90">
                 {mode === 'clips'
                   ? 'Save below to switch: every account then makes clip reels only. '
-                  : savedMode === 'clips'
-                    ? 'Save below to switch: your accounts get back the styles they had. '
-                    : 'Save below to switch. '}
+                  : mode === 'longform'
+                    ? 'Save below to switch: long videos become the main work, on the plan under Create, Long videos. Short videos keep the daily numbers set on the Accounts page (set them to 0 for none). '
+                    : savedMode === 'clips'
+                      ? 'Save below to switch: your accounts get back the styles they had. '
+                      : 'Save below to switch. '}
                 {MODE_TITLE[savedMode]} keeps what it has, for when you switch back.
               </p>
             )}
             {krypt && <CreatorCard className="mt-3" value={f.creator} onChange={(c) => setF((v) => ({ ...v, creator: c }))} />}
+            {mode === 'longform' && (
+              <div className="mt-3 space-y-3">
+                <EditorReadyCard />
+                {savedMode === 'longform' && (
+                  <Card>
+                    <div className="mb-3 text-sm font-semibold text-white">The channel plan</div>
+                    <LongformPlanFields />
+                  </Card>
+                )}
+              </div>
+            )}
             {mode === 'clips' && clipAccounts.length > 0 && (
               <div className="mt-3">
                 <ClipSources accounts={clipAccounts} />
@@ -144,9 +170,9 @@ export default function Setup() {
             )}
           </Section>
 
-          <Section title="Your brand">
+          <Section title={mode === 'longform' ? 'Your channel' : 'Your brand'}>
             <Card className="space-y-3">
-              {FIELDS.map((x) => (
+              {fieldsFor(mode).map((x) => (
                 <div key={x.key}>
                   <label className="label">{x.label}</label>
                   {x.long ? (
@@ -252,9 +278,15 @@ export default function Setup() {
             >
               Claude, Codex, Cursor, Windsurf, Gemini CLI, or the built-in chat with your own API key (Grok, GPT, …).
             </Step>
-            <Step n={4} done={db.reels.length > 0} title="Ask for a reel">
-              "Read the playbook and make a reel about {db.brand.name || 'my product'}." It shows up in Studio as it is written. Have a reel whose edit you like? Add it under Research → Reference videos and say "like this one".
-            </Step>
+            {savedMode === 'longform' ? (
+              <Step n={4} done={(db.longVideos ?? []).length > 0} title="Ask for a long video">
+                "Run get_today in Marketo and work on the next long video for {db.brand.name || 'my channel'}." It shows up under Create → Long videos as it goes: picked from your channel, built in Krypt Editor, then uploaded.
+              </Step>
+            ) : (
+              <Step n={4} done={db.reels.length > 0} title="Ask for a reel">
+                "Read the playbook and make a reel about {db.brand.name || 'my product'}." It shows up in Studio as it is written. Have a reel whose edit you like? Add it under Research → Reference videos and say "like this one".
+              </Step>
+            )}
           </Card>
         </Section>
         <ChromeProfilesSection />

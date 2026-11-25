@@ -26,6 +26,7 @@ import path from 'node:path';
 import { app } from 'electron';
 import type { ApprovalKind, BrowserSite, BrowserStatus, IgAccount, NetProfile, NetStatus, Network, Site, YtChannelOption, ProfileScan } from '../shared/types';
 import { REWARDS_HOME } from '../shared/campaigns';
+import { SLIDE_SITES } from '../shared/slides';
 import { studioChannelOf } from '../shared/ytChannel';
 import { resolveYtChannel } from './ytChannel';
 import { NETWORKS, NETWORK_LABEL, isNetwork, linkOn, localDate, netOf, normalizeHandle, planFor, postGap, quotaKeys, quotaLabel, sameHandle, siteOn, watchOnlyOn, ytLimit, ytUploadsToday, type Quota } from '../shared/warmup';
@@ -483,10 +484,11 @@ const chromeProxySig = new WeakMap<ChromeConn, string>();
  * Before anything loads in a Chrome profile: it is on this profile's proxy (or ours is taken away when the profile
  * has none), and a recent check from inside that Chrome profile saw the sticky IP. Throws, and nothing loads, if not.
  */
-async function chromeProxyGate(who: string, conn: ChromeConn): Promise<void> {
+async function chromeProxyGate(who: string, conn: ChromeConn, forProfile?: string): Promise<void> {
   const dir = chrome.dirOf(conn);
-  // Its own proxy (Setup > Performance, a proxy for each Chrome profile), else the Marketo profile's.
-  const eff = proxy.effectiveFor(dir, perf.values().proxyPerChrome);
+  // Its own proxy (Setup > Performance, a proxy for each Chrome profile), else the Marketo profile's. Read for another
+  // profile (Multi run > Chrome profiles): that profile's proxy, never the open one's.
+  const eff = forProfile ? proxy.effectiveForProfile(forProfile) : proxy.effectiveFor(dir, perf.values().proxyPerChrome);
   const p = eff.p;
   const other = dir ? proxy.chromeDirsOfOthers().get(dir) : undefined;
   const name = chrome.nameOfDir(dir ?? undefined) || dir || 'that Chrome profile';
@@ -1250,6 +1252,10 @@ function classifyPin(t: Target): Verdict {
   return { kind: 'free' };
 }
 
+/** What clicking an element does on the platform the tab is on. */
+const verdictOn = (site: BrowserSite, x: Target, a: IgAccount): Verdict =>
+  site === 'youtube' ? classifyYt(x, a) : site === 'x' ? classifyX(x) : site === 'tiktok' ? classifyTt(x) : site === 'facebook' ? classifyFb(x) : site === 'threads' ? classifyTh(x) : site === 'pinterest' ? classifyPin(x) : classify(x);
+
 /** Enter in a filled text box submits it. */
 function classifyEnter(f: Focus): Verdict {
   if (!f.editable || f.search || !f.value) return { kind: 'free' };
@@ -1899,7 +1905,7 @@ const HANDLE_SITES = new Set<Site>(['instagram', 'x', 'tiktok', 'threads', 'pint
  * the platform's own page (opened in that profile, then closed again if Marketo opened it) and YouTube's channel
  * switcher lists the channels. A platform tab an account's AI is using right now is left alone.
  */
-export async function scanChromeProfile(dir: string): Promise<ProfileScan> {
+export async function scanChromeProfile(dir: string, forProfile?: string): Promise<ProfileScan> {
   const live = chrome.connections();
   const conn = dir ? live.find((c) => chrome.dirOf(c) === dir) : live.length === 1 ? live[0] : undefined;
   if (!conn) throw new Error(dir ? 'That Chrome profile is not connected yet: open it, with the Krypt Marketo extension added.' : 'Pick the Chrome profile first.');
@@ -1920,7 +1926,7 @@ export async function scanChromeProfile(dir: string): Promise<ProfileScan> {
   const todo = SCAN_SITES.filter((s) => sites[s]!.signedIn && conn.sites.includes(s) && !busy(s) && (s === 'youtube' || (HANDLE_SITES.has(s) && !sites[s]!.handle)));
   if (!todo.length) return { sites };
   // The Marketo profile's proxy first: nothing loads in Chrome before it is in place.
-  await chromeProxyGate('This Chrome profile', conn);
+  await chromeProxyGate('This Chrome profile', conn, forProfile);
   await Promise.all(
     todo.map(async (s) => {
       const surf = chromeSurface(conn, s);
@@ -2299,8 +2305,7 @@ export function toolClick(handle: string | undefined, ref: number, client: strin
     }
     if (tab.site === 'rewards') return rewardsClick(tab, a, ref, t);
 
-    const judge = (x: Target): Verdict =>
-      tab.site === 'youtube' ? classifyYt(x, a) : tab.site === 'x' ? classifyX(x) : tab.site === 'tiktok' ? classifyTt(x) : tab.site === 'facebook' ? classifyFb(x) : tab.site === 'threads' ? classifyTh(x) : tab.site === 'pinterest' ? classifyPin(x) : classify(x);
+    const judge = (x: Target): Verdict => verdictOn(tab.site, x, a);
     const v = judge(t);
     let note = '';
     let approvalId: string | null = null;
@@ -2740,6 +2745,168 @@ export function toolAttachImage(handle: string | undefined, file: string, site: 
   });
 }
 
+/** A file picker's accept list and whether it takes several files (read in the page; the last one matching, like the attach itself). */
+async function pickerInfo(tab: Tab, selector: string): Promise<{ accept: string; multiple: boolean } | null> {
+  return inPage<{ accept: string; multiple: boolean } | null>(
+    tab,
+    `(() => { const all = document.querySelectorAll(${JSON.stringify(selector)}); const el = all[all.length - 1]; return el ? { accept: el.getAttribute('accept') || '', multiple: !!el.multiple } : null; })()`,
+  ).catch(() => null);
+}
+const takesImages = (accept: string): boolean => !accept.trim() || /image|\.jpe?g|\.png|\.webp|\*\/\*/i.test(accept);
+
+/** Meta Business Suite's post composer (photos and text; Reels have their own). */
+const FB_POST_COMPOSER = 'https://business.facebook.com/latest/composer';
+/** A button that opens an upload, by its name (the only kind the hub presses for the AI when attaching). */
+const UPLOAD_BUTTON = /photo|image|picture|media|upload|attach|add file|select file|gallery/i;
+
+/**
+ * Put a reel's slides (2-10 pictures) into a platform's composer as one photo post: an Instagram carousel, a TikTok
+ * photo post, a multi-photo post on Threads, Facebook or X. The final Post / Share is the AI's click, counted and
+ * spaced like any other post. ref = the upload button to use when the page's own picker can't be told.
+ */
+export function toolAttachSlides(handle: string | undefined, files: string[], label: string, site: Site, ref?: number): Promise<Outcome> {
+  return withTab(handle, site, async (tab, a) => {
+    const def = SLIDE_SITES[site];
+    const L = SITES[site].label;
+    if (!def) return { ok: false, text: `${L} takes no photo slideshow from the hub. Post the reel's video there instead (render_reel, then browser_attach_reel).` };
+    const roots = [store.get().settings.outputDir, app.getPath('userData'), instance.ROOT, app.getAppPath()].filter(Boolean).map((r) => path.resolve(r).toLowerCase() + path.sep);
+    const full = files.map((f) => path.resolve(f));
+    for (const f of full) {
+      if (!IMAGE_EXT.test(f) || !roots.some((r) => f.toLowerCase().startsWith(r))) return { ok: false, text: `Only pictures inside Marketo's render folder can be attached (${f} is not). render_slides saves them there.` };
+      if (!fs.existsSync(f)) return { ok: false, text: `A slide is missing on disk (${f}). render_slides again, then attach.` };
+    }
+    let block = await inputBlock(tab, a, '');
+    if (block) return { ok: false, text: block };
+    checkAllowed(a, 'posts', 'posting', site);
+    const refused = (e: unknown): Outcome | null => (tab.s.kind === 'chrome' && /not allowed/i.test((e as Error).message) ? { ok: false, text: FILE_ACCESS.replace('the reel', 'the slides') } : null);
+    let sel = '';
+    let found: number[] = [];
+    let chosen = false;
+    /** Press an upload button with a real click and hand the file dialog it opens the slides. */
+    const viaButton = async (n: number): Promise<Outcome | null> => {
+      const t = await inPage<Target>(tab, `window.__mk.target(${n})`).catch(() => null);
+      if (!t || t.gone) return { ok: false, text: `[${n}] is no longer on the page. browser_snapshot for a fresh listing, then pass the number of the photo upload button.` };
+      if (t.covered) return { ok: false, text: `[${n}] "${t.name}" is covered by "${t.covered}". Close what is on top of it (Escape often does), then call this again.` };
+      if (verdictOn(tab.site, t, a).kind !== 'free' || !UPLOAD_BUTTON.test(t.name)) return { ok: false, text: `[${n}] "${t.name}" is not a photo upload button. Pass the number of the button that adds photos ("Add photo", "Upload", "Select from computer"), from a fresh browser_snapshot.` };
+      try {
+        chosen = await tab.s.chooseFiles(() => mouseClick(tab, t.x, t.y), full);
+      } catch (e) {
+        const r = refused(e);
+        if (r) return r;
+        throw e;
+      }
+      return chosen ? null : { ok: false, text: `Pressing "${t.name}" opened no file chooser. Take a browser_snapshot (site "${site}") to see what it opened instead.\n${(await read(tab, a)).text}` };
+    };
+    const wait = async (selectors: string[], tries: number): Promise<void> => {
+      for (let i = 0; i < tries && !found.length; i++) {
+        for (const s of selectors) {
+          found = await filePickers(tab, s).catch(() => []);
+          if (found.length) {
+            sel = s;
+            break;
+          }
+        }
+        if (!found.length) await sleep(1100);
+      }
+    };
+
+    if (ref !== undefined) {
+      // The upload button the AI points at: its own picker when it has one, else the file dialog it opens.
+      const n = Math.floor(ref);
+      if (await inPage<boolean>(tab, `window.__mk.markFile(${n})`).catch(() => false)) await wait(['input[type=file][data-mk-pick]'], 1);
+      if (!found.length) {
+        const bad = await viaButton(n);
+        if (bad) return bad;
+      }
+    } else if (site === 'x') {
+      if (!/^\/compose\/post/.test(pathOf(await tab.s.url()))) await tab.s.load(X_COMPOSE);
+      await wait(['[role=dialog] input[data-testid=fileInput]'], 4);
+      if (!found.length) await wait(['input[data-testid=fileInput]'], 4);
+    } else if (site === 'tiktok') {
+      if (!TT_STUDIO_PATH.test(pathOf(await tab.s.url()))) await tab.s.load(TT_UPLOAD);
+      await wait(['input[type=file][accept*="image"]', 'input[type=file]'], 10);
+    } else if (site === 'threads') {
+      const now = await tab.s.url();
+      if (!/^\/intent\/post/i.test(pathOf(now)) && !(await filePickers(tab, '[role=dialog] input[type=file]').catch(() => [])).length) await tab.s.load(TH_COMPOSE);
+      await wait(['[role=dialog] input[type=file]'], 8);
+      if (!found.length) await wait(['input[type=file]'], 2);
+    } else if (site === 'facebook') {
+      const now = await tab.s.url();
+      if (!(/^business\./i.test(hostOf(now)) && /^\/latest\/composer/i.test(pathOf(now)))) await tab.s.load(FB_POST_COMPOSER);
+      // Business Suite keeps no file input in the page: its "Add photo" button makes one and opens the system dialog.
+      await wait(['input[type=file][accept*="image"]'], 3);
+      if (!found.length) {
+        let opener = 0;
+        for (let i = 0; i < 8 && !opener; i++) {
+          opener = await inPage<number>(tab, `window.__mk.byName(${JSON.stringify('^add photos?(\\s*(/|or|and)\\s*videos?)?$|^photo(s)?(\\s*/\\s*video)?$')})`).catch(() => 0);
+          if (!opener) await sleep(1100);
+        }
+        if (opener) {
+          const bad = await viaButton(opener);
+          if (bad) return bad;
+        }
+      }
+    } else {
+      // Instagram: the Create dialog's own picker (the AI opens Create > Post first).
+      await wait(['[role=dialog] input[type=file]', 'input[type=file]'], 2);
+    }
+    await read(tab, a);
+    block = await inputBlock(tab, a, '');
+    if (block) return { ok: false, text: block };
+
+    if (!found.length && !chosen) {
+      const HOW: Record<string, string> = {
+        instagram: 'No file picker on this page yet. Open Instagram\'s Create dialog first (the "New post" / "Create" entry in the navigation, then "Post"), then call this again.',
+        x: 'X\'s compose dialog did not open. Take a browser_snapshot (site "x"), open the composer (the "Post" button in the side bar), then call this again.',
+        tiktok: 'TikTok Studio\'s uploader did not open. browser_open with site "tiktok" and url "/tiktokstudio/upload" opens it; then call this again.',
+        threads: 'The Threads composer did not open. Take a browser_snapshot (site "threads"), open the composer (the "Create" / "What\'s new?" box), then call this again.',
+        facebook: `Meta Business Suite's post composer showed no photo upload. Take a browser_snapshot (site "facebook"): if it asks which Page, the user picks it; browser_open with site "facebook" and url "${FB_POST_COMPOSER}" opens the composer. Then call this again with ref = the number of its "Add photo" button.`,
+      };
+      return { ok: false, text: HOW[site] ?? `No photo upload found on ${L}. Take a browser_snapshot and pass ref = the number of the photo upload button.` };
+    }
+
+    if (!chosen) {
+      const info = await pickerInfo(tab, sel);
+      // TikTok's web uploader takes only video for many accounts: then the slideshow goes up as its video.
+      if (info && !takesImages(info.accept))
+        return {
+          ok: false,
+          text:
+            site === 'tiktok'
+              ? `TikTok's web uploader takes only video on this account (it accepts "${info.accept}"), so a photo post can't go up from here. If the page shows a separate photo upload button, call this again with ref = its number. Otherwise leave TikTok out for this slideshow (a video of still slides does badly there and can cost the account reach), post one of the account's video styles on TikTok instead, and say so in the report.`
+              : `This ${L} uploader takes no pictures (it accepts "${info.accept}"). Take a browser_snapshot and call this again with ref = the number of the photo upload button, or post the video version (render_reel, browser_attach_reel).`,
+        };
+      if (info && !info.multiple && full.length > 1) return { ok: false, text: `This ${L} uploader takes one file at a time, so ${full.length} slides can't go in as one post. Call this again with ref = the number of the button that adds several photos, or post the video version (render_reel, browser_attach_reel).` };
+      try {
+        await cdp(tab, 'DOM.setFileInputFiles', { nodeId: found[found.length - 1], files: full });
+      } catch (e) {
+        const r = refused(e);
+        if (r) return r;
+        throw e;
+      }
+    }
+    await sleep(rand(3000, 4200));
+    deps.log('info', `[browser] ${a.handle} attached ${full.length} slides on ${L}`);
+    const n = full.length;
+    const after = `Afterwards open the profile, check the post is there with all ${n} pictures, copy its link and mark_posted with platform "${site}" and kind "slides".`;
+    if (site === 'instagram') {
+      const crop = await igOriginalCrop(tab, true);
+      const cropNote =
+        crop === 'set' || crop === 'already'
+          ? 'The hub set the crop to Original (the full 4:5 picture): leave it.'
+          : 'IMPORTANT: Instagram cuts photos to a square unless the crop is changed. Before Next: press the crop button at the bottom left of the picture ("Select crop") and pick "Original" (or 4:5), and check the whole slide shows, the title not cut. The first picture\'s crop is used for all of them.';
+      return { ok: true, text: `Attached ${label} as one post (a carousel of ${n}). ${cropNote} Check the dialog shows ${n} pictures in order (the arrows on the picture step through them). Then Next (no filter), write the caption (the hook, a reason to save or send it, 3-5 hashtags) and press Share (it waits for the user only if they switched approvals on). ${after}\n${(await read(tab, a)).text}` };
+    }
+    if (site === 'tiktok')
+      return { ok: true, text: `Attached ${label} as a photo post of ${n}. Check the page shows them as photos in order, not a video. Write the description (TikTok may pre-fill a file name: clear it first) with a few niche hashtags; if the page offers music for the photos, pick a calm track from its list (a photo post with no sound does worse), then press Post (it waits for the user only if they switched approvals on). ${after}\n${(await read(tab, a)).text}` };
+    if (site === 'threads')
+      return { ok: true, text: `Attached ${label} (${n} pictures) to a new thread. Type its text: written fresh for Threads, one or two short lines (a take or a question about the slides), at most one topic tag, no link. Then press Post (it waits for the user only if they switched approvals on). ${after}\n${(await read(tab, a)).text}` };
+    if (site === 'facebook')
+      return { ok: true, text: `Attached ${label} (${n} pictures) in Meta Business Suite. Check the Page named at the top is this account's Page (a wrong one: ask the user to switch; never switch it yourself) and that only Facebook is ticked under "Post to" unless the user wants it on Instagram too. Write the text (the hook line, 2-3 hashtags), then press Publish (it waits for the user only if they switched approvals on). ${after}\n${(await read(tab, a)).text}` };
+    return { ok: true, text: `Attached ${label} (${n} pictures). Type the post text into the composer's "Post text" box (the hook, in your own words; never the same text twice), then press Post (it waits for the user only if they switched approvals on). ${after}\n${(await read(tab, a)).text}` };
+  });
+}
+
 /** Chrome only lets an extension hand over a local file when the user allowed it file access. */
 const FILE_ACCESS = 'Chrome refused to attach the file. The user turns on "Allow access to file URLs" for the Krypt Marketo extension (chrome://extensions > Krypt Marketo > Details), then try again. Or they upload the reel themselves.';
 
@@ -2920,13 +3087,14 @@ const IG_PREVIEW_RATIO = `(() => {
  * 'set' / 'already' = the preview is the tall frame; 'unchecked' = Original was picked but the preview could not be
  * measured; 'failed' = the crop menu or its Original option was not found.
  */
-async function igOriginalCrop(tab: Tab): Promise<'set' | 'already' | 'unchecked' | 'failed'> {
+async function igOriginalCrop(tab: Tab, photo = false): Promise<'set' | 'already' | 'unchecked' | 'failed'> {
   const find = async (re: string): Promise<Target | null> => {
     const ref = await inPage<number>(tab, `window.__mk.byName(${JSON.stringify(re)})`).catch(() => 0);
     const t = ref ? await inPage<Target>(tab, `window.__mk.target(${ref})`).catch(() => null) : null;
     return t && !t.gone ? t : null;
   };
-  const tall = (r: number): boolean => r > 0 && r < 0.7;
+  // A reel at Original reads about 0.56; a 4:5 photo (a slideshow's slides) reads 0.8, where Instagram's default square reads 1.
+  const tall = (r: number): boolean => r > 0 && r < (photo ? 0.9 : 0.7);
   // The crop step comes up once Instagram has read the file.
   let toggle: Target | null = null;
   for (const until = Date.now() + 15_000; Date.now() < until; await sleep(600)) {
