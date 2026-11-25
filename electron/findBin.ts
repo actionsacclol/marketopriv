@@ -90,6 +90,11 @@ function winBinDirs(): string[] {
     path.join(e.ProgramFiles ?? 'C:\\Program Files', 'nodejs'),
     path.join(home, 'scoop', 'shims'),
     path.join(local, 'Microsoft', 'WinGet', 'Links'),
+    // Codex: its own installer, and the copy the ChatGPT / Codex desktop app keeps (from user reports, not its docs).
+    path.join(local, 'Programs', 'OpenAI', 'Codex', 'bin'),
+    path.join(local, 'OpenAI', 'Codex', 'bin'),
+    // Cursor's command-line agent (its installer's folder).
+    path.join(local, 'cursor-agent'),
     path.join(e.ProgramData ?? 'C:\\ProgramData', 'chocolatey', 'bin'),
   ];
 }
@@ -104,17 +109,68 @@ function inDirs(name: string, dirs: string[]): string | null {
   return null;
 }
 
-async function findWin(name: string): Promise<string | null> {
-  const found = lines(await run(sys32('where.exe'), [name])).filter(isFile);
+async function findWin(name: string, skip?: RegExp): Promise<string | null> {
+  const found = lines(await run(sys32('where.exe'), [name])).filter((p) => isFile(p) && !skip?.test(p));
   const pick = found.find((p) => /\.exe$/i.test(p)) ?? found.find((p) => /\.(cmd|bat)$/i.test(p));
   if (pick) return pick;
-  return inDirs(name, [...new Set([...(await savedWinPath()), ...winBinDirs()])]) ?? found[0] ?? null;
+  return inDirs(name, [...new Set([...(await savedWinPath()), ...winBinDirs()])].filter((d) => !skip?.test(d))) ?? found[0] ?? null;
 }
 
-/** The full path of a program by its plain name ("claude"), or null when it isn't installed. */
-export async function findBin(name: string): Promise<string | null> {
+/**
+ * A .cmd launcher that hands over to a PowerShell script, which starts the node.exe and index.js the program ships:
+ * beside the launcher, or in the newest folder under versions\ (Cursor's command-line agent is installed like this).
+ * Starting those two directly keeps cmd.exe and PowerShell away from the arguments.
+ */
+function ownNode(bin: string): { cmd: string; pre: string[]; env: NodeJS.ProcessEnv } | null {
+  const dir = path.dirname(bin);
+  const pair = (d: string): { cmd: string; pre: string[]; env: NodeJS.ProcessEnv } | null => (isFile(path.join(d, 'node.exe')) && isFile(path.join(d, 'index.js')) ? { cmd: path.join(d, 'node.exe'), pre: [path.join(d, 'index.js')], env: { CURSOR_INVOKED_AS: path.basename(bin) } } : null);
+  if (!isFile(bin.replace(/\.(cmd|bat)$/i, '.ps1'))) return null;
+  const here = pair(dir);
+  if (here) return here;
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(path.join(dir, 'versions'));
+  } catch {
+    return null;
+  }
+  // 2026.11.22-e9042b2, or 2026.11.22-08-15-00-e9042b2 with the build time: the newest by date, then time.
+  const key = (n: string): string => {
+    const m = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:-(\d{2})-(\d{2})-(\d{2}))?-[a-f0-9]+$/.exec(n);
+    return m ? `${m[1]}${m[2].padStart(2, '0')}${m[3].padStart(2, '0')}${m[4] ?? '00'}${m[5] ?? '00'}${m[6] ?? '00'}` : '';
+  };
+  for (const n of names.filter(key).sort((a, b) => key(b).localeCompare(key(a)))) {
+    const found = pair(path.join(dir, 'versions', n));
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * How to start a found program directly, with no shell in between. On Windows an npm-installed program is a .cmd
+ * launcher, which cannot be started that way: this reads the script the launcher runs and starts it with node (the one
+ * beside it, the one installed, or this app's own). A .cmd file that is not npm's comes back marked viaCmd.
+ */
+export async function launcher(bin: string): Promise<{ cmd: string; pre: string[]; env?: NodeJS.ProcessEnv; /** A .cmd file that is not npm's: it has to go through cmd.exe. */ viaCmd?: boolean }> {
+  if (process.platform !== 'win32' || !/\.(cmd|bat)$/i.test(bin)) return { cmd: bin, pre: [] };
+  let text = '';
+  try {
+    text = fs.readFileSync(bin, 'utf8');
+  } catch {
+    return { cmd: bin, pre: [], viaCmd: true };
+  }
+  const m = /"%~?dp0%?\\([^"]+?\.(?:c|m)?js)"/i.exec(text);
+  const script = m ? path.join(path.dirname(bin), m[1]) : '';
+  if (!script || !isFile(script)) return ownNode(bin) ?? { cmd: bin, pre: [], viaCmd: true };
+  const beside = path.join(path.dirname(bin), 'node.exe');
+  const node = isFile(beside) ? beside : await findWin('node');
+  if (node && /\.exe$/i.test(node)) return { cmd: node, pre: [script] };
+  return { cmd: process.execPath, pre: [script], env: { ELECTRON_RUN_AS_NODE: '1' } };
+}
+
+/** The full path of a program by its plain name ("claude"), or null when it isn't installed. `skip`: found files that are not the program itself (Windows). */
+export async function findBin(name: string, skip?: RegExp): Promise<string | null> {
   if (!/^[\w.-]+$/.test(name)) return null;
-  if (process.platform === 'win32') return findWin(name);
+  if (process.platform === 'win32') return findWin(name, skip);
   // 1. The PATH the app has, plus the usual folders.
   const PATH = [...new Set([...(process.env.PATH ?? '').split(':').filter(Boolean), ...UNIX_BIN_DIRS])].join(':');
   const viaWhich = lines(await run('/usr/bin/which', [name], { ...process.env, PATH }))[0];

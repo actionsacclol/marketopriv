@@ -11,7 +11,7 @@ import { refreshAutopilot, useApp } from '../state/store';
 
 // Kip: the hub's manager, and the purple character from its videos. One page
 // to talk to Marketo: numbers, ideas, the reel queue, styles, settings. He
-// thinks with the user's own Claude Code (no API key); without it, the built-in
+// thinks with one of the user's own AI apps (no API key); without one, the built-in
 // chat's model stands in when one is set up. Awake = the autopilot is on and he
 // works by himself on its schedule; asleep = nothing runs until he is woken.
 
@@ -134,7 +134,7 @@ export default function Kip() {
     void window.marketo.kip.state().then((k) => useApp.setState({ kip: k }));
   }, []);
 
-  // His own brain is Claude Code. Without it, the built-in chat's model stands in when the user has set one up.
+  // His own brain is one of the user's AI apps (kip.engine). Without one, the built-in chat's model stands in when the user has set one up.
   const keyReady = !!chat?.hasKey && !!cfg.model && /^https?:/i.test(cfg.baseUrl);
   const engine: 'claude' | 'key' | 'none' = kip?.available ? 'claude' : keyReady ? 'key' : 'none';
   const steps = engine === 'key' ? (chat?.steps ?? []) : (kip?.steps ?? []);
@@ -150,6 +150,14 @@ export default function Kip() {
   };
   const stop = (): void => void (engine === 'key' ? window.marketo.agent.stop() : window.marketo.kip.stop());
   const fresh = (): void => void (engine === 'key' ? window.marketo.agent.reset() : window.marketo.kip.reset());
+
+  const pickEngine = async (want: string): Promise<void> => {
+    const was = kip?.engine?.id;
+    const hadChat = (kip?.steps.length ?? 0) > 0;
+    const k = await window.marketo.kip.setEngine(want);
+    useApp.setState({ kip: k });
+    if (k.engine && k.engine.id !== was) toast('ok', `Kip now thinks with ${k.engine.name}.${hadChat ? ' That starts a new chat: he does not remember the old one.' : ''}`);
+  };
 
   const wake = async (on: boolean): Promise<void> => {
     if (!ap) return;
@@ -209,23 +217,43 @@ export default function Kip() {
             <p>Make new styles from a description; change the style mix, variety, voices and your rules.</p>
             <p>He asks before anything that posts, deletes or spends voice credits.</p>
             <p className="pt-1">
-              {engine === 'claude' ? 'Thinks with your Claude Code, on your plan.' : engine === 'key' ? `Thinks with the built-in chat's model (${cfg.model}).` : ''}{' '}
+              {engine === 'claude' ? `Thinks with your ${kip?.engine?.name ?? 'AI app'}, on your plan.` : engine === 'key' ? `Thinks with the built-in chat's model (${cfg.model}).` : ''}{' '}
               <button className="underline-offset-2 hover:text-white hover:underline" onClick={() => go('usage')}>
                 Usage
               </button>
             </p>
           </Card>
+          {kip?.engines && (
+            <Card className="space-y-1.5 text-[11px] leading-relaxed text-krypt-muted">
+              <label className="text-xs font-semibold text-white" htmlFor="kip-engine">
+                Thinks with
+              </label>
+              <select id="kip-engine" className="input" value={kip.pick ?? 'auto'} disabled={busy} onChange={(e) => void pickEngine(e.target.value)}>
+                <option value="auto" className="bg-krypt-panel">
+                  Automatic{(kip.pick ?? 'auto') === 'auto' && kip.engine ? ` (${kip.engine.name})` : ''}
+                </option>
+                {kip.engines.map((e) => (
+                  <option key={e.id} value={e.id} disabled={!e.installed && kip.pick !== e.id} className="bg-krypt-panel">
+                    {e.name}
+                    {e.installed ? '' : ' (not installed)'}
+                  </option>
+                ))}
+              </select>
+              <p>Any of these that is installed and signed in on this computer. Picking another one starts a new chat.</p>
+              <p>Claude Desktop, ChatGPT desktop, Windsurf and the chat inside VS Code only have a window, so Marketo cannot hand them a message. The same account works in the program next to each: Claude Code for Claude, Codex for ChatGPT, GitHub Copilot's command-line program for VS Code.</p>
+            </Card>
+          )}
         </div>
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1 overflow-auto rounded-2xl border border-white/10 bg-krypt-panel/60 p-4">
             {engine === 'none' ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-                <div className="max-w-md text-sm leading-relaxed text-krypt-muted">{kip ? `${kip.reason ?? 'Kip is not ready.'} Connect Claude Code, or give the built-in chat a model with an API key, and he can talk.` : 'Waking Kip…'}</div>
+                <div className="max-w-md text-sm leading-relaxed text-krypt-muted">{kip ? `${kip.reason ?? 'Kip is not ready.'} Install one of them and sign in, or give the built-in chat a model with an API key, and he can talk.` : 'Waking Kip…'}</div>
                 {kip && (
                   <div className="flex gap-2">
                     <GhostButton small onClick={() => go('agents')}>
-                      Connect Claude Code
+                      AI apps
                     </GhostButton>
                     <GhostButton small onClick={() => go('chat')}>
                       Use an API key

@@ -1,27 +1,34 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ChatStep, KipState } from '../shared/types';
 import * as usage from './usage';
-import { binEnv } from './findBin';
+import { binEnv, launcher } from './findBin';
+import { KIP_ENGINES, kipEngine, type KipEngine, type KipEvent, type KipServer } from './kipEngines';
 import { entry as editorEntry } from './editor';
 import { EDITOR_SERVER } from '../shared/longform';
 
 // Kip: the hub's own manager, the small purple character from its videos. The
 // user chats with him on the Kip page; he works through the same Marketo tools
-// any connected AI gets. His brain is the user's own Claude Code, started
+// any connected AI gets. His brain is one of the user's own AI apps (Claude Code,
+// Codex, Gemini CLI, Cursor's or GitHub Copilot's command-line agent: kipEngines.ts), started
 // without a window for each message and resumed by session id, so he remembers
-// the conversation and runs on the user's plan: no API key. He is given only
-// Marketo's tools (plus the web), whatever else that Claude Code has set up.
+// the conversation and runs on the user's plan: no API key. He is given
+// Marketo's tools (plus Krypt Editor's and the web).
 
 export interface KipDeps {
-  /** Where his files live (the chat so far, the tools file). Also the folder Claude Code is started in, so his sessions stay apart from the autopilot's. */
+  /** Where his files live (the chat so far, the tools file). Also the folder the AI app is started in, so his sessions stay apart from the autopilot's. */
   dir(): string;
-  /** The Claude Code program, or null when it is not installed. */
-  claude(): Promise<string | null>;
+  /** A command-line program by its plain name, or null when it is not installed. */
+  find(name: string, skip?: RegExp): Promise<string | null>;
+  /** The AI app the scheduled runs use: he prefers the same one when the user has not picked. */
+  runsWith(): string;
+  /** Told before each message which AI app he is about to think with. */
+  thinksWith(id: string): void;
   /** How to start Marketo's tool bridge (this app's own program and its bridge script), or null while that is not up. */
   bridge(): { exe: string; shim: string; config: string } | null;
-  /** The model picked for scheduled runs, when the runs use Claude Code. Kip uses the same. */
+  /** The model picked for scheduled runs, when the runs use Claude Code. Kip uses the same when he thinks with Claude Code. */
   model(): string | undefined;
   /** An autopilot run is working right now. */
   runGoing(): boolean;
@@ -39,7 +46,12 @@ let steps: ChatStep[] = [];
 let session: string | null = null;
 let child: ChildProcess | null = null;
 let busy = false;
-let found: { at: number; bin: string | null } = { at: 0, bin: null };
+let found: { at: number; bins: Record<string, string | null> } = { at: 0, bins: {} };
+/** The user's pick: 'auto', or one AI app's id. */
+let pick = 'auto';
+/** The AI app the saved conversation was held in. */
+let sessionEngine = '';
+const SESSION_ID = /^[\w-]{8,80}$/;
 let n = 0;
 /** Goes up with every new conversation, so a message stopped by one cannot write into the next. */
 let talk = 0;
@@ -51,8 +63,11 @@ const file = (): string => path.join(deps.dir(), 'chat.json');
 
 function load(): void {
   try {
-    const j = JSON.parse(fs.readFileSync(file(), 'utf8')) as { session?: string; steps?: ChatStep[] };
-    session = typeof j.session === 'string' && /^[\w-]{8,80}$/.test(j.session) ? j.session : null;
+    const j = JSON.parse(fs.readFileSync(file(), 'utf8')) as { session?: string; steps?: ChatStep[]; pick?: string; engine?: string };
+    session = typeof j.session === 'string' && SESSION_ID.test(j.session) ? j.session : null;
+    pick = typeof j.pick === 'string' && kipEngine(j.pick) ? j.pick : 'auto';
+    // (Chats saved before he could use other AI apps were all held in Claude Code.)
+    sessionEngine = typeof j.engine === 'string' && kipEngine(j.engine) ? j.engine : 'claude';
     // A tool that was running when the hub closed never ended.
     steps = Array.isArray(j.steps) ? j.steps.slice(-MAX_STEPS).map((s) => (s.state === 'running' ? { ...s, state: 'error' as const } : s)) : [];
   } catch {
@@ -65,24 +80,52 @@ function save(): void {
   try {
     fs.mkdirSync(deps.dir(), { recursive: true });
     // Pictures stay out of the file: they are large, and the tools can show them again.
-    fs.writeFileSync(file(), JSON.stringify({ session, steps: steps.slice(-MAX_STEPS).map(({ images: _images, ...s }) => s) }));
+    fs.writeFileSync(file(), JSON.stringify({ pick, engine: sessionEngine, session, steps: steps.slice(-MAX_STEPS).map(({ images: _images, ...s }) => s) }));
   } catch (e) {
     deps.log('warn', `kip: could not save the chat (${String((e as Error).message)})`);
   }
 }
 
+const NAMES = KIP_ENGINES.map((e) => e.name).join(', ').replace(/, ([^,]+)$/, ' or $1');
+
+/** The AI app he thinks with now: the user's pick, or the one the scheduled runs use, or the first one installed. */
+function current(): KipEngine | null {
+  const has = (e: KipEngine | undefined): e is KipEngine => !!e && !!found.bins[e.id];
+  if (pick !== 'auto') {
+    const picked = kipEngine(pick);
+    return has(picked) ? picked : null;
+  }
+  const same = kipEngine(deps.runsWith());
+  return has(same) ? same : (KIP_ENGINES.find(has) ?? null);
+}
+
 export function state(): KipState {
   const bridge = deps.bridge();
-  const reason = !found.bin ? 'Kip thinks with Claude Code, and it is not installed on this computer.' : !bridge ? "Marketo's tool bridge is not up yet." : undefined;
-  return { available: !reason, ...(reason ? { reason } : {}), busy, steps };
+  const eng = current();
+  const picked = pick === 'auto' ? undefined : kipEngine(pick);
+  const reason = !eng ? (picked ? `Kip is set to think with ${picked.name}, and it is not installed on this computer.` : `Kip thinks with ${NAMES}, and none of them is installed on this computer.`) : !bridge ? "Marketo's tool bridge is not up yet." : undefined;
+  return { available: !reason, ...(reason ? { reason } : {}), busy, steps, pick, ...(eng ? { engine: { id: eng.id, name: eng.name } } : {}), engines: KIP_ENGINES.map((e) => ({ id: e.id, name: e.name, installed: !!found.bins[e.id] })) };
 }
 
 const emit = (): void => deps.onState(state());
 
-/** Look for Claude Code again (it may have been installed since), at most once a minute. */
+/** Look for the AI apps again (one may have been installed since), at most once a minute. */
 export async function refresh(force = false): Promise<KipState> {
   if (force || Date.now() - found.at > 60_000) {
-    found = { at: Date.now(), bin: await deps.claude().catch(() => null) };
+    const bins: Record<string, string | null> = {};
+    await Promise.all(
+      KIP_ENGINES.map(async (e) => {
+        bins[e.id] = null;
+        for (const name of e.bins) {
+          const p = await deps.find(name, e.skip).catch(() => null);
+          if (p) {
+            bins[e.id] = p;
+            break;
+          }
+        }
+      }),
+    );
+    found = { at: Date.now(), bins };
   }
   return state();
 }
@@ -111,11 +154,23 @@ const WHO = [
   'If they ask for something the hub cannot do, say so plainly and say what the closest thing is.',
 ].join('\n');
 
-const DURING_RUN = 'An autopilot run is working in this hub right now, using the browser tabs. Until it ends: do not call any browser_* tool, get_today, mark_posted or render_reel (they belong to the run). Reading numbers, the queue, ideas, styles and settings is fine. If the user wants something that needs the browser, tell them it has to wait for the run to end.';
+/** For the AI apps that could also run commands or edit files: here he works through the tools only. */
+const NO_WINDOW = 'You are running without a window, so nobody can approve anything: work only through the Marketo tools, the Krypt Editor tools and web search. Never run shell commands and never create or edit files on this computer yourself. When you have not called get_overview in this conversation yet, call it first: it says how this hub works.';
+
+const DURING_RUN ='An autopilot run is working in this hub right now, using the browser tabs. Until it ends: do not call any browser_* tool, get_today, mark_posted or render_reel (they belong to the run). Reading numbers, the queue, ideas, styles and settings is fine. If the user wants something that needs the browser, tell them it has to wait for the run to end.';
 
 function kill(c: ChildProcess): void {
   if (c.pid && process.platform === 'win32') execFile('taskkill.exe', ['/pid', String(c.pid), '/T', '/F'], { windowsHide: true }, () => undefined);
   else c.kill();
+}
+
+/**
+ * One line for cmd.exe, for a launcher that is a .cmd file of the program's own (not npm's). Only plain arguments go
+ * through it: anything cmd.exe would read as more than text is refused instead of quoted.
+ */
+function cmdLine(eng: KipEngine, parts: string[]): string {
+  if (parts.some((a) => /[&|<>^%!"\r\n]/.test(a))) throw new Error(`Kip could not start ${eng.name}: its launcher is a .cmd file and one of its arguments cannot be passed through one safely. Install ${eng.name} with its own installer.`);
+  return `"${parts.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ')}"`;
 }
 
 /** What a tool was asked, in a few words, for its line in the chat. */
@@ -128,52 +183,95 @@ function brief(input: unknown): string {
   }
 }
 
-function resultOf(content: unknown): { text: string; images: Array<{ data: string; mimeType: string }> } {
-  if (typeof content === 'string') return { text: content, images: [] };
-  const texts: string[] = [];
-  const images: Array<{ data: string; mimeType: string }> = [];
-  for (const b of Array.isArray(content) ? (content as Array<Record<string, unknown>>) : []) {
-    if (b.type === 'text' && typeof b.text === 'string') texts.push(b.text);
-    const src = b.source as { data?: unknown; media_type?: unknown } | undefined;
-    if (b.type === 'image' && typeof src?.data === 'string' && images.length < 4) images.push({ data: src.data, mimeType: typeof src.media_type === 'string' ? src.media_type : 'image/png' });
-  }
-  return { text: texts.join('\n'), images };
-}
-
 export async function send(text: string): Promise<void> {
   const said = String(text ?? '').trim();
   if (!said || busy) return;
   const st = await refresh();
-  if (!st.available) {
+  const eng = current();
+  const bin = eng ? found.bins[eng.id] : null;
+  if (!st.available || !eng || !bin) {
     push({ role: 'user', text: said });
     push({ role: 'error', text: st.reason ?? 'Kip is not available.' });
     return;
   }
-  const bin = found.bin!;
   const bridge = deps.bridge()!;
   busy = true;
   stopped = false;
   const mine = talk;
   push({ role: 'user', text: said });
+  // A conversation belongs to the program it was held in: another one starts its own.
+  if (sessionEngine !== eng.id) session = null;
+  sessionEngine = eng.id;
+  deps.thinksWith(eng.id);
   const tools = new Map<string, ChatStep>();
   const seenText = new Set<string>();
+  const mem: Record<string, unknown> = {};
+  /** The message he is writing piece by piece, until a tool call or the end closes it. */
+  let open: ChatStep | null = null;
   let answered = false;
   let errText = '';
+  const say = (t: string): void => {
+    answered = true;
+    open = null;
+    push({ role: 'assistant', text: t });
+  };
+  const onEvent = (ev: KipEvent): void => {
+    if (ev.t === 'session') {
+      if (SESSION_ID.test(ev.id)) session = ev.id;
+    } else if (ev.t === 'text') {
+      if (ev.delta) {
+        answered = true;
+        if (open) {
+          open.text += ev.text;
+          emit();
+        } else if (ev.text.trim()) open = push({ role: 'assistant', text: ev.text.replace(/^\s+/, '') });
+      } else {
+        if (ev.key && seenText.has(ev.key)) return;
+        if (ev.key) seenText.add(ev.key);
+        say(ev.text);
+      }
+      // He went on talking after an error: the program got past it by itself.
+      errText = '';
+    } else if (ev.t === 'tool') {
+      open = null;
+      if (!tools.has(ev.id)) tools.set(ev.id, push({ role: 'tool', tool: ev.name, text: brief(ev.input), state: 'running' }));
+    } else if (ev.t === 'toolEnd') {
+      const step = tools.get(ev.id);
+      if (!step) return;
+      step.state = ev.ok ? 'ok' : 'error';
+      step.text = ev.text.length > RESULT_CAP ? `${ev.text.slice(0, RESULT_CAP)}…` : ev.text;
+      if (ev.images?.length) step.images = ev.images;
+      emit();
+    } else if (ev.t === 'error') errText = ev.text;
+    else if (ev.t === 'final') {
+      if (!answered) say(ev.text);
+    } else if (ev.t === 'usage') usage.addChat(ev.model, ev.input, ev.output, ev.cached); // What this message used, for the Usage page.
+  };
   try {
-    fs.mkdirSync(deps.dir(), { recursive: true });
-    const cfg = path.join(deps.dir(), 'tools.mcp.json');
+    const dir = deps.dir();
+    fs.mkdirSync(dir, { recursive: true });
+    const start = await launcher(bin);
     // Krypt Editor's tools too, when it is on this computer: long videos are made there.
     const ed = editorEntry('kip');
-    fs.writeFileSync(cfg, JSON.stringify({ mcpServers: { marketo: { command: bridge.exe, args: [bridge.shim, '--client', 'kip', '--config', bridge.config], env: { ELECTRON_RUN_AS_NODE: '1' } }, ...(ed ? { [EDITOR_SERVER]: ed } : {}) } }));
-    const system = [WHO, deps.runGoing() ? DURING_RUN : ''].filter(Boolean).join('\n').replace(/\s*\n\s*/g, ' ');
-    const model = deps.model();
-    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--mcp-config', cfg, '--allowedTools', `mcp__marketo,mcp__${EDITOR_SERVER},WebSearch,WebFetch`, '--append-system-prompt', system];
-    if (session) args.push('--resume', session);
-    if (model) args.push('--model', model);
-    // A .cmd launcher cannot be started directly on Windows; the program itself can.
-    if (/\.(cmd|bat)$/i.test(bin)) throw new Error('Kip needs the Claude Code program itself (claude.exe), and only its .cmd launcher was found. Install Claude Code with its own installer.');
+    const servers: Record<string, KipServer> = { marketo: { command: bridge.exe, args: [bridge.shim, '--client', 'kip', '--config', bridge.config], env: { ELECTRON_RUN_AS_NODE: '1' } }, ...(ed ? { [EDITOR_SERVER]: ed } : {}) };
+    const during = deps.runGoing() ? DURING_RUN : '';
+    const flat = (parts: string[]): string => parts.filter(Boolean).join('\n').replace(/\s*\n\s*/g, ' ');
+    const fresh = !session;
+    const L = eng.launch({ dir, session, fresh: randomUUID(), model: eng.takesModel ? deps.model() : undefined, system: eng.id === 'claude' ? flat([WHO, during]) : flat([WHO, NO_WINDOW]), servers });
+    for (const f of L.files ?? []) {
+      const p = path.join(dir, f.file);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, f.text);
+    }
+    // Programs with no place for standing instructions get them in front of a conversation's first message.
+    const prompt = L.lead ? [fresh ? `${flat([WHO, NO_WINDOW])}\n\n` : '', during ? `(From the hub, not the user: ${during})\n\n` : '', fresh ? `The user says:\n${said}` : said].join('') : said;
+    if (L.session) session = L.session;
+    // A message as an argument is safe only when the program is started directly: never through cmd.exe.
+    if (L.argPrompt && start.viaCmd) throw new Error(`Kip could not start ${eng.name}: he found only its .cmd launcher (${path.basename(bin)}) and not the program behind it. Install ${eng.name} again with its own installer.`);
+    const tail = L.argPrompt ? [prompt] : [];
+    const opts = { cwd: dir, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'], env: binEnv(bin, { ...start.env, ...L.env }) };
     await new Promise<void>((resolve) => {
-      const c = spawn(bin, args, { cwd: deps.dir(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: binEnv(bin) });
+      const c = start.viaCmd ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', cmdLine(eng, [start.cmd, ...L.args])], { ...opts, windowsVerbatimArguments: true }) : spawn(start.cmd, [...start.pre, ...L.args, ...tail], opts);
       child = c;
       const timer = setTimeout(() => {
         errText = 'That took over half an hour, so Kip stopped. Ask again in smaller steps.';
@@ -182,48 +280,18 @@ export async function send(text: string): Promise<void> {
       let buf = '';
       let stderr = '';
       const onLine = (line: string): void => {
-        if (!line.trim()) return;
+        if (!line.trim() || mine !== talk) return;
         let j: Record<string, unknown>;
         try {
           j = JSON.parse(line) as Record<string, unknown>;
         } catch {
           return;
         }
-        const msg = j.message as { id?: string; content?: unknown } | undefined;
-        if (mine !== talk) return;
-        if (j.type === 'system' && j.subtype === 'init' && typeof j.session_id === 'string') session = j.session_id;
-        else if (j.type === 'assistant' && Array.isArray(msg?.content)) {
-          for (const b of msg!.content as Array<Record<string, unknown>>) {
-            if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
-              const key = `${msg!.id ?? ''}|${b.text}`;
-              if (seenText.has(key)) continue;
-              seenText.add(key);
-              answered = true;
-              push({ role: 'assistant', text: b.text });
-            } else if (b.type === 'tool_use' && typeof b.id === 'string' && !tools.has(b.id) && b.name !== 'ToolSearch') {
-              // (ToolSearch is Claude Code looking up its own tool list: not something the user asked for.)
-              const name = String(b.name ?? 'tool').replace(/^mcp__marketo__/, '');
-              tools.set(b.id, push({ role: 'tool', tool: name, text: brief(b.input), state: 'running' }));
-            }
-          }
-        } else if (j.type === 'user' && Array.isArray(msg?.content)) {
-          for (const b of msg!.content as Array<Record<string, unknown>>) {
-            if (b.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue;
-            const step = tools.get(b.tool_use_id);
-            if (!step) continue;
-            const r = resultOf(b.content);
-            step.state = b.is_error ? 'error' : 'ok';
-            step.text = r.text.length > RESULT_CAP ? `${r.text.slice(0, RESULT_CAP)}…` : r.text;
-            if (r.images.length) step.images = r.images;
-            emit();
-          }
-        } else if (j.type === 'result') {
-          if (typeof j.session_id === 'string') session = j.session_id;
-          if (j.is_error) errText = typeof j.result === 'string' && j.result ? j.result : 'Claude Code stopped with an error.';
-          else if (!answered && typeof j.result === 'string' && j.result.trim()) push({ role: 'assistant', text: j.result });
-          // What this message used, for the Usage page.
-          const mu = j.modelUsage as Record<string, { inputTokens?: number; outputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number; costUSD?: number }> | undefined;
-          for (const [name, u] of Object.entries(mu ?? {})) usage.addChat(name, (u.inputTokens ?? 0) + (u.cacheCreationInputTokens ?? 0), u.outputTokens ?? 0, u.cacheReadInputTokens ?? 0);
+        if (!j || typeof j !== 'object') return;
+        try {
+          for (const ev of eng.parse(j, mem)) onEvent(ev);
+        } catch (e) {
+          deps.log('warn', `kip: could not read a line from ${eng.name} (${String((e as Error).message)})`);
         }
       };
       c.stdout!.setEncoding('utf8');
@@ -240,16 +308,22 @@ export async function send(text: string): Promise<void> {
         stderr = (stderr + chunk).slice(-2000);
       });
       c.on('error', (e) => {
-        errText = `Could not start Claude Code: ${e.message}`;
+        errText = `Could not start ${eng.name}: ${e.message}`;
       });
       c.on('close', (code) => {
         clearTimeout(timer);
         if (buf.trim()) onLine(buf);
-        if (!errText && code && !answered) errText = stderr.trim().split(/\r?\n/).slice(-3).join(' ') || `Claude Code ended with code ${code}.`;
+        if (!errText && code && !answered) {
+          // What it printed as it stopped: the line that names the error when there is one, and the last lines.
+          const printed = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+          const named = printed.find((l) => /^error\b/i.test(l));
+          const last = printed.slice(-3).filter((l) => l !== named);
+          errText = [named, ...(named ? last.slice(-1) : last)].filter(Boolean).join(' ') || `${eng.name} ended with code ${code}.`;
+        }
         resolve();
       });
       c.stdin!.on('error', () => undefined);
-      c.stdin!.end(said);
+      c.stdin!.end(L.argPrompt ? '' : prompt);
     });
   } catch (e) {
     errText = String((e as Error).message);
@@ -259,13 +333,31 @@ export async function send(text: string): Promise<void> {
     for (const t of tools.values()) if (t.state === 'running') t.state = stopped ? 'ok' : 'error';
     if (mine === talk && stopped) steps.push({ id: id(), role: 'error', text: 'Stopped.' });
     else if (mine === talk && errText) {
-      // A session Claude Code no longer has: start a new one next time instead of failing again.
-      if (/no conversation found|session.*(not found|does not exist)/i.test(errText)) session = null;
-      steps.push({ id: id(), role: 'error', text: /not logged in|\/login|sign.?in/i.test(errText) ? `${errText} Open a terminal and run "claude" once to sign in, then ask again.` : errText });
+      // A conversation the program no longer has: start a new one next time instead of failing again.
+      const gone = /(session|thread|conversation|rollout|chat)\b.{0,40}(not found|does not exist|no longer|invalid)|no (saved |previous )?(session|conversation|rollout|thread|chat)s? found|invalid session/i.test(errText);
+      if (gone) session = null;
+      const signedOut = /not logged in|\/login|log ?in required|sign.?in|unauthori[sz]ed|not authenticated|authentication (is )?required|set an auth method|\b401\b/i.test(errText);
+      steps.push({ id: id(), role: 'error', text: gone ? `${eng.name} no longer has this conversation, so Kip starts a new one: send that again.` : signedOut ? `${errText} ${eng.signIn}` : errText });
     }
     save();
     emit();
   }
+}
+
+/** Which AI app he thinks with: 'auto', or one of them by id. A different one starts a new conversation. */
+export async function setEngine(want: string): Promise<KipState> {
+  const next = want === 'auto' || kipEngine(want) ? want : 'auto';
+  if (busy || next === pick) return refresh();
+  pick = next;
+  await refresh(true);
+  // The chat on screen was held in one AI app; another one has never seen it. (A pick that is not installed changes nothing yet.)
+  const now = current()?.id;
+  if (now && now !== sessionEngine && (session || steps.length)) reset();
+  else {
+    save();
+    emit();
+  }
+  return state();
 }
 
 /** Stop the message being worked on. */

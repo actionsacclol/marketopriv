@@ -609,6 +609,8 @@ export async function refresh(): Promise<void> {
 
 /** Where Claude Code is on this computer (null when it is not installed). */
 export const findClaude = (): Promise<string | null> => where(AIS.claude.bin);
+/** The AI app the scheduled runs are set to use. */
+export const runsWith = (): AutopilotAi => settings().ai;
 /** The model picked for the runs, when they use Claude Code. */
 export const claudeModel = (): string | undefined => {
   const s = settings();

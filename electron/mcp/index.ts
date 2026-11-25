@@ -291,7 +291,7 @@ function argSummary(args: unknown): string {
 }
 
 // ── Server ─────────────────────────────────────────────────────────────────
-/** Who a connection is. Kip is started by the hub itself (through Claude Code), so the hub's own word for him wins over what the program calls itself. */
+/** Who a connection is. Kip is started by the hub itself (through one of the user's AI apps), so the hub's own word for him wins over what the program calls itself. */
 const nameOf = (c: { hint: string; raw: string | null }): string => (c.hint === 'kip' ? 'Kip' : clientLabel(c.raw ?? c.hint));
 
 interface Conn {

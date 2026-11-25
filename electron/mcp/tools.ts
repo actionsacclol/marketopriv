@@ -1290,6 +1290,11 @@ async function youTubeParts(url: string): Promise<string> {
 
 /** AI apps that put the server's instructions in front of the model themselves. */
 const SHOWS_INSTRUCTIONS = new Set(['Claude Code', 'Kip']);
+/** Kip runs in whichever AI app the user has. Only Claude Code is known to show the server's instructions itself, so in the others he gets them from get_overview like any other AI. */
+let kipShowsInstructions = true;
+export const setKipShowsInstructions = (v: boolean): void => {
+  kipShowsInstructions = v;
+};
 
 export const MAIN_HANDLERS: Record<string, Handler> = {
   get_overview: (_a: unknown, ctx: MainCtx) => {
@@ -1307,8 +1312,8 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
     const sessions = d.sessions.slice(0, 5).map((s) => `${s.startedAt.slice(0, 16)}${onNet(s.site)} ${s.kind} ${s.minutes}min (${s.niche ?? '—'}): ${s.likes} likes, ${s.saves} saves, ${s.follows} follows, ${s.comments} comments, ${s.watched} watched`);
     return ok(
       [
-        // Claude Code (and Kip, which runs in it) already has these as the server's instructions: don't send them twice.
-        SHOWS_INSTRUCTIONS.has(ctx.client) ? '' : serverInstructions(),
+        // Claude Code (and Kip, when he runs in it) already has these as the server's instructions: don't send them twice.
+        SHOWS_INSTRUCTIONS.has(ctx.client) && (ctx.client !== 'Kip' || kipShowsInstructions) ? '' : serverInstructions(),
         '--- Current state ---',
         versionNote(),
         profileNote(),

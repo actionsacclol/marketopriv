@@ -164,6 +164,7 @@ const api: MarketoApi = {
     send: (text) => ipcRenderer.invoke('kip:send', text),
     stop: () => ipcRenderer.invoke('kip:stop'),
     reset: () => ipcRenderer.invoke('kip:reset'),
+    setEngine: (id) => ipcRenderer.invoke('kip:setEngine', id),
   },
   agent: {
     state: () => ipcRenderer.invoke('agent:state'),

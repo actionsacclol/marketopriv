@@ -1265,13 +1265,19 @@ export interface ChatState {
   steps: ChatStep[];
 }
 
-/** Kip, the hub's manager (the Kip page): his chat, and whether he can think (he uses the user's Claude Code). */
+/** Kip, the hub's manager (the Kip page): his chat, and whether he can think (he uses one of the user's AI apps: Claude Code, Codex, Gemini CLI, Cursor's or GitHub Copilot's command-line agent). */
 export interface KipState {
   available: boolean;
   /** Why he cannot answer, when he cannot. */
   reason?: string;
   busy: boolean;
   steps: ChatStep[];
+  /** The AI app he thinks with right now, when one of them is installed. */
+  engine?: { id: string; name: string };
+  /** Every AI app he can think with, and whether it is on this computer. */
+  engines?: Array<{ id: string; name: string; installed: boolean }>;
+  /** The user's pick: 'auto' (the one the scheduled runs use, else the first installed) or one app's id. */
+  pick?: string;
 }
 
 export interface RenderProgress {
@@ -1534,6 +1540,8 @@ export interface MarketoApi {
     send(text: string): Promise<void>;
     stop(): Promise<void>;
     reset(): Promise<void>;
+    /** Which AI app he thinks with: 'auto' or one id. Another one starts a new chat. */
+    setEngine(id: string): Promise<KipState>;
   };
   agent: {
     state(): Promise<ChatState>;

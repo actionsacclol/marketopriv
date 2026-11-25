@@ -9,6 +9,7 @@ import * as browser from './browser';
 import { startDiscordPresence, stopDiscordPresence } from './discord';
 import * as chromeBridge from './chromeBridge';
 import * as autopilot from './autopilot';
+import { findBin } from './findBin';
 import { exportLogs } from './logExport';
 import * as approvals from './approvals';
 import * as agent from './agent';
@@ -28,6 +29,7 @@ import * as editor from './editor';
 import type { VoiceTune } from '../shared/voice';
 import { SITES, linkOn } from '../shared/warmup';
 import { startAgentHost } from './mcp/host';
+import { setKipShowsInstructions } from './mcp/tools';
 import { shortVersion, startUpdateCheck, updateInfo } from './update';
 import * as profiles from './profiles';
 import * as proxy from './proxy';
@@ -756,6 +758,7 @@ function registerIpc(): void {
   ipcMain.handle('kip:send', (_e, text: string) => void kip.send(String(text ?? '')));
   ipcMain.handle('kip:stop', () => kip.stop());
   ipcMain.handle('kip:reset', () => kip.reset());
+  ipcMain.handle('kip:setEngine', (_e, id: string) => kip.setEngine(String(id ?? 'auto')));
   ipcMain.handle('agent:state', () => agent.state());
   ipcMain.handle('agent:saveConfig', (_e, patch: Partial<AgentConfig>, apiKey?: string) => agent.saveConfig(patch ?? {}, apiKey));
   ipcMain.handle('agent:models', () => agent.models());
@@ -981,7 +984,9 @@ async function bootstrap(): Promise<void> {
   agent.init({ mcp: () => mcpHandle, onState: (st) => send('agent:state', st), log });
   kip.init({
     dir: () => path.join(app.getPath('userData'), 'kip'),
-    claude: () => autopilot.findClaude(),
+    find: (name, skip) => findBin(name, skip),
+    runsWith: () => autopilot.runsWith(),
+    thinksWith: (id) => setKipShowsInstructions(id === 'claude'),
     bridge: () => {
       const st = mcpHandle?.status();
       // This hub's own connection file: a second copy on its own data (KRYPT_MARKETO_DATA) must not reach the real hub.
