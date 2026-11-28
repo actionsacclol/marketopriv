@@ -61,6 +61,11 @@ export interface KipEngine {
   skip?: RegExp;
   /** The model picked for scheduled runs fits this program. */
   takesModel?: boolean;
+  /**
+   * The most tools one request can carry, counting the program's own (none = no known limit). Cursor sends every tool in
+   * every request and its providers refuse long lists; Codex and Copilot look tools up on demand ("tool search").
+   */
+  toolCap?: number;
   /** What to tell the user when it says they are not signed in. */
   signIn: string;
   launch(i: KipLaunchInput): KipLaunch;
@@ -153,6 +158,8 @@ function codexServers(servers: Record<string, KipServer>): string[] {
     out.push('-c', `mcp_servers.${name}.command=${json(s.command)}`, '-c', `mcp_servers.${name}.args=${json(s.args)}`);
     // Without this Codex holds every tool call for a person to approve, and with no window that means refusing it.
     out.push('-c', `mcp_servers.${name}.default_tools_approval_mode="approve"`);
+    // Renders and uploads take minutes; Codex's own default gives a tool 60 s.
+    out.push('-c', `mcp_servers.${name}.tool_timeout_sec=1800`, '-c', `mcp_servers.${name}.startup_timeout_sec=60`);
     const env = Object.entries(s.env ?? {});
     if (env.length) out.push('-c', `mcp_servers.${name}.env={${env.map(([k, v]) => `${k}=${json(v)}`).join(',')}}`);
   }
@@ -278,6 +285,7 @@ const cursor: KipEngine = {
   id: 'cursor',
   name: 'Cursor',
   bins: ['cursor-agent'],
+  toolCap: 128,
   signIn: 'Open a terminal and run "cursor-agent login" once to sign in, then ask again.',
   launch(i) {
     const names = Object.keys(i.servers);

@@ -37,6 +37,8 @@ const flag = (name) => {
 };
 const CLIENT = flag('--client') || process.env.KRYPT_MCP_CLIENT || 'mcp-client';
 const NO_LAUNCH = argv.includes('--no-launch') || process.env.KRYPT_AUTOLAUNCH === '0';
+/** --skip-tools a,b,c: tools left out of this connection's list (Kip on an AI app that takes a limited number of tools). */
+const SKIP = (flag('--skip-tools') || '').split(',').map((s) => s.trim()).filter((s) => /^[a-z_]{1,40}$/.test(s)).slice(0, 120);
 
 function userDataDir() {
   const name = 'Krypt Marketo';
@@ -108,6 +110,8 @@ const heldListens = [];
 function connect(cfg) {
   return new Promise((resolve, reject) => {
     const sock = net.connect(cfg.pipe);
+    // Decoded as one stream: a character split across two chunks stays whole (chunk by chunk it would turn into U+FFFD).
+    sock.setEncoding('utf8');
     let buf = '';
     let done = false;
     const fail = (e) => {
@@ -118,9 +122,9 @@ function connect(cfg) {
     };
     const timer = setTimeout(() => fail(new Error('timed out waiting for Krypt Marketo')), 5000);
     sock.once('error', fail);
-    sock.on('connect', () => sock.write(`${JSON.stringify({ krypt: 'hello', token: cfg.token, client: CLIENT })}\n`));
+    sock.on('connect', () => sock.write(`${JSON.stringify({ krypt: 'hello', token: cfg.token, client: CLIENT, ...(SKIP.length ? { skip: SKIP } : {}) })}\n`));
     const onData = (chunk) => {
-      buf += chunk.toString('utf8');
+      buf += chunk;
       const nl = buf.indexOf('\n');
       if (nl < 0) return;
       clearTimeout(timer);
@@ -165,7 +169,7 @@ function attach(sock, rest) {
   };
   drain();
   sock.on('data', (chunk) => {
-    buf += chunk.toString('utf8');
+    buf += chunk;
     drain();
   });
   const gone = () => {
@@ -265,7 +269,10 @@ function offlineAnswer(msg) {
     const modern = !!(msg.params && msg.params._meta && msg.params._meta['io.modelcontextprotocol/protocolVersion']);
     const src = (modern ? man.modern : man.legacy) || man.legacy;
     const r = src && src[msg.method];
-    return r && !r.error ? r : null;
+    if (!r || r.error) return null;
+    // The same tools the app would list for this connection.
+    if (msg.method === 'tools/list' && SKIP.length && Array.isArray(r.tools)) return { ...r, tools: r.tools.filter((t) => !SKIP.includes(t && t.name)) };
+    return r;
   }
   return null;
 }
@@ -275,7 +282,7 @@ const notRunning = 'Krypt Marketo isn\'t running. Open Krypt Marketo, then retry
 // ── Multi-instance mode: moving this conversation to another profile's window ──
 function profileList() {
   const j = readJson(path.join(ROOT, 'profiles.json'));
-  if (!j || j.multiInstance !== true) return null;
+  if (!j || j.multiInstance === false) return null;
   const list = Array.isArray(j.list) ? j.list.filter((p) => p && PROFILE_ID.test(String(p.id)) && typeof p.name === 'string') : [];
   if (!list.some((p) => p.id === 'main')) list.unshift({ id: 'main', name: 'Main' });
   return list;

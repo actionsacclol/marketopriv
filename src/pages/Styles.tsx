@@ -3,7 +3,7 @@ import { ArrowLeft, Check, Copy, Film, Pencil, Plus, Trash2, Volume2, VolumeX } 
 import type { CustomStyle, IgAccount } from '@shared/types';
 import { ClipSources } from '../components/ClipSourcesEditor';
 import { MemeStyleSettings } from '../components/MemeStyleSettings';
-import { STYLES, TONE_STYLES, allStyles, styleName, styleNeeds, stylesOf, type ChannelStyle } from '@shared/styles';
+import { STYLES, TONE_STYLES, allStyles, bestFirst, rankedStyles, styleName, styleNeeds, stylesOf, type ChannelStyle } from '@shared/styles';
 import { MixCard, VarietyCard } from '../components/ReelControls';
 import { STYLE_PAGES } from '@shared/stylePages';
 import { Card, GhostButton, Page, PrimaryButton } from '../components/ui';
@@ -170,7 +170,7 @@ function StyleForm({ own, onDone }: { own?: CustomStyle; onDone: () => void }) {
         <label className="space-y-1 text-xs text-krypt-muted">
           Built on
           <select className="input w-full text-sm" value={base} onChange={(e) => setBase(e.target.value)}>
-            {STYLES.map((x) => (
+            {bestFirst(STYLES).map((x) => (
               <option key={x.id} value={x.id}>
                 {styleName(x, brand).name}
               </option>
@@ -443,7 +443,7 @@ export default function Styles() {
             <VarietyCard />
           </div>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4">
-            {allStyles().map((x) => (
+            {rankedStyles().map((x) => (
               <StyleTile key={x.id} st={x} media={media} accounts={accounts} onOpen={() => openStyle(x.id)} />
             ))}
           </div>

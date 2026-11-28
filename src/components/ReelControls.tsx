@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, ListPlus, Plus, RotateCcw, Trash2, X } from 'lucide-react';
 import type { IgAccount, Variety } from '@shared/types';
-import { styleById, styleMix, styleName, stylesOf } from '@shared/styles';
+import { bestFirst, styleById, styleMix, styleName, stylesOf } from '@shared/styles';
 import { cls } from '../lib/format';
 import { useApp } from '../state/store';
 import { Card, GhostButton, PrimaryButton } from './ui';
@@ -209,10 +209,10 @@ function MixRow({ a }: { a: IgAccount }) {
     <div className="space-y-2 px-4 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <div className="text-sm font-medium text-white">{a.handle}</div>
-        <span className="text-[11px] text-krypt-muted">{a.styleMix ? 'your mix' : 'default mix: the main style half, the others share the rest'}</span>
+        <span className="text-[11px] text-krypt-muted">{a.styleMix ? 'your mix' : 'default mix: the best-ranked styles get the most'}</span>
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        {mix.map((m) => {
+        {bestFirst(mix).map((m) => {
           const st = styleById(m.id);
           return (
             <label key={m.id} className="flex items-center gap-1.5 text-sm text-white/85">

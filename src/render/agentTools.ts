@@ -4,13 +4,16 @@ import { elVoiceNote, hasSound, isVoiced, slideTimes, storyBeats, timingFor } fr
 
 const SILENT_NOTE = ' WARNING: this reel has no sound at all (no voice, no music). Silent videos do badly on TikTok, Shorts and Reels: make it a story reel (voiced, with sound effects and music) unless the user asked for a silent one.';
 import { reelById, renderReel, useApp } from '../state/store';
-import { renderStills } from './export';
+import { renderStills, stillNote } from './export';
 import { ensureVoiceover, takeVoiceNotes } from './voice';
 import { addReferenceVideo } from './refAnalyze';
 import { profileLine } from '@shared/refStyle';
 import { CLIP_ORIGIN_LABEL } from '@shared/clipping';
 import { saveClip } from './clipSave';
 import { renderThumbnail } from './thumbnail';
+import { renderCover } from './cover';
+import { cleanCover, DEFAULT_COVER } from '@shared/covers';
+import type { ReelCover } from '@shared/types';
 import { renderKipClip, type KipArt } from './kip';
 
 // The renderer half of the MCP tools: anything that needs a canvas or the
@@ -101,7 +104,7 @@ export async function runAgentTool(call: McpToolCall, progress: (fraction: numbe
     const el = isVoiced(reel.preset) && f.voiceover === true ? elVoiceNote(storyBeats(f), String(f.voice ?? '')) : '';
     return {
       ok: true,
-      text: `${reel.title} (${reel.preset}, ${timing.total.toFixed(1)}s; body ${timing.body.toFixed(1)}s + end card ${timing.cta}s).${el ? ` ${el}${el.startsWith('No narration') ? ' Timing is estimated from the text and can shift a little at render.' : ''}` : ''} Frames at ${stills.map((s) => `${s.t}s`).join(', ')}:${hasSound(reel.preset, reel.fields) ? '' : SILENT_NOTE}`,
+      text: `${reel.title} (${reel.preset}, ${timing.total.toFixed(1)}s; body ${timing.body.toFixed(1)}s + end card ${timing.cta}s).${el ? ` ${el}${el.startsWith('No narration') ? ' Timing is estimated from the text and can shift a little at render.' : ''}` : ''} Frames at ${stills.map((s) => `${s.t}s`).join(', ')}:${hasSound(reel.preset, reel.fields) ? '' : SILENT_NOTE}${await stillNote(reel)}`,
       images: stills.map((s) => ({ data: s.data, mimeType: 'image/png' })),
     };
   }
@@ -113,6 +116,24 @@ export async function runAgentTool(call: McpToolCall, progress: (fraction: numbe
     const r = await window.marketo.render.saveImage(reel.id, still.data, still.t, shape);
     if (!r.ok || !r.data) return { ok: false, text: r.message ?? 'Saving the image failed.' };
     return { ok: true, text: `Saved the ${shape} frame at ${still.t}s of "${reel.title}" → ${r.data}`, images: [{ data: (await renderStills(reel, [still.t], 0.35, shape))[0].data, mimeType: 'image/png' }] };
+  }
+
+  if (call.tool === 'render_cover') {
+    const a = (call.args ?? {}) as Partial<ReelCover>;
+    const old = reel.cover;
+    // The opening has landed by about 1s; a cover made before keeps its own frame.
+    const want = cleanCover({ ...DEFAULT_COVER, ...old, ...Object.fromEntries(Object.entries(a).filter(([, v]) => v !== undefined)), t: a.t ?? old?.t ?? Math.min(1.2, timing.body / 2), path: undefined, at: undefined }, timing.total);
+    if (!want.text && want.look !== 'frame') return { ok: false, text: 'A cover needs its words: text with 2-5 words (one in *stars*), or look "frame" for the frame alone.' };
+    progress(0.2, 'Drawing the cover');
+    const png = await renderCover(reel, want, 1);
+    const saved = await window.marketo.render.saveCover(reel.id, png, want);
+    if (!saved.ok || !saved.data) return { ok: false, text: saved.message ?? 'Saving the cover failed.' };
+    const small = await renderCover(reel, want, 0.3);
+    return {
+      ok: true,
+      text: `Saved the cover of "${reel.title}" (1080x1920, frame at ${want.t}s, ${want.look}${want.text ? `, "${want.text}"` : ''}) → ${saved.data}\nLook at it: the words read at grid-tile size, nothing important under them, and it makes people want the video without giving it away. Not right: render_cover again with other words, t, look or place. browser_attach_reel says how to set it on each platform.`,
+      images: [{ data: small, mimeType: 'image/png' }],
+    };
   }
 
   if (call.tool === 'render_slides') {
@@ -144,7 +165,7 @@ export async function runAgentTool(call: McpToolCall, progress: (fraction: numbe
     const r = await renderReel(reel, (ratio, phase) => progress(ratio, `Rendering${args.shape === 'square' ? ' the square version' : ''} (${phase})`), args.shape === 'square' ? 'square' : 'vertical');
     const voiceNotes = takeVoiceNotes();
     const mute = hasSound(reel.preset, reel.fields) ? '' : SILENT_NOTE;
-    return { ok: true, text: `Rendered ${args.shape === 'square' ? 'the square (X) version of ' : ''}"${reel.title}" → ${r.path} (${r.seconds.toFixed(1)}s, ${(r.bytes / 1e6).toFixed(1)} MB, took ${((performance.now() - t0) / 1000).toFixed(1)}s).${voiceNotes.length ? `\nVoice: ${voiceNotes.join(' ')}` : ''}${mute}` };
+    return { ok: true, text: `Rendered ${args.shape === 'square' ? 'the square (X) version of ' : ''}"${reel.title}" → ${r.path} (${r.seconds.toFixed(1)}s, ${(r.bytes / 1e6).toFixed(1)} MB, took ${((performance.now() - t0) / 1000).toFixed(1)}s).${voiceNotes.length ? `\nVoice: ${voiceNotes.join(' ')}` : ''}${mute}${await stillNote(reelById(reel.id) ?? reel)}` };
   }
 
   return { ok: false, text: `The renderer doesn't handle ${call.tool}.` };

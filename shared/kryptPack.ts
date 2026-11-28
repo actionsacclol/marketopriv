@@ -65,6 +65,8 @@ export interface KryptTool {
   doc?: string;
   /** Paid products that do the same job, for free-vs-paid reels (the versus style). */
   rivals?: KryptRival[];
+  /** Krypt's main product (the user, 2026-11-27: "i want our best marketed tool to be marketo"): listed first, and Krypt's own accounts make it the tool of most reels. */
+  featured?: boolean;
 }
 
 const TRADING_AVOID = ['Profit promises, win rates as a pitch, or a "proven edge"', 'Anything that reads as financial advice; keep "Not financial advice." on screen'];
@@ -451,46 +453,53 @@ export const KRYPT_TOOLS: KryptTool[] = [
     name: 'Krypt Marketo',
     tagline: 'Auto grow social media',
     category: 'Utility',
+    featured: true,
     url: 'krypt.cc/tools/marketo',
     platforms: 'Windows and macOS (Apple silicon build)',
     price: 'No price on its page',
-    version: '1.0.0',
-    read: '2026-11-22',
-    about: 'This app. A desktop hub that makes short videos and runs social accounts, driven by the AI you already use: the AI does the work, the hub is where you watch it, set the rules and collect the files. It posts to Instagram, TikTok, YouTube Shorts, X, Facebook, Threads and Pinterest, each account signed in in your own Chrome.',
+    version: '1.4.4',
+    read: '2026-11-27',
+    about: "Krypt's main product, and this app. A desktop hub where the AI you already use (Claude Code, Codex, Cursor, Gemini CLI and more) makes short videos and runs your social accounts: it writes the reel, voices it, renders it, posts it and answers the comments, on a schedule. The hub is where you watch it, set the rules and grab the files. Instagram, TikTok, YouTube Shorts, X, Facebook, Threads and Pinterest, each account signed in in your own Chrome.",
     features: [
-      'Ask your AI for a reel and watch it get written, previewed and rendered to a 1080x1920 MP4',
-      'Reel styles you switch on per account: narrated stories, lists, stats, quizzes, would-you-rather, tier lists, memes, Reddit and greentext stories, stickman explainers, stream clips and screen-recorded tool demos',
-      'Seven platforms: Instagram, TikTok, YouTube Shorts, X, Facebook, Threads and Pinterest, each with its own warm-up',
-      'Autopilot: scheduled runs do the day\'s posts, likes, follows, comments, replies and DMs, then report back',
+      'Ask your AI for a video and watch it get written, previewed and rendered to a 1080x1920 MP4 on your own computer',
+      'Over 30 video styles you switch on per account: 3D diorama (a little world that builds up, ages, floods or gets hit by a tornado, a meteor or a volcano), ink cartoon, 1930s rubber hose cartoon, retro TV, pixel theater, PS2-style cutscenes, stickman explainers, blocky avatar skits, narrated Reddit and greentext stories, memes, quizzes, would-you-rather, tier lists, versus, photo slideshows, stream clips and screen-recorded demos',
+      'Narration in your own ElevenLabs voice, captions timed to every word, sound effects, and covers set on each platform',
+      'Seven platforms from one run: Instagram, TikTok, YouTube Shorts, X, Facebook, Threads and Pinterest, each with its own first-week warm-up',
+      "Autopilot: scheduled runs do the day's posts, likes, follows, comments, replies and DMs, then write a report",
+      'Kip: a chat tab in the hub that runs everything through your own AI app',
       'Stream clipping: top Twitch and Kick clips, or the most replayed part of a YouTube video, cut vertical with captions',
-      'Learns from results: reads each post\'s numbers and keeps what worked for the next reels',
-      'Kip: a chat tab in the hub that runs everything through your own Claude Code',
+      'Learns from results: reads every post\'s numbers and keeps what worked for the next videos',
     ],
     details: [
-      { title: 'Works with', points: ['Claude Code, Claude Desktop, Codex, Cursor, Windsurf, Gemini CLI, VS Code or any MCP app', 'A built-in chat for people with only an API key: xAI (Grok), OpenAI, OpenRouter, Ollama or any OpenAI-compatible URL'] },
-      { title: 'Accounts', points: ["Each account stays signed in where it already lives: a profile of your own Chrome, through the Krypt Marketo extension", 'You sign in yourself; the AI never sees a password', 'Profiles: separate sets of accounts, each with its own optional proxy, and each can run in its own window'] },
-      { title: 'Your rules', points: ['Daily limits and the gap between posts are your own numbers; the recommended ones are a starting point, and the hub warns when you go over them', 'Optional: approve each post, comment and message before it goes out', 'A Training page and a written brief the AI reads every run'] },
-      { title: 'Making videos', points: ['Narration through your own ElevenLabs account', 'Long YouTube videos (16:9) edited in Krypt Editor', 'Hook tests: several openings of the same reel'] },
-      { title: 'Built in', points: ['A playbook of hook rules, formats and captions', 'This catalog of Krypt tools'] },
+      { title: 'Works with', points: ['Claude Code, Claude Desktop, Codex, Cursor, Windsurf, Gemini CLI, Copilot CLI, VS Code or any MCP app, connected in one click from the hub', 'A built-in chat for people with only an API key: xAI (Grok), OpenAI, OpenRouter, Ollama or any OpenAI-compatible URL', 'Usage tiers (Low, Medium, High, Max) so a $20 AI plan lasts the month'] },
+      { title: 'Accounts', points: ["Each account stays signed in where it already lives: a profile of your own Chrome, through the Krypt Marketo extension", 'You sign in yourself; the AI never sees a password', 'Profiles: separate sets of accounts, each can run in its own window with its own optional proxy', 'YouTube: several channels in one Google sign-in'] },
+      { title: 'Your rules', points: ['Daily limits and the gap between posts are your own numbers; the recommended ones are a starting point, and the hub warns when you go over them', 'A goal per account and platform: Mass growth or Push product', 'Optional: approve each post, comment and message before it goes out', 'A Training page and a written brief the AI reads every run'] },
+      { title: 'Making videos', points: ['Narration through your own ElevenLabs account; previews are free, voice is bought only at render', 'Hook tests: several openings of the same video', 'Long YouTube videos (16:9) made with Krypt Editor and uploaded by the hub', 'Thumbnails and reel covers'] },
+      { title: 'Built in', points: ['A playbook of hook rules, formats and captions', 'Example videos of the styles (Create > Examples)', 'This catalog of Krypt tools'] },
     ],
     angles: [
-      '"This reel was made by an AI. Here is the prompt."',
-      'One sentence in, a finished reel out, screen recorded',
-      'The same video going up on seven platforms from one run',
-      'A new account\'s first week, done slowly on purpose (warm-up)',
-      'Pick a style, get a reel: the same idea made as a stickman explainer, a quiz and a meme',
+      '"This video was made by an AI. Every frame, the voice, the captions." Show a finished style first, the hub that made it last',
+      'One idea, six styles: the same story as a 3D diorama, an ink cartoon, a 1930s cartoon, a stickman and a meme (the example videos), then "one app made all of these"',
+      '"I gave my AI my social accounts for a week": what it made, posted and answered, with the real numbers only',
+      'A faceless channel with no camera and no editing: the AI writes, voices and renders, you watch',
+      'Your AI app can run your socials now: Claude Code connected in one click, then "make me a reel" and it does',
+      'One run, seven platforms: the same video landing on Instagram, TikTok, Shorts, X, Facebook, Threads and Pinterest',
+      'A viral-format video (a 3D town hit by five disasters, a house over 10,000 years) that ends on "made with Krypt Marketo"',
+      'Clip channels on autopilot: a streamer\'s best moment found, cut vertical, captioned and posted',
     ],
     avoid: [
-      'Promising views, followers, growth or income',
-      'Showing or suggesting spam, mass accounts or bot farms',
+      'Promising views, followers, growth or income, or showing numbers that are not real',
+      'Showing or suggesting spam, mass accounts, bot farms, follow-for-follow or mass DMs',
       'Saying it keeps accounts safe from restrictions or bans, or that platforms cannot tell',
       'Calling it "free to use" or "open source"',
       'Showing the hub or Chrome with real accounts open: handles, emails, DMs, numbers. Record only a demo profile with nothing private in it, and check every frame',
+      'Naming a voice, style or channel it copies: every style is its own (no studio names, characters or logos)',
     ],
   },
 ];
 
 export const KRYPT_PACK_RULES = [
+  'Krypt Marketo is Krypt\'s main product: the best reel about it shows what it makes (a finished video in one of its styles) before it shows the app.',
   'Reach first: tell a story people would watch anyway, and let the tool be the lesson at the end. The product is never the hook.',
   'Say what the tool does, with the screen or a number. Do not pitch with "open source" or "free to use"; never use those words for Krypto Bot or Krypto Mirror.',
   'Use the Krypt logo (set the reel\'s logo field to an empty string), card_by "by Krypt", and the tool\'s own link as the end card title (cta).',
@@ -503,11 +512,14 @@ export const kryptToolById = (key: string): KryptTool | undefined => {
 };
 
 export function kryptToolSummary(t: KryptTool): string {
-  return `${t.id} · ${t.name}: ${t.tagline} · ${t.category} · ${t.platforms} · ${t.url}${t.released === false ? ' · not released yet' : ''}`;
+  return `${t.id} · ${t.name}: ${t.tagline} · ${t.category} · ${t.platforms} · ${t.url}${t.featured ? " · Krypt's main product" : ''}${t.released === false ? ' · not released yet' : ''}`;
 }
 
+/** The catalog with Krypt's main product first. */
+export const kryptToolsFeaturedFirst = (): KryptTool[] => [...KRYPT_TOOLS.filter((t) => t.featured), ...KRYPT_TOOLS.filter((t) => !t.featured)];
+
 /** Names and one-liners, for the instructions every AI gets. */
-export const kryptToolNames = (): string => KRYPT_TOOLS.map((t) => `${t.name} (${t.tagline.replace(/\s+-\s.*$/, '')})`).join(', ');
+export const kryptToolNames = (): string => kryptToolsFeaturedFirst().map((t) => `${t.name} (${t.tagline.replace(/\s+-\s.*$/, '')})`).join(', ');
 
 /** The prompt a user gives their AI for a reel about this tool. */
 export const kryptToolPrompt = (t: KryptTool): string => `Make a reel about ${t.name}. Read krypt_tools for "${t.id}" first.`;

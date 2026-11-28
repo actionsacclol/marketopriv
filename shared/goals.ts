@@ -349,7 +349,8 @@ export function productName(a: Pick<IgAccount, 'pushProduct'>, brand: Pick<Brand
     const t = kryptToolById(p);
     return t ? `${t.name} (${t.url})` : p;
   }
-  if (isKryptBrand(brand)) return 'the Krypt tools, one per Reel (krypt_tools)';
+  // Marketo is Krypt's main product (the user, 2026-11-27); the other tools take turns with the rest.
+  if (isKryptBrand(brand)) return 'Krypt Marketo (krypt.cc/tools/marketo) in about 2 of every 3 Reels, the other Krypt tools in turn in the rest, one tool per Reel (krypt_tools)';
   if (!brand.name.trim()) return 'the brand';
   return brand.site ? `${brand.name} (${brand.site})` : brand.name;
 }

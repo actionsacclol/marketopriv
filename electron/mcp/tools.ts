@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { BrowserStatus, Fields, IgAccount, NetProfile, Network, Reel, SessionAction, Site, UiFocus, VoteStory } from '../../shared/types';
 import { MAX_SLIDES, SHAPE_SIZE } from '../../shared/types';
 import { SLIDE_SITES } from '../../shared/slides';
+import { seriesOwed, seriesProblem } from '../../shared/series';
 import * as perf from '../perf';
 import { setBanner } from '../campaignBanner';
 import { resolveYtChannel } from '../ytChannel';
@@ -9,7 +10,7 @@ import * as longVideo from '../longVideo';
 import { PRESETS, isVoiced, presetById, presetSummary, timingFor } from '../../shared/presets';
 import { FORMATS, formatById, formatSummary } from '../../shared/formats';
 import { hookGroups, hookLine, metricsOn, pct, resultOf, type ReelResult } from '../../shared/score';
-import { currentReport, lastRun, reportRunning, runsLeftToday, settings as autopilotSettings } from '../autopilot';
+import { currentReport, lastRun, reportRunning, running as autopilotRunning, runsLeftToday, settings as autopilotSettings } from '../autopilot';
 import { EXTRA_RUN_MIN, isExtraReport, postsDueNow } from '../../shared/extraRuns';
 import { tierOf } from '../../shared/aiUsage';
 import { updateInfo } from '../update';
@@ -23,7 +24,7 @@ import * as research from '../research';
 import * as refs from '../refs';
 import { REF_RULES, profileLine, refReport, styleFor } from '../../shared/refStyle';
 import { NETWORKS, NETWORK_LABEL, POST_GAP_MIN, QUOTA_KEYS, SITES, SITE_LABEL, YT_UPLOADS_PER_DAY, cleanLimit, isNetwork, limitKeys, limitLabel, limitsOf, linkOn, linkPatch, localDate, netOf, normalizeHandle, planFor, postGap, postLimit, postTarget, quotaKeys, quotaLabel, sameHandle, siteOn, sitesOf, watchOnlyOn, ytLimit, ytUploadsToday } from '../../shared/warmup';
-import { KRYPT_PACK_READ, KRYPT_PACK_RULES, KRYPT_TOOLS, kryptToolById, kryptToolDetail, kryptToolNames, kryptToolSummary } from '../../shared/kryptPack';
+import { KRYPT_PACK_READ, KRYPT_PACK_RULES, KRYPT_TOOLS, kryptToolById, kryptToolDetail, kryptToolNames, kryptToolsFeaturedFirst, kryptToolSummary } from '../../shared/kryptPack';
 import { DEFAULT_TUNE, ELEVEN_SIGNUP_URL, describeTune } from '../../shared/voice';
 import { HOOK_STYLES, HOOK_STYLE_IDS, hookStyleById, hooksNote } from '../../shared/hooks';
 import { goalLine } from '../../shared/goals';
@@ -37,13 +38,15 @@ import type { ClipSource } from '../../shared/types';
 import * as clips from '../clips';
 import * as mediaFolders from '../mediaFolders';
 import * as images from '../images';
+import * as archive from '../archive';
 import * as slideshows from '../slideshows';
 import { briefText, lessonsText, trainingRules, trainingText } from '../../shared/training';
-import { TONE_STYLES, allStyles, cleanStyles, mixWindow, nextStyle, styleById, styleMix, styleName, styleNeeds, stylesOf } from '../../shared/styles';
+import { TONE_STYLES, allStyles, cleanStyles, mixWindow, nextStyle, rankedStyles, styleById, styleMix, styleName, styleNeeds, stylesOf } from '../../shared/styles';
 import { removeReels } from '../reelFiles';
 import * as screenRec from '../screen';
 import { postGroups, postKey, postLine, siteOfUrl, similarPosts } from '../../shared/posts';
 import { HUMAN_RULES, textProblems } from '../../shared/humanText';
+import { COVER_STEP } from '../../shared/covers';
 import { DISCLOSURE_STEP, REWARDS_SUBMISSIONS, campaignLine, campaignProblems, madeToday, submissionLine } from '../../shared/campaigns';
 import type { ToolOutcome } from './index';
 
@@ -123,8 +126,9 @@ function reelPlanNote(): string {
     const ids = new Set(mix.map((m) => m.id));
     const recent = [...d.reels].sort((x, y) => y.createdAt.localeCompare(x.createdAt)).map((r) => r.style ?? 'main').filter((s) => ids.has(s)).slice(0, mixWindow(mix));
     // A comment vote story whose votes are counted waits for its next part: that goes before the rotation, or the story stalls.
-    const waiting = ids.has('vote') && voteWaiting();
-    const due = waiting ? 'vote' : nextStyle(mix, recent);
+    const waitingIn = ['vote', 'survival'].find((id) => ids.has(id) && voteWaiting(id));
+    const waiting = !!waitingIn;
+    const due = waitingIn ?? nextStyle(mix, recent);
     const made = (id: string): number => recent.filter((x) => x === id).length;
     // With many styles on, the line names the big shares and the ones made lately, not all of them.
     const few = mix.length <= 8;
@@ -132,7 +136,7 @@ function reelPlanNote(): string {
     const rest = mix.length - big.length;
     const shares = `${big.map((m) => `${label(m.id)} ${m.share}%`).join(', ')}${rest ? `${big.length ? ', ' : ''}the other ${rest} styles that are on share the rest` : ''}`;
     const lately = mix.filter((m) => few || made(m.id)).map((m) => `${label(m.id)} ${made(m.id)}`).join(', ');
-    out.push(`Style for the next reel on ${a.handle}: "${label(due)}"${waiting ? ' (its vote story has a counted vote and waits for the next part, so that goes first)' : ''}. Its mix${a.styleMix ? ' (set by the user on the Styles page)' : ' (the default: main half, the others the rest)'}: ${shares}; the last ${recent.length} reels: ${lately || 'none yet'}. A reel the user asked for in another style is made in that one. If "${label(due)}" cannot be made today (it needs a recording, footage or a product this account does not have), make the reel in the main style and say so in the report.`);
+    out.push(`Style for the next reel on ${a.handle}: "${label(due)}"${waiting ? ' (its vote story has a counted vote and waits for the next part, so that goes first)' : ''}. Its mix${a.styleMix ? ' (set by the user on the Styles page)' : ' (the default, from the style ranking: the best-ranked styles get the most)'}: ${shares}; the last ${recent.length} reels: ${lately || 'none yet'}. A reel the user asked for in another style is made in that one. If "${label(due)}" cannot be made today (it needs a recording, footage or a product this account does not have), make the reel in the main style and say so in the report.`);
     const st = styleById(due);
     if (st && st.id !== 'main' && !rulesInline() && !told.has(st.id)) {
       told.add(st.id);
@@ -258,19 +262,23 @@ const voteSchema = z.object({
 const S = {
   get_overview: z.object({}),
   list_presets: z.object({ preset: z.string().optional().describe('A preset id: its fields, types and defaults. Leave out for the list.') }),
-  list_reels: z.object({ status: z.enum(['draft', 'rendered', 'posted']).optional() }),
+  list_reels: z.object({
+    status: z.enum(['draft', 'rendered', 'posted']).optional(),
+    limit: z.number().int().min(1).max(200).optional().describe('How many, newest first (default 40)'),
+    offset: z.number().int().min(0).optional().describe('Skip this many of the newest first, for older reels'),
+  }),
   get_reel: z.object({ id: reelId }),
   list_formats: z.object({ style: z.string().optional().describe('A channel style (label or id): returns how to make a reel in that style (its rules) and the format it starts from, instead of every format.') }),
   create_reel: z.object({
-    preset: z.string().optional().describe('Preset id: story, list, post, stats, versus, terminal, clip, narrated (Reddit-style / greentext story over a moving background), meme (meme panels with effects), stickman (a hand-drawn stick figure, or two for versus clips, acting it out), blox (one or two blocky game-style 3D avatars acting it out: rants, skits, dances), slides (a slideshow), duo (a person asks, a 3D AI character answers, with a board of parts); not needed with format'),
+    preset: z.string().optional().describe('Preset id: story, list, post, stats, versus, terminal, clip, narrated (Reddit-style / greentext story over a moving background), meme (meme panels with effects), stickman (a hand-drawn stick figure, or two for versus clips, acting it out), blox (one or two blocky game-style 3D avatars acting it out: rants, skits, dances), slides (a slideshow), duo (a person asks, a 3D AI character answers, with a board of parts), morph (UI motion: one shape morphs through app states on the beat), lecture (the character teaches in the corner, a board builds the lesson), space (what-if space explainers drawn in flat scenes), cutaway (a 3D backyard cut open, one build a line, a running total), diorama (a little 3D world on any scene base that fills up or changes a line at a time: pieces, weather, fire, floods, years passing, a counter), ps2 (a PS2-style low-poly cutscene skit, our own cast, a hard cut every line, console subtitles), ink (a narrated true story acted out by our own caricature cast in hand-inked cartoon cels, a camera that never stops, a warm grainy print look), tv (a calm true story or explainer on an old CRT: our own glowing phosphor figures in glowing line-art places, scanlines and bloom, static between channels), hose (a true story told like a 1930s rubber hose cartoon: our own bouncing cast with hose arms and white gloves, old film, iris transitions, art-deco title cards), pixel (a story played like a 16-bit game: our own pixel cast, a typing text box, a choice menu, a HUD, a quiet typed ending); not needed with format'),
     format: z.string().optional().describe('Start from a format (list_formats): its preset, beat skeleton and caption. Its numbers are examples; replace them.'),
     title: z.string().optional().describe('Name in the hub (not shown in the video)'),
     fields: fieldsSchema.optional(),
     caption: z.string().optional().describe('Instagram caption to post with it'),
     hashtags: z.array(z.string()).optional(),
     hook_style: z.string().optional().describe(`The kind of opening this reel has, for the hook style test: ${HOOK_STYLE_IDS.join(', ')} (get_performance names the one to use next on each platform).`),
-    style: z.string().optional().describe('The channel style it is made in (the Styles page: krypt/main, vote, tips, retro, toy, wyr, case, quiz, myth, top, chat, tier, screen, clipping, the real-footage ones proof, pov, speed, series, the meme ones reddit, greentext, meme, dumb, stickman, blox, slides and ask). Default main. It counts in the format test.'),
-    vote: voteSchema.optional().describe('For the vote style: which part of which comment vote story this is, and its two options.'),
+    style: z.string().optional().describe('The channel style it is made in (the Styles page: krypt/main, vote, tips, retro, toy, wyr, case, quiz, myth, top, chat, tier, screen, clipping, the real-footage ones proof, pov, speed, series, the meme ones reddit, greentext, meme, dumb, stickman, blox, slides, ask, whatif, survival, cutaway, diorama, lecture, uimotion, ps2, ink, pixel, hose and tv). Default main. It counts in the format test.'),
+    vote: voteSchema.optional().describe('For the vote and survival styles: which part of which comment vote story this is, and its two options (with style survival the reel stays in that style).'),
     like: z.string().optional().describe('A reference video (id or name from list_reference_videos) whose editing style to follow: sets what the preset can take from it (accent, light/dark look, pace) and returns notes on matching the rest. Fields you pass still win.'),
     campaign: campaignRef,
   }),
@@ -280,7 +288,7 @@ const S = {
     preset: z.string().optional().describe('Switch style; matching field keys carry over'),
     fields: fieldsSchema.optional(),
     style: z.string().optional().describe('The channel style it is made in (krypt/main, vote, tips, retro, toy; the Styles page). Default main.'),
-    vote: voteSchema.optional().describe('For the vote style: which part of which comment vote story this is, and its two options.'),
+    vote: voteSchema.optional().describe('For the vote and survival styles: which part of which comment vote story this is, and its two options (with style survival the reel stays in that style).'),
     like: z.string().optional().describe('A reference video (id or name from list_reference_videos) whose editing style to follow: sets what the preset can take from it (accent, light/dark look, pace) and returns notes on matching the rest. Fields you pass still win.'),
     caption: z.string().optional(),
     hashtags: z.array(z.string()).optional(),
@@ -333,6 +341,15 @@ const S = {
     t: z.number().min(0).optional().describe('Second of the reel to grab (default 1.5: the hook once it has landed). preview_reel first to find the strongest frame.'),
     shape: z.enum(['square', 'vertical', 'portrait', 'pin']).optional().describe('square (default) = 1080x1080 for X and feeds; portrait = 1080x1350 (4:5: Instagram, Threads, Facebook); pin = 1080x1620 (2:3: a Pin); vertical = 1080x1920'),
   }),
+  render_cover: z.object({
+    id: reelId,
+    text: z.string().max(60).optional().describe('2-5 big words that make people tap, one in *stars* for the accent colour. Not the caption and not the hook line word for word. Leave out to keep the saved text; "" with look frame'),
+    t: z.number().min(0).optional().describe('The second of the reel the frame comes from: its strongest picture (a face, the result, the number), found with preview_reel. Default: the saved one, else the middle of the opening'),
+    look: z.enum(['bold', 'box', 'bar', 'frame']).optional().describe('bold (default) = huge outlined words; box = lines on white boxes; bar = a dark band with the words; frame = the frame alone (it already says it)'),
+    place: z.enum(['top', 'middle', 'bottom']).optional().describe('Where the words go (all inside the middle 3:4 that Instagram\'s grid and TikTok show). Pick the place that leaves the face or subject clear'),
+    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().describe('Accent colour for the *starred* word, #RRGGBB (default yellow #FFD84D)'),
+    bg: z.string().optional().describe('An image to use instead of the reel\'s frame (absolute path, e.g. from save_images or list_media)'),
+  }),
   render_slides: z.object({
     id: reelId,
     shape: z.enum(['portrait', 'vertical', 'square', 'pin']).optional().describe('portrait (default) = 1080x1350, 4:5: Instagram, Threads, Facebook, X; vertical = 1080x1920: TikTok; pin = 1080x1620, 2:3: Pinterest; square = 1080x1080'),
@@ -343,7 +360,7 @@ const S = {
     id: reelId,
     url: z.string().describe('The live URL (instagram.com/reel/… or youtube.com/shorts/…)'),
     platform: z.enum(['instagram', 'x', 'tiktok', 'youtube', 'facebook', 'threads', 'pinterest']).optional().describe("Where it went live (default: read from the URL, else instagram). A reel can be posted on all of them; each keeps its own link."),
-    posted_at: iso.optional(),
+    posted_at: iso.optional().describe('When it went live, as a full ISO time with its zone. Leave out for a post that just went up: the hub records now. A date only, a guessed year, a time in the future or one more than 7 days back is recorded as now.'),
     caption: z.string().optional(),
     trial: z.boolean().optional().describe('Posted as a Trial Reel (Instagram)'),
     kind: z.enum(['video', 'slides']).optional().describe('slides = it went up as a photo post of its slides (browser_attach_slides). Default video.'),
@@ -356,10 +373,18 @@ const S = {
     name: z.string().optional().describe('File name for the recording'),
   }),
   list_media: z.object({
-    kind: z.enum(['backgrounds', 'memes', 'campaigns', 'images']).describe("backgrounds = videos to play behind narrated reels (the user's Backgrounds folder); memes = the user's meme templates, reaction pictures and clips (the Memes folder); campaigns = Content Rewards campaigns' logos and footage (query: the campaign title); images = pictures for photo slideshows (the Images folder: saved with save_images or the user's own)"),
+    kind: z.enum(['backgrounds', 'memes', 'campaigns', 'images', 'footage', 'music']).describe("backgrounds = videos to play behind narrated reels (the user's Backgrounds folder); memes = the user's meme templates, reaction pictures and clips (the Memes folder); campaigns = Content Rewards campaigns' logos and footage (query: the campaign title); images = pictures for photo slideshows (the Images folder: saved with save_images or the user's own); footage = b-roll films (the Footage folder: public-domain films saved with save_archive, or the user's own); music = music files (the Music folder: public-domain records saved with save_archive, or the user's own)"),
     query: z.string().optional().describe('Only files whose name or sub-folder has these words'),
     look: z.boolean().optional().describe('Also return small pictures of up to 10 of the images (from offset), to pick ones that fit the joke'),
     offset: z.number().int().min(0).optional().describe('With look: skip this many images (to see the next 10)'),
+  }),
+  find_archive: z.object({
+    query: z.string().describe('What to look for, in plain words: "atom bomb drill", "1950s kitchen", "rocket launch", "office workers typing" (films) or "jazz", "ragtime piano", "march", "blues" (records)'),
+    kind: z.enum(['film', 'music']).describe('film = public-domain films (the Prelinger Archives: ads, educational and industrial films, home movies, 1920s-1970s); music = public-domain 78 rpm records (the Great 78 Project, 1925 or earlier only)'),
+    count: z.number().int().min(1).max(20).optional().describe('How many to list (default 10)'),
+  }),
+  save_archive: z.object({
+    id: z.string().describe('The id from find_archive (or an archive.org/details/<id> link)'),
   }),
   find_images: z.object({
     query: z.string().min(2).describe('What the picture shows plus the look, the way people search Pinterest: "messy desk night aesthetic", "gym mirror selfie", "cozy gaming setup purple"'),
@@ -517,7 +542,7 @@ const S = {
         z.object({
           url: z.string().describe('The post link (instagram.com/reel/..., youtube.com/shorts/... or watch?v=..., x.com/<user>/status/..., tiktok.com/@<user>/video/...)'),
           site: z.enum(['instagram', 'x', 'tiktok', 'youtube', 'facebook', 'threads', 'pinterest']).optional().describe('Default: read from the link'),
-          posted_at: z.string().optional().describe('ISO date or YYYY-MM-DD, as close as the page shows'),
+          posted_at: z.string().optional().describe('When it went up: a full ISO time with its zone (2026-11-26T15:04:00Z). For a post from before today a date (YYYY-MM-DD) as close as the page shows is fine. A date only, no zone or a time in the future for a post made today is recorded as now.'),
           title: z.string().optional().describe('What it is in one line: the title, or the first line of the caption. Needed for a post not in the log yet.'),
           topic: z.string().optional().describe('The story or angle, specific enough to recognise a repeat (e.g. "GTA 6 trailer pumped DacityCoin", "Krypt Trader: how the Kalshi bot picks a side")'),
           tools: z.array(z.string()).optional().describe('krypt_tools ids it features (bot, mirror, trader, larp, ...)'),
@@ -580,7 +605,7 @@ const S = {
     pinterest_watch_only: z.boolean().optional().describe('Watch only on Pinterest: no saves, reactions, follows, comments or Pins there'),
     niche: z.string().optional(),
     style_mix: z.record(z.string(), z.number().min(0).max(100)).optional().describe('The share of reels each of its styles gets, in percent, by style label or id, e.g. {"main": 60, "vote": 40} (Styles page). An empty object goes back to the default. Only with the user\'s say-so.'),
-    styles: z.array(z.string()).optional().describe('Channel styles the account runs, main first (Styles page): krypt/main, vote, tips, retro, toy, ... reddit, greentext, meme, dumb, stickman, blox, slides, ask. Only with the user\'s say-so.'),
+    styles: z.array(z.string()).optional().describe('Channel styles the account runs, main first (Styles page): krypt/main, vote, tips, retro, toy, ... reddit, greentext, meme, dumb, stickman, blox, slides, ask, whatif, survival, cutaway, diorama, lecture, uimotion, ps2, ink, pixel, hose, tv. Only with the user\'s say-so.'),
     tone: z.enum(['clean', 'edgy', 'raw']).optional().describe("How rough its reddit, greentext, meme and dumb videos may be: clean (no swearing), edgy (dark humour, mild swearing, strong words censored), raw (swearing allowed; never slurs). The user's call: only when they ask."),
     status: z.enum(['warming', 'active', 'paused']).optional(),
     created_on: z.string().optional().describe('YYYY-MM-DD the account was made'),
@@ -684,7 +709,7 @@ export const TOOLS: ToolDef[] = [
   { name: 'list_presets', title: 'List presets', kind: 'read', where: 'main', description: 'The reel presets, one line each; with preset, that one\'s fields, types and defaults.', input: S.list_presets },
   { name: 'list_reels', title: 'List reels', kind: 'read', where: 'main', description: 'Reels in the hub with status, length, render path and latest metrics.', input: S.list_reels },
   { name: 'get_reel', title: 'Get reel', kind: 'read', where: 'main', description: 'One reel\'s full field values, caption and timing.', input: S.get_reel },
-  { name: 'list_formats', title: 'List formats', kind: 'read', where: 'main', description: 'Reel formats to start from (Would you copy this?, 30-second explainer, Myth vs data, Paper-trade diary, Same-day news, POV meme, for the meme styles Reddit story, Greentext, Meme slideshow, Dumb edit, for the stickman style Stickman explainer and Stickman versus, and for the blox style Blocky rant, Blocky skit and Blocky dance): when to use each, the job of every beat and hooks to test. Their content is example data to replace.', input: S.list_formats },
+  { name: 'list_formats', title: 'List formats', kind: 'read', where: 'main', description: 'Reel formats to start from (Would you copy this?, 30-second explainer, Myth vs data, Paper-trade diary, Same-day news, POV meme, for the meme styles Reddit story, Greentext, Meme slideshow, Dumb edit, for the stickman style Stickman explainer and Stickman versus, for the blox style Blocky rant, Blocky skit and Blocky dance, and UI motion, Lecture, What if (space), What if (stickman), Survival story, Backyard cutaway, 3D diorama (build it up, years pass, disasters, two blocks) and PS2 cutscene skit): when to use each, the job of every beat and hooks to test. Their content is example data to replace.', input: S.list_formats },
   { name: 'create_reel', title: 'Create reel', kind: 'write', where: 'main', description: 'Create a reel from a format (recommended) or a preset. Missing fields use the defaults (examples: replace every example line and number with real content for the product this reel is about). The hub opens it in Studio.', input: S.create_reel },
   { name: 'update_reel', title: 'Update reel', kind: 'write', where: 'main', description: 'Change a reel\'s fields, title, caption, hashtags or style. A rendered reel goes back to draft when its content changes.', input: S.update_reel },
   { name: 'duplicate_reel', title: 'Duplicate reel', kind: 'write', where: 'main', description: 'Copy a reel (for variations / A-B hooks).', input: S.duplicate_reel },
@@ -708,6 +733,8 @@ export const TOOLS: ToolDef[] = [
   { name: 'post_failed', title: 'Post did not go up', kind: 'write', where: 'main', description: "A post you pressed Post / Share / Publish on never showed up on the profile (or in the platform's Published list): gives today's post slot back so it can be tried once more. Only after you looked, at least two minutes after sending. Refused when a post was recorded as live there since (mark_posted / log_posts), and after two a day per platform.", input: S.post_failed },
   { name: 'list_media', title: 'Backgrounds and memes', kind: 'read', where: 'main', description: "The user's own media for the meme styles: background videos (Backgrounds folder) for narrated reels, and meme templates, reaction pictures and clips (Memes folder) for meme reels. Returns file paths to put in a reel (fields.video, or an image panel's a); with look, small pictures of the images.", input: S.list_media },
   { name: 'find_clips', title: 'Find stream clips', kind: 'read', where: 'main', description: "Clipping style: the top Twitch / Kick clips (by views, last day or week) of the streamers set for the account on the Styles page, read off their clips pages. Each has its address, title, length and views, and whether a reel already uses it. save_clip the one to cut. With video (a YouTube address the user gave, in chat or in the reel queue): that video's most replayed parts off YouTube's own replay graph, with chapters, for save_clip with start and seconds.", input: S.find_clips },
+  { name: 'find_archive', title: 'Find free footage and music', kind: 'read', where: 'main', description: "Search the Internet Archive for footage and music a posted reel can use for free: public-domain films (the Prelinger Archives: old ads, educational, industrial and home movies) and public-domain 78 rpm records (1925 or earlier). No key, no account. Returns each with its id, year, length and downloads, plus small cover pictures to pick by looking. Then save_archive. Concert recordings and newer records are never listed: they are not free to post.", input: S.find_archive },
+  { name: 'save_archive', title: 'Save free footage or music', kind: 'export', where: 'main', description: "Download one find_archive result into the Footage folder (a film, MP4) or the Music folder (a record, MP3) and return its path and the credit line. A film is b-roll: a reel's video (fields.video with bg_start / a screen beat's second, or a clip reel), a few seconds of it a cut, never the whole film. A record is a reel's music file (fields.music). The credit line goes in the post caption.", input: S.save_archive },
   { name: 'find_images', title: 'Find pictures', kind: 'read', where: 'main', description: 'Search Pinterest for pictures for a photo slideshow (read in a hidden window of the hub, signed out: no account is used and nothing counts toward a warm-up). Returns each picture small, with an id, its shape and what its Pin says. Pick by looking: one look for the whole slideshow, upright pictures, no text or watermark on them, no recognisable faces. Then save_images.', input: S.find_images },
   { name: 'find_slideshows', title: 'Study slideshows', kind: 'read', where: 'main', description: "Study TikTok photo slideshows (read in a hidden window of the hub, signed out: no account is used). With query \"@creator\": that creator's photo posts with their numbers, most liked first. With url: one post's slides as pictures, its caption, sound and numbers, to see what its hook is, how it is built and how it looks. Use what works (the hook's angle, the structure, the slide count, the look) for our own slideshow with our own words and pictures; never copy a post's sentences or reuse its slides.", input: S.find_slideshows },
   { name: 'save_images', title: 'Save pictures', kind: 'export', where: 'main', description: "Save pictures from find_images into the Images folder at full size and return their file paths, for a slideshow's photo slides (beats: seconds | text | photo | <path>). Each picture must be changed before it is posted: our own words on it, plus a crop, flip, tint or grain (the slides style's rules).", input: S.save_images },
@@ -755,6 +782,7 @@ export const TOOLS: ToolDef[] = [
   { name: 'save_long_video', title: 'Save long video', kind: 'write', where: 'main', description: 'Start or change a long YouTube video (5-20 min, 16:9): its title, script sections, description, tags, thumbnail words, files and status. See "Long videos" in get_overview.', input: S.save_long_video },
   { name: 'list_long_videos', title: 'Long videos', kind: 'read', where: 'main', description: 'The long videos with their status; with id, one in full.', input: S.list_long_videos },
   { name: 'narrate_long_video', title: 'Narrate long video', kind: 'export', where: 'main', description: "Buy the narration of a long video's script from ElevenLabs in the user's default voice: one MP3 per section in the video's folder, with its length. Only new or changed sections are bought. Costs ElevenLabs credits (about one per character).", input: S.narrate_long_video },
+  { name: 'render_cover', title: 'Render cover', kind: 'export', where: 'renderer', description: "Make a Short / reel's cover (thumbnail): its strongest frame with 2-5 big words, 1080x1920, saved next to the video. browser_attach_reel then says how to set it on Instagram, TikTok, Facebook and YouTube. Returns the picture to check: the words must read at the size of a grid tile.", input: S.render_cover },
   { name: 'render_thumbnail', title: 'Render thumbnail', kind: 'export', where: 'renderer', description: "Draw a long video's 1280x720 YouTube thumbnail from its thumbnail_text, thumbnail_bg and thumbnail_side, and save it in its folder. Returns the picture to check.", input: S.render_thumbnail },
   { name: 'render_kip', title: 'Render Kip', kind: 'export', where: 'renderer', description: "Render Kip, the mascot, presenting each narrated section of a long video: one 720x1280 MP4 per section on a green screen (#00d800), its mouth moving with that section's narration, its moves from the section's kip field (or automatic). Put them in the edit over the footage with chroma_key on.", input: S.render_kip },
   { name: 'browser_attach_long', title: 'Attach long video', kind: 'write', where: 'main', description: "Put a long video's MP4 into YouTube Studio's upload dialog (site youtube; open Studio's Create > Upload videos first, or the hub opens it).", input: S.browser_attach_long },
@@ -830,9 +858,12 @@ ${brand}${pack}
 
 How to work:
 - get_overview first, then get_performance (what worked, the user's feedback, learnings) and get_playbook (hook rules, caption template, checklist, product notes).${krypt ? '' : ' The built-in playbook was written for a crypto account: its rules apply to any brand; where it names Krypt products or crypto topics, use this brand profile instead.'} list_formats has the proven structures, list_presets the presets (with preset: <id>, its fields).
-- Make a reel: create_reel with a format (or a preset) and the fields to change. Formats and presets come filled with example content: replace every example line and number with real, sourced content for the product the reel is about (the reddit, greentext, meme and dumb styles are made-up stories and jokes on purpose, as their style rules say; stickman and blocky-avatar scenes are made-up, the facts in them are not). preview_reel to look at frames, update_reel to fix, render_reel for the MP4. One voice per reel: new ones start with the user's voice from the Voices page, so leave the voice fields alone unless the user asks.
+- Make a reel: create_reel with a format (or a preset) and the fields to change. Formats and presets come filled with example content: replace every example line and number with real, sourced content for the product the reel is about (the reddit, greentext, meme and dumb styles are made-up stories and jokes on purpose, as their style rules say; stickman, blocky-avatar, survival, what-if, cutaway, diorama and PS2 cutscene scenes are made-up, the facts, prices and numbers in them are not). preview_reel to look at frames, update_reel to fix, render_reel for the MP4. One voice per reel: new ones start with the user's voice from the Voices page, so leave the voice fields alone unless the user asks.
 - "Make it like this": for a reference video the user points at (Research > Reference videos, or a file path for add_reference_video), get_reference_video, then create_reel with like: <its id> written to its timing, and note_reference_video what you saw. ${REF_RULES}
 - make_hook_variants gives 2-4 openings of one reel to test; render each, they post as separate Trial Reels.
+- Covers: a Short or reel gets its own cover (render_cover: its strongest frame and 2-5 big words, one *starred*) before it is posted; browser_attach_reel says how to set it on each platform.
+- No frozen picture: the main picture never sits still for more than about 3 s (changing captions and slow zooms do not count). preview_reel and render_reel name any "Still picture" stretch: fix it (an action, a prop coming in, a new shot, a reveal, or split the line) before posting.
+- Sound has a cause: every effect answers what made it, where, and why now (coins on the coins, a door when a door moves); real recorded sounds are line flags (coin, cash, paper, door, keys, step, glass, thud, phone...; the beats help lists them), props and actions in the drawn styles get theirs on their own, and each place gets its own quiet background sound (Place sound: auto). Save big hits (boom, impact, stinger) for the one or two moments that earn them; the voice always stays on top.
 ${hooksNote()}
 - The platforms are used through the browser_* tools only (pages come back as numbered lines; click by number), in the user's own Chrome through the Krypt Marketo extension; list_accounts says which Chrome profile. Another browser tool would bypass the limits. Sign-ins, codes and security checks are the user's: if an account is not signed in or Chrome is not connected, tell the user.
 - The hub enforces the limits: likes, saves, follows and the rest are counted and refused past the day's number, and a watch-only or paused account gets none. A refusal is final for the day. Posts, comments, messages, unfollows and reposts go out when you click unless the user switched on "Ask me before the AI posts" (then the click waits for their answer); deletes, blocks, reports and settings changes always ask. Get the text right before you click.
@@ -868,6 +899,78 @@ const CAMPAIGN_RULES = `- Content Rewards campaigns (list_campaigns): brands pay
 type Handler = (args: never, ctx: MainCtx) => ToolOutcome | Promise<ToolOutcome>;
 const ok = (text: string): ToolOutcome => ({ ok: true, text });
 
+// ── Dates the AI gives ─────────────────────────────────────────────────────
+/** A full ISO 8601 time with its zone ("2026-11-26T15:04:00Z", "…+01:00"): the only kind a posted time is believed in. */
+const ZONED_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/i;
+const DAY_MS = 86_400_000;
+/** A time this far ahead of the hub's clock is wrong (a local time sent as UTC, say), not early. */
+const AHEAD_MS = 5 * 60_000;
+/** mark_posted is for a post that just went live: a time further back than this is a wrong date (older posts go through log_posts). */
+const MARK_BACK_MS = 7 * DAY_MS;
+
+/** The same date and time in this year (or the last, around New Year) lands in the last day and a half: the year is the AI's mistake. */
+function wrongYear(t: number, now: number): boolean {
+  const d = new Date(t);
+  const y = new Date(now).getUTCFullYear();
+  return [y, y - 1].some((yy) => {
+    if (yy === d.getUTCFullYear()) return false;
+    const c = new Date(t);
+    c.setUTCFullYear(yy);
+    return c.getTime() >= now - 1.5 * DAY_MS && c.getTime() <= now + AHEAD_MS;
+  });
+}
+
+/**
+ * A posted_at as an AI gave it, made safe for the spacing between posts (it counts from the newest posted time: a date
+ * only reads as midnight UTC, a wrong year or zone as hours or months off, and the next post would go up inside the user's
+ * gap). A full ISO time with its zone is kept. One in the future, with the wrong year or (with `back`) further back than
+ * that becomes now, and so does anything else. `old` (log_posts: posts read off a profile): a date from before today, with
+ * or without a time, stays as the page gave it, and no posted_at stays none. `fixed`: it was not used as given.
+ */
+function safePostedAt(v: string | undefined, o: { back?: number; old?: boolean } = {}, now = Date.now()): { at: string | undefined; fixed: boolean } {
+  if (v === undefined) return { at: o.old ? undefined : new Date(now).toISOString(), fixed: false };
+  const s = v.trim();
+  const t = Date.parse(s);
+  const fallback = { at: new Date(now).toISOString(), fixed: true };
+  if (!Number.isFinite(t) || t > now + AHEAD_MS || wrongYear(t, now)) return fallback;
+  if (ZONED_TIME.test(s)) return o.back !== undefined && t < now - o.back ? fallback : { at: new Date(t).toISOString(), fixed: false };
+  // A date only, or a time with no zone: believable only for an older post, from a day before today.
+  if (o.old && /^\d{4}-\d{2}-\d{2}/.test(s) && s.slice(0, 10) < localDate(new Date(now))) return { at: s, fixed: false };
+  return fallback;
+}
+/** list_sessions with_items: the items shown per session (the newest). */
+const SESSION_ITEMS_SHOWN = 40;
+
+/** What the AI is told when its posted_at was not used. */
+const POSTED_AT_NOTE = 'posted_at needs a full ISO time with its zone, as the hub\'s clock has it (e.g. 2026-11-26T15:04:00Z), never a date only, a guessed year or a time in the future';
+
+/** A snapshot's `at`: any date the hub can read, as ISO (anything else, "now" say, would sort after every real time). Unreadable = now. */
+const isoAt = (v: string | undefined): string | undefined => {
+  if (v === undefined) return undefined;
+  const t = Date.parse(v.trim());
+  return Number.isFinite(t) && t <= Date.now() + AHEAD_MS ? new Date(t).toISOString() : new Date().toISOString();
+};
+
+// ── The tab an AI app is working in ────────────────────────────────────────
+type SiteArg = z.infer<typeof site>;
+/** Per AI app: the account and window its latest listing came from. Element numbers belong to that listing. */
+const lastTab = new Map<string, { handle: string; site: NonNullable<SiteArg> }>();
+/**
+ * The account and window a browser tool acts on. `follow` (a click, typing, a key): a site or handle left out means the
+ * tab the app last listed, so element N is the one it saw, not the same number in the active account's Instagram tab.
+ */
+function tabFor(ctx: MainCtx, handle: string | undefined, s: SiteArg, follow: boolean): { handle: string | undefined; site: SiteArg } {
+  const last = lastTab.get(ctx.client);
+  let h = handle;
+  let st = s;
+  if (follow && last) {
+    if (h === undefined && (st === undefined || st === last.site)) h = last.handle;
+    if (st === undefined && h !== undefined && sameHandle(h, last.handle)) st = last.site;
+  }
+  lastTab.set(ctx.client, { handle: h ?? store.get().settings.handle, site: st ?? 'instagram' });
+  return { handle: h, site: st };
+}
+
 const fmtNum = (n: number | undefined): string => (n === undefined ? '—' : n.toLocaleString('en-US'));
 
 /** The style / vote fields for create_reel and update_reel. */
@@ -875,12 +978,13 @@ function styleTag(style?: string, vote?: z.infer<typeof voteSchema>): Partial<Re
   const out: Partial<Reel> = {};
   if (style !== undefined) {
     const st = styleById(style);
-    if (!st) throw new Error(`No style "${style}". Styles: ${allStyles().map((x) => x.label).join(', ')} (krypt = main).`);
+    if (!st) throw new Error(`No style "${style}". Styles: ${rankedStyles().map((x) => x.label).join(', ')} (krypt = main).`);
     out.style = st.id;
   }
   if (vote) {
     out.vote = { series: vote.series.trim(), part: vote.part, a: vote.a.trim(), b: vote.b.trim(), ...(vote.finale ? { finale: true } : {}) };
-    out.style = 'vote';
+    // A vote story in another style that ends on a vote (the survival style's parts) keeps that style.
+    if (style === undefined) out.style = 'vote';
   }
   return out;
 }
@@ -892,8 +996,8 @@ function postedAt(r: Reel): string {
 }
 
 /** Whether a comment vote story has its votes counted and its next part not made yet. */
-function voteWaiting(): boolean {
-  const parts = store.get().reels.filter((r) => r.vote);
+function voteWaiting(style?: string): boolean {
+  const parts = store.get().reels.filter((r) => r.vote && (!style || (r.style ?? 'vote') === style));
   const series = [...new Set(parts.map((r) => r.vote!.series.toLowerCase()))];
   return series.some((key) => {
     const mine = parts.filter((r) => r.vote!.series.toLowerCase() === key).sort((x, y) => x.vote!.part - y.vote!.part || x.createdAt.localeCompare(y.createdAt));
@@ -928,7 +1032,7 @@ function reelLine(r: Reel): string {
   const res = resultOf(r);
   const metrics = res ? ` · ${fmtNum(res.m.views)} views, hold ${pct(res.hold, 0)}, score ${res.score}` : '';
   const tags = [r.style && r.style !== 'main' ? `style ${r.style}` : '', r.vote ? `vote "${r.vote.series}" part ${r.vote.part}${r.vote.finale ? ' (finale)' : ` A: ${r.vote.a} / B: ${r.vote.b}${r.vote.winner ? ` → ${r.vote.winner.toUpperCase()} won ${r.vote.votes?.a ?? 0}-${r.vote.votes?.b ?? 0}` : ''}`}` : '', r.format ? `format ${r.format}` : '', r.hookStyle ? `hook ${r.hookStyle}` : '', r.group ? `hook test ${r.group} ${r.variant}: ${r.hook ?? ''}` : '', r.trial ? 'trial' : ''].filter(Boolean).join(' · ');
-  return `${r.id} · "${r.title}" · ${r.preset} · ${t.total.toFixed(1)}s · ${r.status}${tags ? ` · ${tags}` : ''}${r.renderPath ? ` · ${r.renderPath}` : ''}${r.postedUrl ? ` · ${r.postedUrl}` : ''}${r.xUrl ? ` · X: ${r.xUrl}` : ''}${r.tiktokUrl ? ` · TikTok: ${r.tiktokUrl}` : ''}${r.shortsUrl ? ` · Short: ${r.shortsUrl}` : ''}${(['facebook', 'threads', 'pinterest'] as const).map((s) => (r.links?.[s] ? ` · ${SITE_LABEL[s]}: ${r.links[s]!.url}` : '')).join('')}${metrics}`;
+  return `${r.id} · "${r.title}" · ${r.preset} · ${t.total.toFixed(1)}s · ${r.status}${tags ? ` · ${tags}` : ''}${r.renderPath ? ` · ${r.renderPath}` : ''}${r.cover?.path ? ' · cover' : ''}${r.postedUrl ? ` · ${r.postedUrl}` : ''}${r.xUrl ? ` · X: ${r.xUrl}` : ''}${r.tiktokUrl ? ` · TikTok: ${r.tiktokUrl}` : ''}${r.shortsUrl ? ` · Short: ${r.shortsUrl}` : ''}${(['facebook', 'threads', 'pinterest'] as const).map((s) => (r.links?.[s] ? ` · ${SITE_LABEL[s]}: ${r.links[s]!.url}` : '')).join('')}${metrics}`;
 }
 
 function resultLine(x: ReelResult): string {
@@ -1049,10 +1153,10 @@ function stylesNote(): string {
     const n = styleName(x, d.brand);
     return `${n.name} (${n.label})`;
   };
-  const rules = allStyles().filter((x) => x.id !== 'main' && used.has(x.id)).map((x) => `  - ${label(x.id)}: ${x.rules}`);
-  const others = allStyles().filter((x) => !used.has(x.id)).map((x) => label(x.id));
+  const rules = rankedStyles().filter((x) => x.id !== 'main' && used.has(x.id)).map((x) => `  - ${label(x.id)}: ${x.rules}`);
+  const others = rankedStyles().filter((x) => !used.has(x.id)).map((x) => label(x.id));
   return [
-    `- Channel styles (the Styles page, where the user switches each one on or off; every built-in style starts on; the user can also say "run the vote style on @x"): each account line says which styles it runs, its main style first. With more than one, get_today names the style the next reel is in (from the mix the user set on the Styles page; with none set the main style gets about half), one style per reel, and pass style to create_reel. Change an account's styles (save_account styles) only when the user asks.`,
+    `- Channel styles (the Styles page, where the user switches each one on or off; every built-in style starts on; the user can also say "run the vote style on @x"): each account line says which styles it runs, its main style first. With more than one, get_today names the style the next reel is in (from the mix the user set on the Styles page; with none set it follows the style ranking: the best-ranked styles get the most), one style per reel, and pass style to create_reel. Change an account's styles (save_account styles) only when the user asks.`,
     !rules.length ? '' : inline ? `  How to make the styles in use:\n${rules.join('\n')}` : `  How to make a style: get_today gives the rules of the style that is due. For a reel in any other style, list_formats with style: <its label> returns that style's rules and its format; read them before create_reel. Never make a styled reel from memory of another style's rules.`,
     others.length ? `  Styles the user switched off (never make these unless they ask for one): ${others.join(', ')}.` : '',
     '  The user can also have styles of their own (the Styles page, "New style"): when they ask for a new kind of video, save_style makes one from a description (delete_style removes one); it is used once an account runs it.',
@@ -1296,6 +1400,10 @@ export const setKipShowsInstructions = (v: boolean): void => {
   kipShowsInstructions = v;
 };
 
+/** The AI app whose use_profile is switching the hub right now (null = the user, or a run's script). */
+let switchBy: string | null = null;
+export const profileSwitchBy = (): string | null => switchBy;
+
 export const MAIN_HANDLERS: Record<string, Handler> = {
   get_overview: (_a: unknown, ctx: MainCtx) => {
     const d = store.get();
@@ -1333,14 +1441,14 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
   },
 
   list_media: (a: z.infer<typeof S.list_media>) => {
-    const name = a.kind === 'memes' ? 'Memes' : a.kind === 'campaigns' ? 'Campaigns' : a.kind === 'images' ? 'Images' : 'Backgrounds';
+    const name = a.kind === 'memes' ? 'Memes' : a.kind === 'campaigns' ? 'Campaigns' : a.kind === 'images' ? 'Images' : a.kind === 'footage' ? 'Footage' : a.kind === 'music' ? 'Music' : 'Backgrounds';
     if (a.kind === 'campaigns' && !mediaFolders.list('campaigns', a.query ?? '').length)
       return ok(`Nothing in the Campaigns folder (${mediaFolders.folder('campaigns')})${a.query ? ' matching that' : ''}. Campaign files (logos, footage) are downloaded by the user from the campaign page into its folder (Create > Campaigns > Folder). If a campaign needs one, put it in the report as NEEDS YOU.`);
     const dir = mediaFolders.folder(a.kind);
     const files = mediaFolders.list(a.kind, a.query ?? '');
     if (!files.length)
       return ok(
-        `The ${name} folder (${dir}) has ${a.query ? 'nothing matching that' : 'nothing in it yet'}. ${a.kind === 'backgrounds' ? 'Use a built-in background (bg runner, bounce or slice), or save a part of a YouTube video the user gave with save_clip and use that.' : a.kind === 'images' ? 'find_images searches Pinterest for pictures and save_images puts the ones you pick here.' : 'Use the mascot (char panels), text panels or a part of a saved clip (screen panels) instead.'} The user fills it on the Styles page (Open folder) or by dropping files into ${dir}.`,
+        `The ${name} folder (${dir}) has ${a.query ? 'nothing matching that' : 'nothing in it yet'}. ${a.kind === 'backgrounds' ? 'Use a built-in background (bg runner, bounce or slice), or save a part of a YouTube video the user gave with save_clip and use that.' : a.kind === 'images' ? 'find_images searches Pinterest for pictures and save_images puts the ones you pick here.' : a.kind === 'footage' || a.kind === 'music' ? 'find_archive searches the Internet Archive for public-domain films and records, and save_archive puts the one you pick here.' : 'Use the mascot (char panels), text panels or a part of a saved clip (screen panels) instead.'} The user fills it on the Styles page (Open folder) or by dropping files into ${dir}.`,
       );
     const lines = files.map((f, i) => `${i + 1}. ${f.path} (${f.type}, ${f.mb} MB)`);
     const images: Array<{ data: string; mimeType: string }> = [];
@@ -1358,6 +1466,25 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
     const note = a.look ? (shown.length ? `\nPictures, in order: files ${shown.join(', ')}.` : '\n(No pictures could be shown.)') : '';
     return { ok: true, text: `${name} folder: ${dir}\n${lines.join('\n')}${note}`, images: images.length ? images : undefined };
   },
+  find_archive: async (a: z.infer<typeof S.find_archive>) => {
+    const list = await archive.search(a.query, a.kind, a.count ?? 10);
+    if (!list.length) return ok(`Nothing in the ${a.kind === 'film' ? 'Prelinger Archives' : 'public-domain 78s'} for "${a.query}". Try plainer or older words (${a.kind === 'film' ? '"factory", "kitchen", "car", "school", "city traffic", "atom"' : '"jazz", "blues", "ragtime", "waltz", "march", "foxtrot"'}).`);
+    const pics = a.kind === 'film' ? await archive.thumbs(list) : [];
+    const lines = list.map((it, i) => `${i + 1}. id ${it.id} · ${it.title}${it.year ? ` (${it.year})` : ''}${it.minutes !== null ? ` · ${it.minutes} min` : ''} · ${fmtNum(it.downloads)} downloads${a.kind === 'film' && !pics[i] ? ' · (no picture)' : ''}`);
+    const shown = pics.filter((x): x is { data: string; mimeType: string } => !!x);
+    return {
+      ok: true,
+      text: `${a.kind === 'film' ? 'Public-domain films (Prelinger Archives)' : 'Public-domain 78 rpm records (1925 or earlier)'} for "${a.query}", most downloaded first${shown.length ? ', cover pictures in this order' : ''}:\n${lines.join('\n')}\nsave_archive the one that fits with its id. ${a.kind === 'film' ? 'Use a few seconds of it per cut as b-roll (old film reads as "the way it used to be", "what they told us"), never the whole film, and keep our own words and captions on top.' : "A record is a reel's music (fields.music, music_volume about 0.5 under a voice); its crackle and swing suit the meme, story and what-if styles."} Say where it came from in the post caption (the credit line save_archive gives).`,
+      images: shown.length ? shown : undefined,
+    };
+  },
+
+  save_archive: async (a: z.infer<typeof S.save_archive>) => {
+    const r = await archive.save(a.id);
+    const len = r.seconds !== null ? ` · ${Math.floor(r.seconds / 60)}:${String(r.seconds % 60).padStart(2, '0')}` : '';
+    return ok(`Saved ${r.path} (${r.mb} MB${len}).\nCredit for the post caption: ${r.credit}.\nPage: ${r.page}\n${r.path.endsWith('.mp4') ? 'Use it as fields.video: a narrated reel plays it behind the lines (bg video, bg_start = the second to start at); a story screen beat or a clip reel shows from second a. Pick the seconds that match the line; cut often.' : 'Use it as fields.music (music_volume 0.4-0.6 under a voice, up to 0.9 on a wordless reel).'}`);
+  },
+
   find_images: async (a: z.infer<typeof S.find_images>) => {
     const list = await images.search(a.query, a.count ?? 12);
     const pics = await images.thumbs(list);
@@ -1403,7 +1530,7 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
     const tail = 'create_reel with format: <id> starts from one. Every number in a format is an example (the dateline says so): replace them all with real data before rendering.';
     if (!a.style?.trim()) return ok(`${FORMATS.map(formatSummary).join('\n\n')}\n\n${tail}`);
     const st = styleById(a.style);
-    if (!st) throw new Error(`No style "${a.style}". Styles: ${allStyles().map((x) => x.label).join(', ')} (krypt = main).`);
+    if (!st) throw new Error(`No style "${a.style}". Styles: ${rankedStyles().map((x) => x.label).join(', ')} (krypt = main).`);
     const n = styleName(st, store.get().brand);
     // The style's own format, plus the others made for it (their ids start with the same word: blox-rant, blox-skit…).
     const stem = st.format?.split('-')[0];
@@ -1419,8 +1546,16 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
   },
 
   list_reels: (a: z.infer<typeof S.list_reels>) => {
-    const reels = store.get().reels.filter((r) => !a.status || r.status === a.status);
-    return ok(reels.length ? reels.map(reelLine).join('\n') : 'No reels yet. create_reel makes one.');
+    const reels = store
+      .get()
+      .reels.filter((r) => !a.status || r.status === a.status)
+      .sort((x, y) => (y.createdAt ?? '').localeCompare(x.createdAt ?? ''));
+    if (!reels.length) return ok(a.status ? `No ${a.status} reels.` : 'No reels yet. create_reel makes one.');
+    // Newest first, a page at a time: a hub used for months has hundreds, too many for one answer.
+    const from = a.offset ?? 0;
+    const page = reels.slice(from, from + (a.limit ?? 40));
+    const older = reels.length - from - page.length;
+    return ok(`${page.length ? page.map(reelLine).join('\n') : `Nothing past the first ${reels.length}.`}${older > 0 ? `\n(${older} older reel${older === 1 ? '' : 's'} not shown: list_reels with offset ${from + page.length} for the next ones.)` : ''}`);
   },
 
   get_reel: (a: z.infer<typeof S.get_reel>) => ok(reelDetail(store.findReel(a.id))),
@@ -1544,16 +1679,21 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
     })();
     const platform: Site =
       a.platform ?? (/(^|\.)(youtube\.com|youtu\.be)$/i.test(host) ? 'youtube' : /(^|\.)(x|twitter)\.com$/i.test(host) ? 'x' : /(^|\.)tiktok\.com$/i.test(host) ? 'tiktok' : /(^|\.)(facebook\.com|fb\.watch)$/i.test(host) ? 'facebook' : /(^|\.)threads\.(com|net)$/i.test(host) ? 'threads' : /(^|\.)(pinterest\.[a-z.]+|pin\.it)$/i.test(host) ? 'pinterest' : 'instagram');
-    const at = a.posted_at ?? new Date().toISOString();
+    const when = safePostedAt(a.posted_at, { back: MARK_BACK_MS });
+    const at = when.at!;
+    const fixedNote = when.fixed ? `\n(posted_at "${a.posted_at}" was not used, so it is recorded as posted now: ${POSTED_AT_NOTE}, and no more than 7 days back.)` : '';
     const by = store.findAccount(a.handle ?? store.get().settings.handle).handle;
+    const split = seriesProblem(store.get().reels, store.get().posts, store.findReel(a.id), platform, by);
+    const splitNote = split ? `
+SERIES SPLIT: ${split} It is live now, so it is recorded; tell the user, and delete it from ${SITE_LABEL[platform]} only if they say so.` : '';
     const extra: Partial<Reel> = { ...(platform === 'instagram' && a.trial !== undefined ? { trial: a.trial } : {}), ...(a.caption !== undefined ? { caption: a.caption } : {}) };
     const { reel, submission: sub } = store.markPosted(a.id, platform, a.url, at, by, extra, a.kind ?? 'video');
     ctx.focus({ page: 'library', reelId: reel.id });
-    if (!sub) return ok(`Marked posted: ${reelLine(reel)}.`);
+    if (!sub) return ok(`Marked posted: ${reelLine(reel)}.${fixedNote}${splitNote}`);
     const c = store.findCampaign(sub.campaignId);
     const mins = Math.max(0, Math.round((Date.parse(sub.deadline) - Date.now()) / 60_000));
     return ok(
-      `Marked posted: ${reelLine(reel)}.\nNOW, before anything else (${mins} min left; Content Rewards refuses it after 30 min from posting): submit it to "${c.title}". browser_open with handle "${by}", site "rewards" and url "${c.url}", press its "Submit clip" button, pick this ${SITE_LABEL[platform]} account if asked, paste ${a.url}, send it, check it shows as pending, then record_submission id "${sub.id}" status "submitted" (or "missed" with a note if it won't take it). A post goes to one campaign only, once.`,
+      `Marked posted: ${reelLine(reel)}.\nNOW, before anything else (${mins} min left; Content Rewards refuses it after 30 min from posting): submit it to "${c.title}". browser_open with handle "${by}", site "rewards" and url "${c.url}", press its "Submit clip" button, pick this ${SITE_LABEL[platform]} account if asked, paste ${a.url}, send it, check it shows as pending, then record_submission id "${sub.id}" status "submitted" (or "missed" with a note if it won't take it). A post goes to one campaign only, once.${fixedNote}${splitNote}`,
     );
   },
 
@@ -1619,7 +1759,7 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
     const r = store.findReel(a.id);
     const { id, at, avg_watch_seconds, skip_rate, platform, ...m } = a;
     if (platform && !linkOn(r, platform)) throw new Error(`${r.id} is not marked posted on ${SITE_LABEL[platform]}: mark_posted it there first.`);
-    const snap = { ...m, ...(avg_watch_seconds !== undefined ? { avgWatch: avg_watch_seconds } : {}), ...(skip_rate !== undefined ? { skipRate: skip_rate } : {}), ...(platform && platform !== 'instagram' ? { site: platform } : {}), at: at ?? new Date().toISOString() };
+    const snap = { ...m, ...(avg_watch_seconds !== undefined ? { avgWatch: avg_watch_seconds } : {}), ...(skip_rate !== undefined ? { skipRate: skip_rate } : {}), ...(platform && platform !== 'instagram' ? { site: platform } : {}), at: isoAt(at) ?? new Date().toISOString() };
     const { reel } = store.updateReel(id, { metrics: [...(r.metrics ?? []), snap] });
     return ok(`Recorded ${SITE_LABEL[platform ?? 'instagram']} metrics: ${reelLine(reel)}.`);
   },
@@ -1631,7 +1771,9 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
     const lines: string[] = [];
     lines.push(`Posted: ${posted.length} reel(s), ${results.length} with metrics. Score 0-100 weighs hold (avg watch / length) 30, shares 20, follows 15, saves 10, likes 10, skip 10, comments 5 (rates per reach). It compares our own reels; it is not an Instagram number.`);
     const missing = posted.filter((r) => !r.metrics?.length);
-    if (missing.length) lines.push(`No metrics yet: ${missing.map((r) => `${r.id} "${r.title}" ${r.postedUrl ?? ''}`).join('; ')}`);
+    // The newest few: the list only grows on an install where numbers are not read back.
+    const MISSING_SHOWN = 15;
+    if (missing.length) lines.push(`No metrics yet: ${missing.slice(0, MISSING_SHOWN).map((r) => `${r.id} "${r.title}" ${r.postedUrl ?? ''}`).join('; ')}${missing.length > MISSING_SHOWN ? ` (+${missing.length - MISSING_SHOWN} older ones not shown)` : ''}`);
     if (results.length) lines.push(`Ranked:\n${results.slice(0, a.limit ?? 30).map((x) => `- ${resultLine(x)}`).join('\n')}`);
     const groups = hookGroups(d.reels);
     if (groups.length)
@@ -1770,7 +1912,7 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
         );
       }
     }
-    const s = store.addAccountSnapshot({ handle, ...(a.site !== 'instagram' ? { site: a.site } : {}), followers: a.followers, following: a.following, posts: a.posts, at: a.at });
+    const s = store.addAccountSnapshot({ handle, ...(a.site !== 'instagram' ? { site: a.site } : {}), followers: a.followers, following: a.following, posts: a.posts, at: isoAt(a.at) });
     return ok(`Recorded ${s.handle}${onNet(s.site)}: ${s.followers} followers, ${s.following} following, ${s.posts} posts at ${s.at}.`);
   },
 
@@ -1823,7 +1965,11 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
       list
         .map((s) => {
           const head = `${s.id} · ${s.startedAt.slice(0, 16)} · ${s.site && s.site !== 'instagram' ? `${NETWORK_LABEL[s.site as Network] ?? s.site} ` : ''}${s.kind} · ${s.handle} · ${s.minutes} min · ${s.niche ?? '—'} · ${s.likes}L ${s.site === 'x' || s.site === 'threads' || s.site === 'facebook' ? `${s.reposts ?? 0}R` : `${s.saves}S`} ${s.follows}F ${s.comments}C / ${s.watched} posts${s.notes ? ` · ${s.notes}` : ''}`;
-          return a.with_items ? `${head}\n${s.items.map((i) => `  - [${i.actions.join(',')}] ${i.creator ?? ''} ${i.url}${i.title ? ` — ${i.title}` : ''}`).join('\n')}` : head;
+          if (!a.with_items) return head;
+          // The newest items of each: a long session holds hundreds.
+          const shown = s.items.slice(-SESSION_ITEMS_SHOWN);
+          const more = s.items.length - shown.length;
+          return `${head}\n${more > 0 ? `  (${more} earlier item${more === 1 ? '' : 's'} not shown)\n` : ''}${shown.map((i) => `  - [${i.actions.join(',')}] ${i.creator ?? ''} ${i.url}${i.title ? ` — ${i.title}` : ''}`).join('\n')}`;
         })
         .join('\n'),
     );
@@ -1891,16 +2037,22 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
 
   log_posts: (a: z.infer<typeof S.log_posts>, ctx) => {
     const acct = store.findAccount(a.handle ?? store.get().settings.handle);
+    const fixed: string[] = [];
     const items = a.posts.map((p) => {
       const site = p.site ?? siteOfUrl(p.url);
       if (!site) throw new Error(`Can't tell the platform of ${p.url}: pass site.`);
       if (!p.title && !store.get().posts.some((x) => x.key === postKey(p.url))) throw new Error(`${p.url} is not in the post log yet: pass its title.`);
       const account = site === 'instagram' ? undefined : site === 'youtube' ? acct.youtube?.channelName : netOf(acct, site)?.handle;
-      return { site, handle: acct.handle, account, url: p.url, postedAt: p.posted_at, title: p.title ?? '', topic: p.topic, tools: p.tools, kind: p.kind, views: p.views, likes: p.likes, comments: p.comments, reelId: p.reel_id, source: 'imported' as const };
+      const when = safePostedAt(p.posted_at, { old: true });
+      // A post in the log already keeps the time it has; a new one is recorded as posted now.
+      const known = when.fixed && store.get().posts.some((x) => x.key === postKey(p.url));
+      if (when.fixed && !known) fixed.push(`${p.url} ("${p.posted_at}")`);
+      return { site, handle: acct.handle, account, url: p.url, postedAt: known ? undefined : when.at, title: p.title ?? '', topic: p.topic, tools: p.tools, kind: p.kind, views: p.views, likes: p.likes, comments: p.comments, reelId: p.reel_id, source: 'imported' as const };
     });
     const r = store.logPosts(items);
     ctx.focus({ page: 'results' });
-    return ok(`Post log: ${r.added.length} added, ${r.updated.length} updated (${store.get().posts.length} posts in all).${r.added.length ? `\nAdded:\n${r.added.map((p) => `- ${postLine(p)}`).join('\n')}` : ''}`);
+    const fixedNote = fixed.length ? `\nRecorded as posted now, because their posted_at could not be used (${POSTED_AT_NOTE}; a post from before today may give its date as the page shows it): ${fixed.join(', ')}. If one went up earlier, log it again with its real time.` : '';
+    return ok(`Post log: ${r.added.length} added, ${r.updated.length} updated (${store.get().posts.length} posts in all).${r.added.length ? `\nAdded:\n${r.added.map((p) => `- ${postLine(p)}`).join('\n')}` : ''}${fixedNote}`);
   },
 
   list_posts: (a: z.infer<typeof S.list_posts>) => {
@@ -2026,6 +2178,7 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
       thisRun.forEach((x) => enabled.add(x));
       const where = a.browser === 'chrome' ? `in the user's Chrome${st?.connected === false ? ', CHROME NOT CONNECTED: tell the user' : ''}` : "in the user's Chrome";
       out.push('', `## ${a.handle} (${where})${a.status === 'paused' ? ' · PAUSED: leave it alone today' : ''}${sites.length ? '' : ' · no platform turned on (the user picks them on the Accounts page)'}`);
+      for (const owed of seriesOwed(d.reels, d.posts, a.handle)) out.push(`- SERIES: ${owed} Post it there (counts as that platform's post) before a new series part goes anywhere else.`);
       for (const site of sites) {
         const L = SITE_LABEL[site];
         const signed = site === 'instagram' ? st?.loggedIn : site === 'youtube' ? st?.youtube?.loggedIn : st?.[site as Network]?.loggedIn;
@@ -2304,14 +2457,17 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
   },
 
   krypt_tools: (a: z.infer<typeof S.krypt_tools>) => {
-    if (!a.tool) return ok(`Krypt tools (krypt.cc/tools), ${KRYPT_TOOLS.length} in all. krypt_tools with a tool id returns everything about it: what it does in full, price, platforms, reel angles and what never to claim.\n${KRYPT_TOOLS.map((t) => `- ${kryptToolSummary(t)}`).join('\n')}\n\nRules for reels about them:\n${KRYPT_PACK_RULES.map((r) => `- ${r}`).join('\n')}`);
+    if (!a.tool) return ok(`Krypt tools (krypt.cc/tools), ${KRYPT_TOOLS.length} in all. krypt_tools with a tool id returns everything about it: what it does in full, price, platforms, reel angles and what never to claim.\n${kryptToolsFeaturedFirst().map((t) => `- ${kryptToolSummary(t)}`).join('\n')}\n\nRules for reels about them:\n${KRYPT_PACK_RULES.map((r) => `- ${r}`).join('\n')}`);
     const t = kryptToolById(a.tool);
     if (!t) throw new Error(`No Krypt tool matches "${a.tool}". Ids: ${KRYPT_TOOLS.map((x) => x.id).join(', ')}.`);
     const doc = t.doc ? research.findDoc(t.doc) : undefined;
     const source = t.released === false ? 'Facts are from the app itself.' : `Facts are from ${t.url} and its own docs (read ${t.read ?? KRYPT_PACK_READ}). If the reel leans on a number, check the page first (browser tools only open Instagram; ask the user or use your own web access).`;
     const clip = screenRec.toolClip(t.id);
     const footage = clip ? `\n\nScreen recording of the app (silent, bundled with the hub): ${clip}. For a screen-tutorial reel, set fields.video to it and use screen beats; preview_reel to pick the seconds. Record a fresh one with record_screen when the reel needs a specific screen.` : '';
-    return ok(`${kryptToolDetail(t)}${footage}\n\n${source}${doc ? `\n\nA longer feature catalog is in the playbook: get_playbook with doc "${t.doc}".` : ''}`);
+    // Marketo's best footage is what it makes: the example videos of its styles ship with the hub.
+    const made = t.id === 'marketo' ? screenRec.exampleVideos() : [];
+    const madeLine = made.length ? `\n\nVideos it made (silent example videos of its styles, bundled with the hub; use them as the footage of a Marketo reel: fields.video, one per beat or a few seconds each, then the hub at the end):\n${made.map((p) => `- ${p}`).join('\n')}` : '';
+    return ok(`${kryptToolDetail(t)}${footage}${madeLine}\n\n${source}${doc ? `\n\nA longer feature catalog is in the playbook: get_playbook with doc "${t.doc}".` : ''}`);
   },
 
   set_brand: (a: z.infer<typeof S.set_brand>, ctx) => {
@@ -2331,14 +2487,35 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
     return ok(`Saved to the playbook as ${file}. get_playbook lists it from now on.`);
   },
 
-  browser_open: (a: z.infer<typeof S.browser_open>) => browser.toolOpen(a.handle, a.url, a.site),
-  browser_snapshot: (a: z.infer<typeof S.browser_snapshot>) => browser.toolSnapshot(a.handle, a.full, a.site),
-  browser_click: (a: z.infer<typeof S.browser_click>, ctx) => browser.toolClick(a.handle, a.ref, ctx.client, a.site),
-  browser_type: (a: z.infer<typeof S.browser_type>, ctx) => browser.toolType(a.handle, a.ref, a.text, { clear: a.clear, submit: a.submit }, ctx.client, a.site),
-  browser_press: (a: z.infer<typeof S.browser_press>, ctx) => browser.toolPress(a.handle, a.key, ctx.client, a.site),
-  browser_scroll: (a: z.infer<typeof S.browser_scroll>) => browser.toolScroll(a.handle, a.direction, a.amount, a.site),
+  browser_open: (a: z.infer<typeof S.browser_open>, ctx) => {
+    const t = tabFor(ctx, a.handle, a.site ?? (a.url && /^https?:/i.test(a.url.trim()) ? (siteOfUrl(a.url.trim()) ?? undefined) : undefined), false);
+    return browser.toolOpen(t.handle, a.url, a.site);
+  },
+  browser_snapshot: (a: z.infer<typeof S.browser_snapshot>, ctx) => {
+    const t = tabFor(ctx, a.handle, a.site, false);
+    return browser.toolSnapshot(t.handle, a.full, t.site);
+  },
+  browser_click: (a: z.infer<typeof S.browser_click>, ctx) => {
+    const t = tabFor(ctx, a.handle, a.site, true);
+    return browser.toolClick(t.handle, a.ref, ctx.client, t.site);
+  },
+  browser_type: (a: z.infer<typeof S.browser_type>, ctx) => {
+    const t = tabFor(ctx, a.handle, a.site, true);
+    return browser.toolType(t.handle, a.ref, a.text, { clear: a.clear, submit: a.submit }, ctx.client, t.site);
+  },
+  browser_press: (a: z.infer<typeof S.browser_press>, ctx) => {
+    const t = tabFor(ctx, a.handle, a.site, true);
+    return browser.toolPress(t.handle, a.key, ctx.client, t.site);
+  },
+  browser_scroll: (a: z.infer<typeof S.browser_scroll>, ctx) => {
+    const t = tabFor(ctx, a.handle, a.site, false);
+    return browser.toolScroll(t.handle, a.direction, a.amount, t.site);
+  },
   browser_wait: (a: z.infer<typeof S.browser_wait>) => browser.toolWait(a.handle, a.seconds, a.site),
-  browser_back: (a: z.infer<typeof S.browser_back>) => browser.toolBack(a.handle, a.site),
+  browser_back: (a: z.infer<typeof S.browser_back>, ctx) => {
+    const t = tabFor(ctx, a.handle, a.site, false);
+    return browser.toolBack(t.handle, t.site);
+  },
   browser_close: (a: z.infer<typeof S.browser_close>) => browser.toolClose(a.handle, a.site),
   post_failed: (a: z.infer<typeof S.post_failed>) => browser.postFailed(a.handle, a.platform),
 
@@ -2379,10 +2556,22 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
         .map((p) => `- "${p.name}" (${p.id})${p.active ? (p.running === undefined ? ' · OPEN' : ' · THIS WINDOW') : p.running ? ' · open in its own window' : ''}${p.autopilot ? ' · autopilot runs it' : ''}`)
         .join('\n')}\nThe user adds, renames and deletes profiles on the Multi run page. use_profile opens one${profiles.ownProfile() ? ' (each profile runs in its own window here: use_profile moves this conversation to that window, starting it if needed)' : ''}.`,
     ),
-  use_profile: async (a: z.infer<typeof S.use_profile>) => {
+  use_profile: async (a: z.infer<typeof S.use_profile>, ctx) => {
     const before = profiles.active();
-    const p = await profiles.use(a.id);
+    // An autopilot run is working (the Multi run page refuses a switch then too). A run's own first use_profile still
+    // goes through: it comes while no run is working on the open profile yet. Kip is never the run.
+    if (autopilotRunning() && profiles.find(a.id).id !== before.id && (ctx.client === 'Kip' || currentReport()))
+      throw new Error(`An autopilot run is working on "${before.name}" right now. Switching profiles would close its tabs and move its tools to another profile's data, so the hub stays on "${before.name}". Try again when the run has ended (the Autopilot page shows it).`);
+    let p: Awaited<ReturnType<typeof profiles.use>>;
+    switchBy = ctx.client;
+    try {
+      p = await profiles.use(a.id);
+    } finally {
+      switchBy = null;
+    }
     if (p.id === before.id) return ok(`Profile "${p.name}" (${p.id}) is open already. Nothing changed.`);
+    // The tabs listed before belong to the profile that was left.
+    lastTab.clear();
     const d = store.get();
     return ok(
       `Profile "${p.name}" (${p.id}) is open now; "${before.name}" is closed and its tabs with it. This profile has ${d.igAccounts.length} account(s) (${d.igAccounts.map((x) => x.handle).join(', ') || 'none yet'}) and ${d.reels.length} reel(s)${d.brand.setupDone ? `, for ${d.brand.name || 'a brand with no name yet'}` : '; its brand is not set up yet (the user does that in the hub)'}. Everything you read before belongs to "${before.name}": call get_overview and get_today again before doing anything.`,
@@ -2396,6 +2585,9 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
     if (r.fields.voice_free === '1') throw new Error(`"${r.title}" was rendered in the free stand-in voice because ElevenLabs failed, not in its own voice. It is not posted like that: render_reel it again (it now buys the lines or stops), then attach.`);
     if (a.site === 'rewards') throw new Error('Reels are posted on a platform, then their link is submitted on contentrewards.com.');
     const site: Site = a.site ?? 'instagram';
+    // A later part of a series goes only where the part before it went (shared/series.ts).
+    const sp = seriesProblem(store.get().reels, store.get().posts, r, site, store.findAccount(a.handle ?? store.get().settings.handle).handle);
+    if (sp) throw new Error(sp);
     // A campaign reel goes up only with its disclosure and required tags, from an account that may post for it.
     const c = r.campaignId ? store.get().campaigns?.find((x) => x.id === r.campaignId) : undefined;
     if (c) {
@@ -2404,7 +2596,7 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
       if (problems.length) throw new Error(`"${r.title}" can't go up for "${c.title}" yet: ${problems.join('; ')}. update_reel fixes the caption.`);
     }
     const after = async (o: Promise<browser.Outcome>): Promise<browser.Outcome> => {
-      const out = await o;
+      const out = await coverNote(o, r, site);
       return c && out.ok ? { ...out, text: `CAMPAIGN POST for "${c.title}": use the reel's caption as it is (it starts with #ad). ${DISCLOSURE_STEP[site] ?? ''} Right after it is live, mark_posted it: the link must be submitted within 30 minutes.\n${out.text}` } : out;
     };
     if (site === 'x') {
@@ -2419,6 +2611,8 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
     const r = store.findReel(a.id);
     if (a.site === 'rewards') throw new Error('Slides are posted on a platform, then the post link is submitted on contentrewards.com.');
     const site: Site = a.site ?? 'instagram';
+    const sp = seriesProblem(store.get().reels, store.get().posts, r, site, store.findAccount(a.handle ?? store.get().settings.handle).handle);
+    if (sp) throw new Error(sp);
     const def = SLIDE_SITES[site];
     if (!def)
       throw new Error(
@@ -2505,9 +2699,20 @@ export const MAIN_HANDLERS: Record<string, Handler> = {
   },
 };
 
+/** After a reel is attached: how to set its cover on this platform (Create > Thumbnails; Setup switch "covers"). */
+async function coverNote(o: Promise<browser.Outcome>, r: Reel, site: Site): Promise<browser.Outcome> {
+  const out = await o;
+  const step = COVER_STEP[site];
+  if (!out.ok || !step || store.get().settings.covers === false) return out;
+  const note = r.cover?.path
+    ? `COVER: this reel has its own cover → ${r.cover.path}. ${step}`
+    : `COVER: this reel has no cover yet. Before Post: render_cover with id "${r.id}" (2-5 big words over its strongest frame), look at it, then: ${step}`;
+  return { ...out, text: `${note}\n${out.text}` };
+}
+
 /** Validate a reel id up front for renderer tools, so a typo fails fast without waking the window. */
 export function checkRendererArgs(name: string, args: unknown): void {
-  if (name === 'preview_reel' || name === 'render_reel' || name === 'render_image' || name === 'render_slides') {
+  if (name === 'preview_reel' || name === 'render_reel' || name === 'render_image' || name === 'render_slides' || name === 'render_cover') {
     const id = (args as { id?: string })?.id;
     const r = store.findReel(String(id));
     if (!presetById(r.preset)) throw new Error(`Reel ${r.id} uses an unknown preset "${r.preset}".`);

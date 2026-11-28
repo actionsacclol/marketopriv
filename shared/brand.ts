@@ -7,9 +7,9 @@ export const EMPTY_BRAND: Brand = { name: '', what: '', site: '', niche: '', voi
 /** The brand this hub was built for; installs that already hold its data keep it. */
 export const KRYPT_BRAND: Brand = {
   name: 'Krypt',
-  what: 'krypt.cc makes crypto and trading tools: Krypto Bot (a memecoin trading terminal) and Krypto Mirror (local-first copy trading), plus the rest of the krypt.cc/tools catalog. Reels can be any memecoin / crypto story that will get views (on-chain events, wallet breakdowns, explainers, myths, memes); the tools appear where they fit.',
+  what: 'krypt.cc makes Krypt Marketo, its main product: the AI you already use makes the videos and runs your social accounts (krypt.cc/tools/marketo). Most reels are about Marketo or made to show what it makes; the rest are the other krypt.cc tools (Krypto Bot, Krypto Mirror, the Polymarket bots, the PC and gaming tools) and stories that will get views, with the tools where they fit.',
   site: 'krypt.cc',
-  niche: 'memecoins, on-chain stories, crypto trading tools',
+  niche: 'AI that runs social media, faceless video channels, Krypt tools, trading bots',
   voice: 'Blunt, short sentences. No emojis. No hype claims.',
   never: 'Profit claims or a "proven edge" for trading tools. Impersonating a real person or company.',
   disclaimer: 'Not financial advice.',

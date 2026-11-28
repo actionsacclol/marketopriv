@@ -136,7 +136,10 @@ export default function Wizard() {
   const [sites, setSites] = useState<Set<Site>>(() => new Set(existing ? sitesOf(existing) : []));
   // Accounts always run in the user's Chrome (the built-in browser was removed).
   const where = 'chrome' as 'chrome' | 'hub';
+  /** The account's name in Marketo (filled from the first handle the Chrome profile scan finds, else the brand name). */
   const [name, setName] = useState(existing?.handle ?? '');
+  /** Asked on the Platforms step only when Instagram is picked: it then becomes the account's handle, which the hub checks the signed-in Instagram account against. */
+  const [igHandle, setIgHandle] = useState(existing && existing.instagram !== false ? existing.handle : '');
   /** The Chrome profile this account is kept to ('' = automatic: the one signed in as it). */
   // A profile made for one Chrome profile (Multi run > Chrome profiles) starts its first account in that one.
   const madeFor = useApp((st) => st.profiles.find((p) => p.active)?.chromeDir);
@@ -191,6 +194,7 @@ export default function Wizard() {
     setScan(r.data);
     const at = (s: Site): string => (found[s]?.handle ? `@${found[s]!.handle}` : '');
     setName((v) => v.trim() || at('instagram') || at('x') || at('tiktok') || at('threads') || at('pinterest') || v);
+    setIgHandle((v) => v.trim() || at('instagram'));
     setXHandle((v) => v.trim() || at('x'));
     setTtHandle((v) => v.trim() || at('tiktok'));
     setThHandle((v) => v.trim() || at('threads'));
@@ -213,14 +217,24 @@ export default function Wizard() {
   const at = Math.max(0, steps.findIndex((s) => s.id === step));
   const next = (): void => setStep(steps[Math.min(steps.length - 1, at + 1)].id);
   const back = (): void => setStep(steps[Math.max(0, at - 1)].id);
-  const close = (): void => setWizard(false);
+  /** A new profile's first open (it may have come prefilled from Multi run). */
+  const firstOpen = !!db.settings.firstOpen;
+  /** The wizard is done with for this profile: the first-open flag goes, so it opens normally from now on. */
+  const doneFirstOpen = async (): Promise<void> => {
+    if (firstOpen) await window.marketo.db.updateSettings({ firstOpen: false });
+  };
+  const close = (): void => {
+    void doneFirstOpen();
+    setWizard(false);
+  };
   /** Leave the wizard without finishing it: what is saved stays, the rest is on the Setup and Accounts pages. */
   const skipAll = async (): Promise<void> => {
     setBusy(true);
     const r = await window.marketo.brand.save({ setupDone: true });
+    if (r.ok) await doneFirstOpen();
     setBusy(false);
     if (!r.ok) return toast('error', r.message ?? 'Could not skip.');
-    toast('ok', 'Setup skipped. The Setup page and Accounts have everything when you want it.');
+    toast('ok', db.brand.setupDone ? 'Setup skipped. This profile keeps what it was made with; Setup and Accounts have the rest.' : 'Setup skipped. The Setup page and Accounts have everything when you want it.');
     setWizard(false);
     go('dashboard');
   };
@@ -258,9 +272,11 @@ export default function Wizard() {
 
   /** Create or update the account with the picked platforms. */
   const saveAccount = async (): Promise<boolean> => {
-    const handle = name.trim();
+    // With Instagram on, the handle is the Instagram one (the hub checks the signed-in account against it); otherwise it is only a name.
+    const ig = sites.has('instagram');
+    const handle = ig ? igHandle.trim() : name.trim() || brand.name.trim() || 'My account';
     if (!handle) {
-      toast('warn', sites.has('instagram') ? 'Type the Instagram handle.' : 'Give the account a name (your brand handle works).');
+      toast('warn', 'Type the Instagram handle.');
       return false;
     }
     const today = localDate();
@@ -311,6 +327,7 @@ export default function Wizard() {
     // A long-form channel posts no Shorts unless a number was typed for them on this page.
     if (accountId) await window.marketo.db.saveAccount({ id: accountId, targets: mode === 'longform' ? { youtube: 0, ...targets } : targets });
     const r = await window.marketo.brand.save({ ...brand, setupDone: true });
+    if (r.ok) await doneFirstOpen();
     setBusy(false);
     if (!r.ok) return toast('error', r.message ?? 'Could not save.');
     if (auto) {
@@ -497,12 +514,13 @@ export default function Wizard() {
     );
   } else if (step === 'platforms') {
     const long = mode === 'longform';
-    canNext = long ? sites.has('youtube') : sites.size > 0;
+    canNext = (long ? sites.has('youtube') : sites.size > 0) && (!sites.has('instagram') || !!igHandle.trim());
     onNext = saveAccount;
     const ytOn = sites.has('youtube');
     const acct = accountId ? db.igAccounts.find((x) => x.id === accountId) : undefined;
     const moreYt = acct?.chromeDir ? db.igAccounts.filter((x) => x.id !== acct.id && x.youtube?.enabled && x.chromeDir === acct.chromeDir).length : 0;
     const handleFields: Array<{ s: Site; label: string; placeholder: string; value: string; set: (v: string) => void; mono?: boolean }> = [
+      { s: 'instagram', label: 'Instagram handle', placeholder: '@yourhandle', value: igHandle, set: setIgHandle, mono: true },
       { s: 'x', label: 'X handle (optional)', placeholder: 'Read from X when you sign in', value: xHandle, set: setXHandle, mono: true },
       { s: 'tiktok', label: 'TikTok handle (optional)', placeholder: 'Read from TikTok when you sign in', value: ttHandle, set: setTtHandle, mono: true },
       { s: 'facebook', label: 'Facebook Page name', placeholder: 'The Page your reels go up on', value: fbPage, set: setFbPage },
@@ -574,7 +592,6 @@ export default function Wizard() {
       </>
     );
   } else if (step === 'where') {
-    canNext = !!name.trim();
     if (where === 'chrome') {
       const c = extensionCheck(chrome, chromeDir);
       if (!c.ready) warn = c.connected ? 'Chrome is running an older copy of the extension: reload it (see the check above).' : 'Chrome is not connected yet. You can go on and finish this later on the Accounts page, but nothing can run in Chrome until the checks above are green.';
@@ -653,11 +670,6 @@ export default function Wizard() {
         )}
 
         <Card className="mt-4 grid gap-3 md:grid-cols-2">
-          <div className="md:col-span-2">
-            <label className="label">Account name</label>
-            <input className="input font-mono" placeholder="@yourhandle" value={name} onChange={(e) => setName(e.target.value)} />
-            <p className="mt-1 text-[11px] text-krypt-muted">Your Instagram handle if this account will post on Instagram; otherwise any name for it in Marketo.</p>
-          </div>
           <div className="md:col-span-2">
             <label className="label">Warm-up</label>
             <div className="grid gap-2 sm:grid-cols-2">
@@ -908,9 +920,9 @@ export default function Wizard() {
           ) : (
             <div className="flex-1" />
           )}
-          {!db.brand.setupDone && (
+          {(!db.brand.setupDone || firstOpen) && (
             <GhostButton onClick={() => void skipAll()} disabled={busy}>
-              Skip setup
+              {firstOpen && db.brand.setupDone ? 'Skip, already set up' : 'Skip setup'}
             </GhostButton>
           )}
           {skippable && (

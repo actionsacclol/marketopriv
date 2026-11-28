@@ -306,7 +306,7 @@ function chunksOf(words: Word[], maxWords: number, maxChars: number): number[][]
   return out.filter((c) => c.length);
 }
 
-function captions(ctx: Ctx, env: Env, b: StoryBeat, local: number, y: number, hi: string): void {
+export function captions(ctx: Ctx, env: Env, b: StoryBeat, local: number, y: number, hi: string): void {
   const mode = str(env.fields, 'captions') || 'line';
   if (mode === 'off') return;
   const words = parseWords(b.headline);
@@ -426,7 +426,7 @@ function accentLine(ctx: Ctx, text: string, y: number, size: number, hi: string)
   ctx.textBaseline = 'alphabetic';
 }
 
-function endCard(ctx: Ctx, env: Env, b: StoryBeat, local: number, hi: string): void {
+export function endCard(ctx: Ctx, env: Env, b: StoryBeat, local: number, hi: string): void {
   const p = easeOut(prog(local, 0, 0.45));
   withAlpha(ctx, p, () => {
     ctx.fillStyle = 'rgba(8,8,12,0.9)';

@@ -13,7 +13,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import type { ActionResult, ClientInfo } from '../../shared/types';
 import { SERVER_NAME } from './index';
-import { binEnv, findBin } from '../findBin';
+import { binEnv, findBin, forgetBins } from '../findBin';
 
 const home = os.homedir();
 /** Where apps keep per-user config: %APPDATA%, ~/Library/Application Support, ~/.config. */
@@ -32,7 +32,7 @@ interface ClientDef {
   /** JSON clients: the object the server entries live under. */
   key?: 'mcpServers' | 'servers';
   /** Extra fields this client wants on a stdio entry. */
-  extra?: Record<string, string>;
+  extra?: Record<string, string | number>;
   /** A folder that exists when the app is installed. */
   sign?: string;
   /** More places the app can be installed to (any one existing counts). */
@@ -72,6 +72,14 @@ const chatgptDirs = (): string[] =>
 /** Claude Code's own settings file (its user-level MCP servers live under "mcpServers"). */
 const claudeCodeFile = (): string => path.join(process.env.CLAUDE_CONFIG_DIR?.trim() || home, '.claude.json');
 
+/**
+ * How long an AI app waits for one Marketo tool before calling it failed. The longest hub tools run for minutes (a
+ * narrated render, a screen recording, a Facebook or Threads upload hold of up to 5 minutes, narrating a long video), and
+ * Codex gives up after 60 s and Gemini CLI after 10 minutes by default. The hub keeps going after a client gives up,
+ * so a too-short wait means a retry beside a call that is still running.
+ */
+export const TOOL_TIMEOUT_SEC = 1800;
+
 const CLIENTS: ClientDef[] = [
   { id: 'claude-code', name: 'Claude Code', kind: 'claude-cli', file: claudeCodeFile(), sign: path.join(home, '.claude'), hint: 'Start a new Claude Code session (or run /mcp).' },
   { id: 'claude-desktop', name: 'Claude Desktop', kind: 'json', key: 'mcpServers', file: appConfig('Claude', 'claude_desktop_config.json'), sign: appConfig('Claude'), signs: claudeStoreDirs, hint: 'Quit Claude Desktop completely (also from the tray) and open it again.' },
@@ -80,7 +88,7 @@ const CLIENTS: ClientDef[] = [
   { id: 'chatgpt', name: 'ChatGPT desktop', kind: 'toml', client: 'codex', file: path.join(home, '.codex', 'config.toml'), signs: chatgptDirs, hint: 'In ChatGPT: Settings > MCP servers should list "marketo"; press Restart there. It shares these settings with Codex.' },
   { id: 'cursor', name: 'Cursor', kind: 'json', key: 'mcpServers', file: path.join(home, '.cursor', 'mcp.json'), sign: path.join(home, '.cursor'), hint: 'In Cursor: Settings > MCP, check that "marketo" is on, then start a new chat.' },
   { id: 'windsurf', name: 'Windsurf', kind: 'json', key: 'mcpServers', file: path.join(home, '.codeium', 'windsurf', 'mcp_config.json'), sign: path.join(home, '.codeium', 'windsurf'), hint: 'In Windsurf: open the MCP panel and press Refresh.' },
-  { id: 'gemini-cli', name: 'Gemini CLI', kind: 'json', key: 'mcpServers', file: path.join(home, '.gemini', 'settings.json'), sign: path.join(home, '.gemini'), hint: 'Start a new Gemini CLI session (/mcp lists it).' },
+  { id: 'gemini-cli', name: 'Gemini CLI', kind: 'json', key: 'mcpServers', extra: { timeout: TOOL_TIMEOUT_SEC * 1000 }, file: path.join(home, '.gemini', 'settings.json'), sign: path.join(home, '.gemini'), hint: 'Start a new Gemini CLI session (/mcp lists it).' },
   { id: 'vscode', name: 'VS Code (Copilot)', kind: 'json', key: 'servers', extra: { type: 'stdio' }, file: appConfig('Code', 'User', 'mcp.json'), sign: appConfig('Code', 'User'), hint: 'In VS Code: open Copilot Chat in Agent mode and enable "marketo" under tools.' },
 ];
 
@@ -238,8 +246,10 @@ function stripToml(text: string): string {
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
 }
 
+// Codex's own defaults are 10 s to start a server and 60 s for one tool call: the bridge may open the hub first, and
+// the long tools take minutes. (Scheduled Codex runs also pass the tool approval setting on their command line.)
 const tomlBlock = (e: Entry): string =>
-  [`[mcp_servers.${SERVER_NAME}]`, `command = ${JSON.stringify(e.command)}`, `args = [${e.args.map((a) => JSON.stringify(a)).join(', ')}]`, '', `[mcp_servers.${SERVER_NAME}.env]`, ...Object.entries(e.env).map(([k, v]) => `${k} = ${JSON.stringify(v)}`)].join('\n');
+  [`[mcp_servers.${SERVER_NAME}]`, `command = ${JSON.stringify(e.command)}`, `args = [${e.args.map((a) => JSON.stringify(a)).join(', ')}]`, 'startup_timeout_sec = 60', `tool_timeout_sec = ${TOOL_TIMEOUT_SEC}`, '', `[mcp_servers.${SERVER_NAME}.env]`, ...Object.entries(e.env).map(([k, v]) => `${k} = ${JSON.stringify(v)}`)].join('\n');
 
 function connectToml(c: ClientDef, e: Entry): ActionResult {
   const rest = stripToml(readText(c.file) ?? '');
@@ -247,11 +257,44 @@ function connectToml(c: ClientDef, e: Entry): ActionResult {
   return { ok: true, message: `Connected ${c.name}. ${c.hint}` };
 }
 
+/**
+ * The entry still starts the bridge: its program and script are there. An app moved, reinstalled elsewhere or opened
+ * from a disk image (macOS gives it a new random path each launch) leaves a dead path behind, and the AI app then
+ * starts with no Marketo tools while this said "connected". Paths we can't read are taken as fine.
+ */
+function entryAlive(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return true;
+  const { command, args } = e as { command?: unknown; args?: unknown };
+  if (typeof command === 'string' && path.isAbsolute(command) && !fs.existsSync(command)) return false;
+  const shim = Array.isArray(args) ? args.find((a): a is string => typeof a === 'string' && /marketo-mcp\.c?js$/i.test(a)) : undefined;
+  return !shim || !path.isAbsolute(shim) || fs.existsSync(shim);
+}
+
+/** Our table's command and args in a TOML file (written by tomlBlock as JSON-style strings). */
+function tomlEntry(text: string): { command?: unknown; args?: unknown } {
+  const out: { command?: unknown; args?: unknown } = {};
+  let mine = false;
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*\[/.test(line)) mine = new RegExp(`^\\s*\\[mcp_servers\\.${SERVER_NAME}\\]\\s*$`).test(line);
+    const m = mine ? /^\s*(command|args)\s*=\s*(.+?)\s*$/.exec(line) : null;
+    if (!m) continue;
+    try {
+      out[m[1] as 'command' | 'args'] = JSON.parse(m[2]) as unknown;
+    } catch {
+      /* written by hand in another form: not checked */
+    }
+  }
+  return out;
+}
+
 function isConnected(c: ClientDef): boolean {
-  if (c.kind === 'toml') return (readText(c.file) ?? '').split(/\r?\n/).some((l) => TOML_HEAD.test(l));
+  if (c.kind === 'toml') {
+    const text = readText(c.file) ?? '';
+    return text.split(/\r?\n/).some((l) => TOML_HEAD.test(l)) && entryAlive(tomlEntry(text));
+  }
   return filesOf(c).some((file) => {
     const servers = readJson(file)?.[c.kind === 'claude-cli' ? 'mcpServers' : c.key!] as Record<string, unknown> | undefined;
-    return !!servers && typeof servers === 'object' && SERVER_NAME in servers;
+    return !!servers && typeof servers === 'object' && SERVER_NAME in servers && entryAlive(servers[SERVER_NAME]);
   });
 }
 
@@ -292,6 +335,8 @@ export async function connectClient(id: string, exe: string, shim: string | null
   const c = CLIENTS.find((x) => x.id === id);
   if (!c) return { ok: false, message: `Unknown app "${id}".` };
   if (!shim) return { ok: false, message: MISSING };
+  // An app installed since the last search is looked for again.
+  forgetBins();
   try {
     if (c.kind === 'claude-cli') return await connectClaudeCode(exe, shim);
     const e = entryFor(exe, shim, c.client ?? c.id);

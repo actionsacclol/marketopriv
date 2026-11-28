@@ -32,13 +32,73 @@ export interface KipDeps {
   model(): string | undefined;
   /** An autopilot run is working right now. */
   runGoing(): boolean;
+  /** The token saver is on (AI > Usage): only then is a long message stopped at LIMIT_MS. */
+  saver(): boolean;
+  /** The open profile runs a long-form YouTube channel (its videos are made with Krypt Editor's tools). */
+  longform(): boolean;
+  /** Every Marketo tool's name, for counting against an AI app's tool limit. */
+  toolNames(): string[];
   onState(s: KipState): void;
   log(level: 'info' | 'warn' | 'error', msg: string): void;
 }
 
 const MAX_STEPS = 300;
+
+/** A message about editing video: Krypt Editor's tools come along for the rest of the conversation. */
+const EDIT_WORDS = /\b(edit|edits|edited|editing|editor|long[- ]?form|long videos?|youtube videos?|montage|timeline)\b/i;
+/** About how many tools Krypt Editor adds (63 in its 2026-11 builds). */
+const EDITOR_TOOLS = 65;
+/** Room kept for the AI app's own tools under its limit. */
+const OWN_TOOLS = 20;
+/**
+ * Marketo tools Kip can do without, least needed first: left out only when an AI app's tool limit would be passed.
+ * The long-video ones come last: when Krypt Editor's tools are there, the long videos usually are the point.
+ */
+const DROPPABLE = [
+  'list_campaigns', 'save_campaign', 'record_submission',
+  'delete_playbook_note', 'delete_learning', 'delete_style', 'delete_post', 'delete_reel',
+  'set_brand', 'save_brief', 'render_kip', 'record_votes',
+  'find_slideshows', 'render_slides', 'browser_attach_slides', 'find_images', 'save_images', 'find_archive', 'save_archive',
+  'add_reference_video', 'list_reference_videos', 'get_reference_video', 'note_reference_video',
+  'make_hook_variants', 'duplicate_reel', 'record_screen', 'find_clips', 'save_clip', 'list_media',
+  'add_references', 'list_references', 'record_account_stats', 'record_reel_metrics', 'log_session', 'list_sessions',
+  'propose_reels', 'queue_reels', 'set_next_run', 'save_style', 'list_presets', 'list_formats',
+  'browser_attach_image', 'render_image', 'render_cover', 'get_warmup_plan',
+  'save_long_video', 'narrate_long_video',
+];
+
+/** Should Krypt Editor's tools come along: a long-form profile, or the conversation has been about editing video. */
+function wantsEditor(): boolean {
+  if (deps.longform()) return true;
+  return steps.some((s) => (s.role === 'user' && EDIT_WORDS.test(s.text)) || (s.role === 'tool' && /krypt[-_]editor/i.test(s.tool ?? '')));
+}
+
+/**
+ * Codex and Copilot hand the tool list to back ends that take at most 128 tools a request (OpenAI's and GitHub's), even
+ * where the program itself looks tools up on demand: Kip stays under that with them too.
+ */
+const BACKEND_CAP: Record<string, number> = { codex: 128, copilot: 128 };
+const capOf = (eng: KipEngine): number | undefined => eng.toolCap ?? BACKEND_CAP[eng.id];
+
+/** The Marketo tools to leave out so everything fits under the app's limit (empty = all fit), and how many are still over after that. */
+function overCap(eng: KipEngine, withEditor: boolean): { skip: string[]; over: number } {
+  const cap = capOf(eng);
+  if (!cap) return { skip: [], over: 0 };
+  const names = new Set(deps.toolNames());
+  let over = names.size + (withEditor ? EDITOR_TOOLS : 0) + OWN_TOOLS - cap;
+  const skip: string[] = [];
+  for (const n of DROPPABLE) {
+    if (over <= 0) break;
+    if (!names.has(n)) continue;
+    skip.push(n);
+    over--;
+  }
+  return { skip, over: Math.max(0, over) };
+}
 const RESULT_CAP = 1800;
-/** A message that takes longer than this is stopped. */
+/** Tool steps that keep their pictures in the chat (older ones drop them; the tools can show them again). */
+const KEEP_IMAGES = 6;
+/** With the token saver on, a message that takes longer than this is stopped. Off (the default), Kip works until he is done or the user presses Stop: long videos take a while. */
 const LIMIT_MS = 30 * 60_000;
 
 let deps!: KipDeps;
@@ -157,7 +217,7 @@ const WHO = [
 /** For the AI apps that could also run commands or edit files: here he works through the tools only. */
 const NO_WINDOW = 'You are running without a window, so nobody can approve anything: work only through the Marketo tools, the Krypt Editor tools and web search. Never run shell commands and never create or edit files on this computer yourself. When you have not called get_overview in this conversation yet, call it first: it says how this hub works.';
 
-const DURING_RUN ='An autopilot run is working in this hub right now, using the browser tabs. Until it ends: do not call any browser_* tool, get_today, mark_posted or render_reel (they belong to the run). Reading numbers, the queue, ideas, styles and settings is fine. If the user wants something that needs the browser, tell them it has to wait for the run to end.';
+const DURING_RUN ='An autopilot run is working in this hub right now, using the browser tabs. Until it ends: do not call any browser_* tool, get_today, mark_posted, render_reel or use_profile (they belong to the run, and the hub refuses them from you while it works). Reading numbers, the queue, ideas, styles and settings is fine. If the user wants something that needs the browser, tell them it has to wait for the run to end.';
 
 function kill(c: ChildProcess): void {
   if (c.pid && process.platform === 'win32') execFile('taskkill.exe', ['/pid', String(c.pid), '/T', '/F'], { windowsHide: true }, () => undefined);
@@ -240,7 +300,12 @@ export async function send(text: string): Promise<void> {
       if (!step) return;
       step.state = ev.ok ? 'ok' : 'error';
       step.text = ev.text.length > RESULT_CAP ? `${ev.text.slice(0, RESULT_CAP)}…` : ev.text;
-      if (ev.images?.length) step.images = ev.images;
+      if (ev.images?.length) {
+        step.images = ev.images;
+        // Only the newest few steps keep their pictures: every update sends the whole chat to the window.
+        let kept = 0;
+        for (let i = steps.length - 1; i >= 0; i--) if (steps[i].images && ++kept > KEEP_IMAGES) delete steps[i].images;
+      }
       emit();
     } else if (ev.t === 'error') errText = ev.text;
     else if (ev.t === 'final') {
@@ -252,9 +317,26 @@ export async function send(text: string): Promise<void> {
     fs.mkdirSync(dir, { recursive: true });
     const start = await launcher(bin);
     // Krypt Editor's tools too, when it is on this computer: long videos are made there.
-    const ed = editorEntry('kip');
-    const servers: Record<string, KipServer> = { marketo: { command: bridge.exe, args: [bridge.shim, '--client', 'kip', '--config', bridge.config], env: { ELECTRON_RUN_AS_NODE: '1' } }, ...(ed ? { [EDITOR_SERVER]: ed } : {}) };
-    const during = deps.runGoing() ? DURING_RUN : '';
+    // Only when the conversation needs them (a long-form profile, or talk of editing video): about 65 more tools otherwise.
+    let ed = wantsEditor() ? editorEntry('kip') : null;
+    // An AI app with a tool limit gets fewer Marketo tools, least needed first, instead of a refused request.
+    let fit = overCap(eng, !!ed);
+    // Still too many with Krypt Editor's: it stays out this time, and he says so when the user wants a video edited.
+    let edNote = '';
+    if (ed && fit.over > 0) {
+      ed = null;
+      fit = overCap(eng, false);
+      edNote = `Krypt Editor's tools are not connected for this message: ${eng.name} takes at most ${capOf(eng)} tools, and with them it would be over. If the user wants a video edited or a long video made, tell them to pick Claude Code for Kip (Kip page), which has no such limit.`;
+      deps.log('warn', `kip: ${eng.name} takes at most ${capOf(eng)} tools, so Krypt Editor's tools are left out of this message`);
+    }
+    const skip = fit.skip;
+    if (skip.length) deps.log('info', `kip: ${eng.name} takes at most ${capOf(eng)} tools, so ${skip.length} rarely used Marketo tools are left out: ${skip.join(', ')}`);
+    const servers: Record<string, KipServer> = {
+      marketo: { command: bridge.exe, args: [bridge.shim, '--client', 'kip', '--config', bridge.config, ...(skip.length ? ['--skip-tools', skip.join(',')] : [])], env: { ELECTRON_RUN_AS_NODE: '1' } },
+      ...(ed ? { [EDITOR_SERVER]: ed } : {}),
+    };
+    // (The hub also refuses the run's tools from him whenever a run is working, so one that starts mid-message is covered.)
+    const during = [deps.runGoing() ? DURING_RUN : '', edNote].filter(Boolean).join(' ');
     const flat = (parts: string[]): string => parts.filter(Boolean).join('\n').replace(/\s*\n\s*/g, ' ');
     const fresh = !session;
     const L = eng.launch({ dir, session, fresh: randomUUID(), model: eng.takesModel ? deps.model() : undefined, system: eng.id === 'claude' ? flat([WHO, during]) : flat([WHO, NO_WINDOW]), servers });
@@ -273,10 +355,12 @@ export async function send(text: string): Promise<void> {
     await new Promise<void>((resolve) => {
       const c = start.viaCmd ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', cmdLine(eng, [start.cmd, ...L.args])], { ...opts, windowsVerbatimArguments: true }) : spawn(start.cmd, [...start.pre, ...L.args, ...tail], opts);
       child = c;
-      const timer = setTimeout(() => {
-        errText = 'That took over half an hour, so Kip stopped. Ask again in smaller steps.';
-        kill(c);
-      }, LIMIT_MS);
+      const timer = deps.saver()
+        ? setTimeout(() => {
+            errText = 'That took over half an hour, so Kip stopped (the token saver is on: AI > Usage). Say "keep going", or turn the token saver off to let him work as long as it takes.';
+            kill(c);
+          }, LIMIT_MS)
+        : undefined;
       let buf = '';
       let stderr = '';
       const onLine = (line: string): void => {

@@ -1,10 +1,21 @@
+import { SAMPLE_FLAGS, isSampleFlag, type SampleFlag } from './sfxLib';
 import type { FieldValue, Fields } from './types';
 import { ELEVEN_SPEED, TUNE_RANGE, VOICE_IDS, cleanTune, clipKey, hashKey, isEleven, readVoiceCache, tuneFromFields, voiceId, voiceName, type VoiceTune } from './voice';
 import { chatEnd, pollEnd, storySfx } from './sfx';
 import { ACTION_HELP, ARTS } from './character';
-import { STICK_FLAG, STICK_GEAR, STICK_HELP, stickScreenStart } from './stickman';
+import { STICK_FLAG, STICK_GEAR, STICK_HELP, STICK_SHIRTS, stickScreenStart } from './stickman';
 import { DUO_FLAG, DUO_HELP, DUO_SETS, duoLines } from './duo';
 import { BLOX_FLAG, BLOX_HELP, BLOX_LOOK_A, BLOX_LOOK_B, BLOX_LOOK_HELP, BLOX_SETS, BLOX_TIMES } from './blox';
+import { MORPH_FLAG, MORPH_HELP } from './morph';
+import { LECTURE_FLAG, LECTURE_HELP } from './lecture';
+import { SPACE_FLAG, SPACE_HELP } from './space';
+import { CUT_FLAG, CUT_HELP } from './cutaway';
+import { PS2_CAST_NAMES, PS2_FLAG, PS2_HELP, PS2_SETS } from './ps2';
+import { INK_CAST_NAMES, INK_FLAG, INK_HELP, INK_PALETTES, INK_SETS } from './ink';
+import { TV_CAST_NAMES, TV_FLAG, TV_HELP, TV_PHOSPHORS, TV_SETS } from './tv';
+import { DIO_FLAG, DIO_GROUNDS, DIO_HELP } from './diorama';
+import { HOSE_CAST_NAMES, HOSE_FILMS, HOSE_FLAG, HOSE_HELP, HOSE_SETS } from './hose';
+import { PIXEL_CAST_NAMES, PIXEL_FLAG, PIXEL_HELP, PIXEL_SETS } from './pixel';
 
 // Preset styles: the schema, defaults and timing of every reel format. Pure
 // data so the main process (MCP tool listing / validation) and the renderer
@@ -47,7 +58,7 @@ const BED_HELP =
 /** Effects a beat can carry in its flags (meme and narrated reels; story reels too). Sounds play at their time; picture effects change the frame from their time on. */
 export const FX_SOUNDS = ['boom', 'horn', 'scratch', 'ding', 'buzzer', 'boing', 'honk', 'sad', 'bass', 'whoosh', 'pop', 'impact', 'riser'] as const;
 export const FX_LOOKS = ['zoom', 'shake', 'fry', 'flash', 'freeze', 'slowzoom'] as const;
-export type FxKind = (typeof FX_SOUNDS)[number] | (typeof FX_LOOKS)[number];
+export type FxKind = (typeof FX_SOUNDS)[number] | (typeof FX_LOOKS)[number] | SampleFlag;
 export interface Fx {
   kind: FxKind;
   /** Seconds into the beat. */
@@ -57,11 +68,12 @@ export interface Fx {
   y: number;
 }
 export const FX_HELP =
-  'Effects (flags, any number): sounds boom (deep vine-boom hit), horn (air horn), scratch (record scratch), ding, buzzer (wrong answer), boing, honk (clown horn), sad (sad trombone), bass (distorted bass drop), whoosh, pop, impact, riser; picture effects zoom (sudden punch-in, zoom=0.5,0.3 onto that point of the frame), shake, fry (deep-fried colours), flash (white flash), freeze (the video stops), slowzoom (slow push-in). Each plays at the start of the beat, or add @seconds into the beat: "zoom@1.2=0.45,0.3 boom@1.2 shake@1.2". Use them on the punchline, not on every beat.';
+  'Effects (flags, any number): sounds boom (deep vine-boom hit), horn (air horn), scratch (record scratch), ding, buzzer (wrong answer), boing, honk (clown horn), sad (sad trombone), bass (distorted bass drop), whoosh, pop, impact, riser; picture effects zoom (sudden punch-in, zoom=0.5,0.3 onto that point of the frame), shake, fry (deep-fried colours), flash (white flash), freeze (the video stops), slowzoom (slow push-in). Each plays at the start of the beat, or add @seconds into the beat: "zoom@1.2=0.45,0.3 boom@1.2 shake@1.2". Use them on the punchline, not on every beat. ' +
+  `Real recorded sounds (flags too, same @seconds): ${Object.entries(SAMPLE_FLAGS).map(([k, v]) => `${k} (${v})`).join(', ')}. Each one needs a cause on screen at that moment (a coin on the coins, door when a door moves): what made it, where, why now.`;
 
 const FX_TOKEN = /^([a-z]+)(?:@(\d+(?:\.\d+)?))?(?:=(\d*\.?\d+),(\d*\.?\d+))?(?:@(\d+(?:\.\d+)?))?$/;
-const isFxKind = (k: string): k is FxKind => (FX_SOUNDS as readonly string[]).includes(k) || (FX_LOOKS as readonly string[]).includes(k);
-export const isFxSound = (k: string): boolean => (FX_SOUNDS as readonly string[]).includes(k);
+const isFxKind = (k: string): k is FxKind => (FX_SOUNDS as readonly string[]).includes(k) || (FX_LOOKS as readonly string[]).includes(k) || isSampleFlag(k);
+export const isFxSound = (k: string): boolean => (FX_SOUNDS as readonly string[]).includes(k) || isSampleFlag(k);
 
 /** One flag token as an effect, or null. */
 export function parseFx(tok: string): Fx | null {
@@ -74,7 +86,7 @@ export function parseFx(tok: string): Fx | null {
 }
 
 /** Presets that speak their beats (the story engine's voice, effects and music). */
-export const VOICED_PRESETS = ['story', 'narrated', 'meme', 'stickman', 'blox', 'slides', 'duo'];
+export const VOICED_PRESETS = ['story', 'narrated', 'meme', 'stickman', 'blox', 'slides', 'duo', 'morph', 'lecture', 'space', 'cutaway', 'diorama', 'ps2', 'ink', 'tv', 'hose', 'pixel'];
 export const isVoiced = (preset: string): boolean => VOICED_PRESETS.includes(preset);
 
 export const ACCENTS: Record<string, [string, string, string]> = {
@@ -113,8 +125,9 @@ const VOICE_FIELDS: PresetField[] = [
   { key: 'voice_blend', label: 'Blend with', type: 'select', default: 'none', options: ['none', ...VOICE_IDS], help: 'A second voice mixed into the first (still one voice for the whole reel).' },
   { key: 'voice_blend_amount', label: 'Blend amount', type: 'number', default: 0, ...TUNE_RANGE.blendAmount, help: 'Share of the second voice: 0.3 = 30%.' },
   { key: 'voice_volume', label: 'Voice volume', type: 'number', default: 1, min: 0, max: 1.5, step: 0.05 },
-  { key: 'sfx', label: 'Sound effects', type: 'toggle', default: true, help: 'Synthesized ticks, pops, whooshes, risers and hits on every on-screen change, mixed under the voice.' },
+  { key: 'sfx', label: 'Sound effects', type: 'toggle', default: true, help: 'Ticks, pops, whooshes and hits on every on-screen change, plus real recorded sounds for what happens on screen (coins, paper, doors, steps, digging...), mixed under the voice.' },
   { key: 'sfx_volume', label: 'Effects volume', type: 'number', default: 0.5, min: 0, max: 1, step: 0.05 },
+  { key: 'ambience', label: 'Place sound', type: 'select', default: 'auto', options: ['auto', 'off'], help: 'auto = a quiet background sound for each place the reel goes (birds outside, traffic on a street, rain, a room tone indoors), when the style has places. Plays with the sound effects.' },
   { key: 'bed', label: 'Background music', type: 'select', default: 'none', options: BEDS, help: BED_HELP },
   { key: 'bed_volume', label: 'Music level', type: 'number', default: 0.6, min: 0, max: 1, step: 0.05, help: 'Level in the gaps between lines; it drops to about 40% of this while someone talks.' },
   { key: 'vo_cache', label: 'Voice cache', type: 'longtext', default: '', hidden: true },
@@ -388,13 +401,17 @@ export const PRESETS: PresetMeta[] = [
         help: STICK_HELP + FX_HELP,
       },
       { key: 'labels', label: 'Figure names', type: 'text', default: '', help: 'Two figures (versus): their names over their heads, "Overthinker;Doer". Empty = one figure, or two without names.' },
-      { key: 'gear', label: 'Gear', type: 'text', default: '', help: `What the figures wear, so a channel's figure is its own: "A:headphones;B:cap". Choices: ${STICK_GEAR.join(', ')}.` },
-      { key: 'bg', label: 'Look', type: 'select', default: 'paper', options: ['paper', 'white', 'dark', 'chalk'], help: 'paper = black ink on warm paper; white = black on white; dark = white figures on black; chalk = chalk on a green board.' },
+      { key: 'figure', label: 'Figure', type: 'select', default: 'cartoon', options: ['cartoon', 'stick'], help: 'cartoon = a big white head with real eyes, a coloured T-shirt, trousers, shoes and round hands (the polished stickman-cartoon look); stick = plain ink lines.' },
+      { key: 'world', label: 'Places', type: 'select', default: '3d', options: ['3d', 'flat'], help: '3d = every place (set=...) is a real 3D set with ink outlines and moving details, the flat figures acting inside it, the camera always gliding (the 2.5D stickman look); flat = places drawn in 2D ink lines behind the figures.' },
+      { key: 'shirts', label: 'Shirt colours', type: 'text', default: 'blue;orange', help: `The cartoon figures' T-shirts, A;B: ${Object.keys(STICK_SHIRTS).join(', ')} or a #hex colour.` },
+      { key: 'gear', label: 'Gear', type: 'text', default: '', help: `What the figures wear, so a channel's figure is its own: "A:headphones;B:cap;B:bun". Choices: ${STICK_GEAR.join(', ')} (bun = a hair bun).` },
+      { key: 'bg', label: 'Look', type: 'select', default: 'paper', options: ['paper', 'white', 'dark', 'chalk', 'dusk'], help: 'paper = black ink on warm paper; white = black on white; dark = white figures on black; chalk = chalk on a green board; dusk = dark figures against a sunset sky (the "what if" cartoon look).' },
+      { key: 'hud', label: 'Survival HUD', type: 'text', default: '', help: 'A bar at the top with the day, the time and a phone battery: "Day 1;06:40;100%" (empty = none). Beats change it with the flags day=2, clock=07:15, battery=40. For the survival series.' },
       { key: 'highlight', label: 'Highlight colour', type: 'select', default: 'orange', options: ['orange', 'yellow', 'red', 'green', 'cyan', 'accent'], help: 'The one colour on screen: the big word, the spoken word in the captions, the winner (win flag), charts and screens. Keep everything else ink.' },
       { key: 'line', label: 'Line weight', type: 'number', default: 16, min: 8, max: 28, step: 1, help: 'Ink thickness at full size.' },
-      { key: 'captions', label: 'Captions', type: 'select', default: 'words', options: ['words', 'line', 'title', 'off'], help: 'words = 1-3 words at a time popping in as they are said; line = the whole line, the word being said lit up; title = the caption as plain text at the top (wordless versus clips); off = none.' },
+      { key: 'captions', label: 'Captions', type: 'select', default: 'words', options: ['words', 'line', 'title', 'box', 'off'], help: 'words = 1-3 words at a time popping in as they are said; line = the whole line, the word being said lit up; title = the caption as plain text at the top (wordless versus clips); box = the line in a white box at the top (the relatable-skit look); off = none.' },
       { key: 'video', label: 'Screen recording', type: 'file', fileKind: 'video', default: '', help: 'The recording laptop, monitor, phone and screen props show (record_screen or a tool\'s bundled recording).' },
-      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.15, min: 0, max: 1.5, step: 0.02 },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.08, min: 0, max: 1.5, step: 0.02 },
       ...VOICE_FIELDS.map((f) => (f.key === 'sfx_volume' ? { ...f, default: 0.45 } : f.key === 'bed' ? { ...f, default: 'lofi' } : f.key === 'bed_volume' ? { ...f, default: 0.35 } : f)),
       { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice.' },
       { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
@@ -526,10 +543,377 @@ export const PRESETS: PresetMeta[] = [
       ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
     ],
   },
+  {
+    id: 'morph',
+    name: 'UI motion',
+    tagline: 'One rounded shape morphs through 8 to 12 app states (a button, a toggle, a loader, a notification, a player, a chart, the app\'s own screen, the logo) with a springy, overshooting move on every change and a cursor that clicks it just before, all cut to the beat of the music. Wordless, loops.',
+    inspiredBy: 'Coded motion-design reels (one shape, a cursor, a new UI state on every beat at 120 BPM), the most-saved free video prompt on X in 2026',
+    fields: [
+      {
+        key: 'beats',
+        label: 'States',
+        type: 'lines',
+        default: [
+          '1 | | button | Get started',
+          '1 | Loading | loader',
+          '1 | Dark mode | toggle',
+          '1 | Volume | slider | 80',
+          '1 | | search | krypt.cc',
+          '1 | | notify | Krypt | Your setup is ready.',
+          '1 | This week | graph | 3,5,4,7,6,11',
+          '1 | Now playing | player | Night drive | Krypt',
+          '1 | | tabs | Home;Tools;Profile | 2',
+          '1 | | icon | K',
+          '1.5 | | logo',
+        ].join('\n'),
+        help: MORPH_HELP + FX_HELP,
+      },
+      { key: 'title', label: 'Title', type: 'text', default: '', help: 'An optional line at the top for the whole reel ("one button, *ten* jobs"). *word* = the accent colour. Most of these run with none.' },
+      { key: 'look', label: 'Look', type: 'select', default: 'dark', options: ['dark', 'light'], help: 'dark = a near-black stage with a white shape; light = a pale grey stage with a white shape.' },
+      { key: 'cursor', label: 'Cursor', type: 'toggle', default: true, help: 'The pointer that clicks every change.' },
+      { key: 'counter', label: 'State numbers', type: 'toggle', default: false, help: '"03 / 10" under the shape.' },
+      { key: 'bpm', label: 'Tempo (BPM)', type: 'number', default: 120, min: 60, max: 180, step: 1, help: 'The music\'s tempo; the shape breathes on every beat. Keep each state a whole number of beats (at 120: 0.5, 1, 1.5, 2 s).' },
+      { key: 'video', label: 'Screen recording', type: 'file', fileKind: 'video', default: '', help: 'What a window state shows (record_screen or a tool\'s bundled recording).' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.1, min: 0, max: 1.5, step: 0.02, hidden: true },
+      ...VOICE_FIELDS.map((f) => (f.key === 'voiceover' ? { ...f, default: false } : f.key === 'sfx_volume' ? { ...f, default: 0.55 } : f.key === 'bed' ? { ...f, default: 'pulse' } : f.key === 'bed_volume' ? { ...f, default: 0.75 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3, min: 1.5, max: 8, step: 0.1, hidden: true },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      { key: 'loop', label: 'Loop', type: 'toggle', default: true, help: 'The last state morphs back into the first, so it replays with no seam (no end card).' },
+      ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
+    ],
+  },
+  {
+    id: 'lecture',
+    name: 'Lecture',
+    tagline: 'A one-minute lesson: the brand\'s character talks in the bottom-right corner like a teacher while a board over the rest of the frame builds the lesson, a title, steps, a number or a stamp landing on the exact word that names it. Captions between the board and the teacher.',
+    inspiredBy: 'Talking-teacher explainer reels (a presenter in the corner, a diagram building above, one step per sentence): 45-60 s, one lesson each',
+    fields: [
+      {
+        key: 'beats',
+        label: 'Lines',
+        type: 'lines',
+        default: [
+          '1 | Windows has a mouse setting called *Enhance pointer precision*. | title | Enhance pointer precision | Windows mouse setting | | at=enhance',
+          '1 | It is on by default, on almost every PC. | stamp | ON | by default | | at=default',
+          '1 | It speeds the cursor up when you move your hand fast. | steps | Slow swipe: short;Fast swipe: far;Same hand distance | | | at=speeds',
+          '1 | That is called *mouse acceleration*. | stamp | ACCELERATION | built into Windows | | at=acceleration',
+          '1 | So the same flick lands in a *different spot* every time. | none',
+          '1 | To turn it off, open Settings, Bluetooth and devices, Mouse. | steps | Settings;Bluetooth & devices;Mouse | | | clear at=settings',
+          '1 | Then Additional mouse settings, Pointer Options, and untick it. | steps | Additional mouse settings;Pointer Options;!Enhance pointer precision | | | at=additional',
+          '1 | Now your hand decides where the cursor goes. Not your speed. | stamp | CONSISTENT | same move, same spot | | at=hand',
+          '3 | Save this for your next match | end | Follow for *one fix a day* | krypt.cc',
+        ].join('\n'),
+        help: LECTURE_HELP + FX_HELP,
+      },
+      { key: 'topic', label: 'Lesson name', type: 'text', default: 'MOUSE SETTINGS 101', help: 'Small caps line in the board\'s corner: the lesson or the series ("PC BASICS #4").' },
+      { key: 'board', label: 'Board', type: 'select', default: 'paper', options: ['paper', 'dark', 'chalk'], help: 'paper = a cream page with faint rules (dark ink); dark = a slate board; chalk = a green chalkboard.' },
+      { key: 'art', label: 'Teacher', type: 'select', default: 'cartoon', options: ['cartoon', '3d'], help: 'How the character is drawn: cartoon (flat toon shading) or 3d (soft lighting).' },
+      { key: 'char_name', label: 'Name tag', type: 'text', default: 'KIP', help: 'The teacher\'s name under them. Empty = none.' },
+      { key: 'char_color', label: 'Teacher colour', type: 'text', default: '#8B5CF6', help: 'Body colour as #RRGGBB (the brand colour).' },
+      { key: 'highlight', label: 'Highlight colour', type: 'select', default: 'yellow', options: ['yellow', 'green', 'orange', 'accent'], help: 'The word being said, the lesson name and *marked* words.' },
+      { key: 'captions', label: 'Captions', type: 'select', default: 'line', options: ['line', 'words', 'off'], help: 'line = a few words at a time with the word being said lit up; words = one to three words popping in.' },
+      { key: 'video', label: 'Screen recording', type: 'file', fileKind: 'video', default: '', help: 'The recording screen lines show on the board (record_screen makes one; krypt_tools names a tool\'s bundled one).' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.12, min: 0, max: 1.5, step: 0.02 },
+      ...VOICE_FIELDS.map((f) => (f.key === 'sfx_volume' ? { ...f, default: 0.4 } : f.key === 'bed' ? { ...f, default: 'lofi' } : f.key === 'bed_volume' ? { ...f, default: 0.25 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice.' },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      { key: 'card_by', label: 'Card maker line', type: 'text', default: 'by Krypt', help: 'Small line under the product name on card lines.' },
+      ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
+    ],
+  },
+  {
+    id: 'space',
+    name: 'Space what if',
+    tagline: 'A "what if" explainer in flat, bright space scenes drawn in code: a turning Earth, the Sun blinking out, planets side by side at their real sizes, an orbit, an impact, a black hole, a counting clock, with a small astronaut mascot and narration timed to the word.',
+    inspiredBy: 'Kurzgesagt-style "what if" space shorts (one impossible question, answered step by step with real numbers): 25-40 s, a new scene every line or two',
+    fields: [
+      {
+        key: 'beats',
+        label: 'Lines',
+        type: 'lines',
+        default: [
+          '1 | What if the Sun *vanished* right now? | title | What if the Sun *vanished*? | right now',
+          '1 | For *8 minutes and 20 seconds*, nothing would happen. | clock | 0:00 | 8:20',
+          '1 | That is how long sunlight takes to reach us. | orbit',
+          '1 | Then the sky goes *dark*, all at once. | sun | gone',
+          '1 | And Earth stops orbiting. It flies off in a *straight line*. | orbit | gone',
+          '1 | The only light left on Earth would be our cities. | earth | dark | | | cam=close',
+          '1 | Within a week the surface falls below *minus 18 degrees*. | number | -18°C | average surface temperature',
+          '1 | The tops of the oceans freeze over. | earth | ice',
+          '1 | But deep under the ice, they stay liquid for a *very long time*. | astronaut | point',
+        ].join('\n'),
+        help: SPACE_HELP + FX_HELP,
+      },
+      { key: 'sky', label: 'Sky', type: 'select', default: 'navy', options: ['navy', 'purple', 'black'], help: 'The space behind every scene: navy, purple or near black, with stars and two soft clouds in the brand colours.' },
+      { key: 'highlight', label: 'Highlight colour', type: 'select', default: 'yellow', options: ['yellow', 'orange', 'cyan', 'white', 'accent'], help: 'The word being said, *marked* words and the big numbers.' },
+      { key: 'mascot', label: 'Astronaut', type: 'select', default: 'on', options: ['on', 'off'], help: 'on = the astronaut floats small in the corner of most scenes (the astro flag brings it in front, bigger).' },
+      { key: 'captions', label: 'Captions', type: 'select', default: 'words', options: ['words', 'line', 'off'], help: 'words = one to three words popping in; line = a few words at a time with the word being said lit up.' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.1, min: 0, max: 1.5, step: 0.02 },
+      ...VOICE_FIELDS.map((f) => (f.key === 'sfx_volume' ? { ...f, default: 0.45 } : f.key === 'bed' ? { ...f, default: 'ambient' } : f.key === 'bed_volume' ? { ...f, default: 0.3 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 2.8, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice.' },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      ...COMMON,
+    ],
+  },
+  {
+    id: 'cutaway',
+    name: 'Backyard cutaway',
+    tagline: 'A block of ground cut open like a cake, a house on top, turning slowly in 3D. Each line builds one thing (a pool, a basement, a bunker, a tunnel, a well), dug out on the cut face or standing on the lawn, and it stays, so the yard fills up. A tag on the newest build and a running total of what it all cost.',
+    inspiredBy: '"You built it" backyard cutaway shorts (one build per line, the ground cut open to show what is under it, a cost that keeps climbing): 25-40 s',
+    fields: [
+      {
+        key: 'beats',
+        label: 'Lines',
+        type: 'lines',
+        default: [
+          '1 | You just bought a house with a *big backyard*. | none',
+          '1 | First, a pool. About *$45,000* for an in-ground one. | pool | Pool | $45,000',
+          '1 | Then you dig a *basement* under the house. | basement | Basement | $30,000',
+          '1 | A well goes down until it hits *water*. | well | Well | $9,000',
+          '1 | Now the big one. A *bunker*, ten metres down. | bunker | Bunker | $80,000 | | cam=close',
+          '1 | And a tunnel, so you never have to go outside. | tunnel | Tunnel | $60,000',
+          '1 | Would you build *this*? | none | | | | cam=wide',
+        ].join('\n'),
+        help: CUT_HELP + FX_HELP,
+      },
+      { key: 'house', label: 'House at the start', type: 'select', default: 'on', options: ['on', 'off'], help: 'on = the house stands on the lawn from the first frame; off = an empty lawn (a house line builds it).' },
+      { key: 'sky', label: 'Sky', type: 'select', default: 'day', options: ['day', 'dusk', 'night'], help: 'The sky behind the block; at night the windows light up.' },
+      { key: 'total_label', label: 'Total label', type: 'text', default: 'TOTAL SPENT', help: 'The small line over the running total (shown once a line has a cost).' },
+      { key: 'highlight', label: 'Highlight colour', type: 'select', default: 'yellow', options: ['yellow', 'orange', 'green', 'white', 'accent'], help: 'The word being said, the tags and the total.' },
+      { key: 'captions', label: 'Captions', type: 'select', default: 'words', options: ['words', 'line', 'off'], help: 'words = one to three words popping in; line = a few words at a time with the word being said lit up.' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.1, min: 0, max: 1.5, step: 0.02 },
+      ...VOICE_FIELDS.map((f) => (f.key === 'sfx_volume' ? { ...f, default: 0.5 } : f.key === 'bed' ? { ...f, default: 'ambient' } : f.key === 'bed_volume' ? { ...f, default: 0.28 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 2.8, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice.' },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      ...COMMON,
+    ],
+  },
+  {
+    id: 'diorama',
+    name: '3D diorama',
+    tagline: 'The backyard cutaway look for any story: a block of ground floats in the sky and turns slowly in 3D, on any scene base (a yard, a city block, a farm, a desert, a beach, snow, the moon, a clean studio stand). Each line adds pieces that stay (a garage, a shop, a tower, cars, people, servers, a rocket), takes some away, or makes something happen (mow the lawn, rain, snow, a storm, a fire, a flood, years passing as it all weathers and crumbles). Underground builds cut the front open. A tag on what each line added and a counter in the corner.',
+    inspiredBy: '3D diorama and "you built it" shorts (a little world that fills up one line at a time, a number that climbs, time-lapse "in 100 years" stories): 25-45 s',
+    fields: [
+      {
+        key: 'beats',
+        label: 'Lines',
+        type: 'lines',
+        default: [
+          '2.6 | Day one. A garage, a desk and you. | garage+desk+person | Day 1 | 1 | | cam=close',
+          '2.4 | Your first sale comes from a table out front. | stand | First sale | | |',
+          '2.4 | Two friends join. Nobody gets paid yet. | person*2 | | 3 | |',
+          '2.6 | Year two. You rent a real shop. | shop+van | Year 2 | 8 | | cam=close',
+          '2.8 | Year four. An office, and a lot more people. | office+crowd+lamp*2 | Year 4 | 40 | |',
+          '3.0 | Year ten. The garage is gone. A tower goes up. | -garage+-stand+-desk+tower+crane | Year 10 | 300 | | cam=low',
+          '2.8 | Every big company started out this small. | none | | | | cam=orbit',
+        ].join('\n'),
+        help: DIO_HELP + FX_HELP,
+      },
+      { key: 'set', label: 'Scene', type: 'select', default: 'city', options: [...DIO_GROUNDS], help: 'The ground the block is made of: yard, park, farm, city (paving and a road), desert, beach (sand and sea), snow, forest, moon (in space), studio (a clean stand for single objects).' },
+      { key: 'sky', label: 'Sky', type: 'select', default: 'day', options: ['day', 'dusk', 'night'], help: 'The sky it starts with; a line with sky=... or night / day changes it. At night the windows and lamps light up.' },
+      { key: 'season', label: 'Season', type: 'select', default: 'summer', options: ['summer', 'spring', 'autumn', 'winter'], help: 'The season it starts in (winter = snow on the ground and roofs, bare trees); a line with season=... changes it.' },
+      { key: 'grass', label: 'Grass', type: 'select', default: 'short', options: ['short', 'long'], help: 'long = tall grass from the start (for a mow line); grass scenes only.' },
+      { key: 'counter', label: 'Counter', type: 'select', default: 'show', options: ['show', 'total', 'off'], help: 'show = the corner shows each line\'s number and counts up to it (a year, a team size, users); total = the numbers add up (costs); off = no counter.' },
+      { key: 'counter_label', label: 'Counter label', type: 'text', default: 'TEAM', help: 'The small line over the counter (YEAR, TOTAL SPENT, USERS...).' },
+      { key: 'blocks', label: 'Blocks', type: 'select', default: 'one', options: ['one', 'two'], help: 'two = two blocks, one over the other (before / after, us / them): a line with block=1 or block=2 changes only that one, a line without changes both. Each has its own weather, camera and counter.' },
+      { key: 'block1', label: 'Top block name', type: 'text', default: '', help: 'With two blocks: the name on the top one (BEFORE, US, 2010).' },
+      { key: 'block2', label: 'Bottom block name', type: 'text', default: '', help: 'With two blocks: the name on the bottom one (AFTER, THEM, 2025).' },
+      { key: 'sign_text', label: 'Sign text', type: 'text', default: '', help: 'Words on every sign and billboard (a line with text=... sets its own, and puts words on shop fronts, offices and towers too).' },
+      { key: 'highlight', label: 'Highlight colour', type: 'select', default: 'yellow', options: ['yellow', 'orange', 'green', 'white', 'accent'], help: 'The word being said, the tags and the counter.' },
+      { key: 'captions', label: 'Captions', type: 'select', default: 'words', options: ['words', 'line', 'off'], help: 'words = one to three words popping in; line = a few words at a time with the word being said lit up.' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.1, min: 0, max: 1.5, step: 0.02 },
+      ...VOICE_FIELDS.map((f) => (f.key === 'sfx_volume' ? { ...f, default: 0.5 } : f.key === 'bed' ? { ...f, default: 'ambient' } : f.key === 'bed_volume' ? { ...f, default: 0.28 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 2.8, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice.' },
+      { key: 'toon', label: 'Look', type: 'text', default: 'dio', hidden: true },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
+    ],
+  },
+  {
+    id: 'ps2',
+    name: 'PS2 cutscene',
+    tagline: 'Two or three of our own low-poly 3D characters act a short skit in a small set (a cafe terrace, an office, a street, a living room, a party, a bar, a garage), cut like an old console cutscene: a hard cut to a new shot every line, console subtitles, a small label over the shot, a soft low-resolution picture with scanlines.',
+    inspiredBy: 'PS2-era cutscene skits (faceted low-poly people, warm light, blocky subtitles, a relatable line every shot): 15-35 s',
+    fields: [
+      {
+        key: 'beats',
+        label: 'Lines',
+        type: 'lines',
+        default: [
+          '2.4 | So... what are you up to these days? | idle/talk | | B:cup | | who=b shot=two set=cafe',
+          '1.8 | I\'m building an app. | smirk | | | | who=a',
+          '2.0 | Oh nice. How many users? | idle/talk | | B:cup | | who=b',
+          '1.6 | Define *users*. | think | | | | who=a push',
+          '2.4 | My mom. And me. On two phones. | shrug/facepalm | | B:cup | | who=a shot=two',
+          '2.0 | Bro... | idle/laugh | | B:cup | | who=b shot=close',
+          '2.6 | We launch next week. | phone | 2:14 AM | phone | | who=a set=living night shot=wide',
+        ].join('\n'),
+        help: PS2_HELP + FX_HELP,
+      },
+      { key: 'cast', label: 'Cast', type: 'text', default: 'jay;brad', help: `Who is in it, A;B(;C), from our own cast: ${PS2_CAST_NAMES.join(', ')} (jay = curly hair, grey tee; brad = slick blond hair, navy vest; mia = long blonde hair; gus = bald, beard, flannel; kai = red cap, hoodie; zoe = bun, glasses, coat; max = glasses, black hoodie; ava = long black hair, green tee). Keep one cast per series.` },
+      { key: 'set', label: 'Set', type: 'select', default: 'cafe', options: [...PS2_SETS], help: 'Where it starts; a line with set=... moves it.' },
+      { key: 'time', label: 'Time of day', type: 'select', default: 'day', options: ['day', 'evening', 'night'], help: 'The light; a line with the night flag turns it to night from there on.' },
+      { key: 'look', label: 'Picture', type: 'select', default: 'ps2', options: ['ps2', 'hd'], help: 'ps2 = rendered small and scaled up soft, with faint scanlines and grain (the console look); hd = sharp.' },
+      { key: 'captions', label: 'Captions', type: 'select', default: 'subtitle', options: ['subtitle', 'words', 'off'], help: 'subtitle = the whole line as a console subtitle, low in the frame; words = one to three words popping in; off = none.' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.1, min: 0, max: 1.5, step: 0.02 },
+      ...VOICE_FIELDS.map((f) => (f.key === 'voiceover' ? { ...f, default: false } : f.key === 'sfx_volume' ? { ...f, default: 0.3 } : f.key === 'bed' ? { ...f, default: 'lofi' } : f.key === 'bed_volume' ? { ...f, default: 0.45 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 2.6, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice.' },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
+    ],
+  },
+  {
+    id: 'ink',
+    name: 'Ink cartoon',
+    tagline: 'A narrated story acted out by our own caricature cast, drawn like hand-inked cels: thin warm-brown pen lines, flat colours, big lumpy heads with small crowded features, plaid and stubble ticks, layered sets the camera never stops moving through, whip-pans between places, a warm grainy print finish and yellow word captions.',
+    inspiredBy: 'Hand-inked old-cartoon story videos ("He did X for Y", true stories told fast, every noun drawn): 30-90 s',
+    fields: [
+      {
+        key: 'beats',
+        label: 'Lines',
+        type: 'lines',
+        default: [
+          '3.0 | This man wants to dig up a whole landfill. | dig | | shovel | | set=dump dusk solo',
+          '2.6 | Somewhere under it is one hard drive. | think | | drive | | solo',
+          '2.8 | 2013. He is clearing out his desk. | idle | 2013 | | | set=room day solo',
+          '3.0 | Two drives look the same. He bins the wrong one. | hold | | trashbag | | solo',
+          '2.8 | That drive held the keys to 8,000 bitcoin. | shock | | coin | | solo',
+          '2.4 | Today that is hundreds of millions. | grief | | cash | | solo',
+          '2.8 | He goes to the city and asks to dig. | talk/smug | | | | set=office',
+          '1.8 | They say no. | idle/smug | | | | who=b',
+          '2.6 | He offers them a cut. Still no. | shrug/anger | | | |',
+          '3.2 | He sues. In 2025 a court throws it out. | grief/idle | 2025 | B:gavel | | set=court',
+          '2.6 | The drive is still down there. | dig | | shovel | | set=dump night solo',
+          '2.6 | Back up your keys. Twice. | point | | | | shot=close solo',
+        ].join('\n'),
+        help: INK_HELP + FX_HELP,
+      },
+      { key: 'cast', label: 'Cast', type: 'text', default: 'bubba;vince', help: `Who is in it, A;B(;C), from our own cast: ${INK_CAST_NAMES.join(', ')} (bubba = huge, walrus moustache, plaid shirt; vince = thin, slick hair, pencil moustache, gold tooth, suit; dot = short, red bun, glasses; rico = big, cap, stubble, tank top, gold chain; gramps = short, white tufts, argyle vest; lulu = thin, blue bob, red jacket; tex = big, cowboy hat, mullet, denim; kev = bowl cut, glasses, striped hoodie). Pick builds that differ (one huge, one thin). A new story gets its own cast where it can.` },
+      { key: 'set', label: 'Set', type: 'select', default: 'road', options: [...INK_SETS], help: 'Where it starts; a line with set=... whip-pans to another place.' },
+      { key: 'time', label: 'Light', type: 'select', default: 'dusk', options: ['day', 'dusk', 'night'], help: 'The light it starts in; a line with day, dusk or night changes it from there on.' },
+      { key: 'palette', label: 'Colours', type: 'select', default: 'sunset', options: [...INK_PALETTES], help: 'The locked colours of the whole video (one blue, one skin for the whole cast, one pale, two accents): sunset = cobalt, salmon, cream, gold, red; neon = periwinkle, hot pink, lilac, green, yellow; rust = cobalt, orange-red, cream, gold, green.' },
+      { key: 'look', label: 'Finish', type: 'select', default: 'print', options: ['print', 'clean'], help: 'print = the old-cartoon print pass (warm tone, bloom, grain, lifted blacks, vignette); clean = the flat drawing.' },
+      { key: 'captions', label: 'Captions', type: 'select', default: 'words', options: ['words', 'off'], help: 'words = 1-3 yellow words at a time, low in the frame.' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.05, min: 0, max: 1.5, step: 0.02 },
+      ...VOICE_FIELDS.map((f) => (f.key === 'sfx_volume' ? { ...f, default: 0.35 } : f.key === 'bed' ? { ...f, default: 'lofi' } : f.key === 'bed_volume' ? { ...f, default: 0.35 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3.5, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice (the style runs about 3.5 words a second).' },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
+    ],
+  },
+  {
+    id: 'pixel',
+    name: 'Pixel Theater',
+    tagline: 'A story told like a little 16-bit game: our own white pixel cast acts every line in pixel places, the words type out in a game text box, choices pop up as a menu, a HUD counts coins and hearts, pixel title cards mark the turns and the last line types out alone on black.',
+    inspiredBy: 'Pixel-art story shorts (a true or relatable story played like an old game, a twist, a quiet typed ending): 30-60 s',
+    fields: [
+      {
+        key: 'beats',
+        label: 'Lines',
+        type: 'lines',
+        default: [
+          '2.8 | He is about to pay 10,000 bitcoin. For pizza. | shock | | coin | | set=room night solo coins=10000',
+          '2.6 | May 2010. Bitcoin is worth almost nothing. | idle | MAY 2010 | | | solo',
+          '3.0 | He posts on a forum: two pizzas for 10,000 coins. | type | | laptop | | solo',
+          '2.6 | A stranger takes the deal. | talk/happy | | B:pizza | | set=street day',
+          '2.4 | Pay or wait? | think/idle | | | | choice=pay/wait',
+          '2.6 | He pays. Two pizzas show up. | happy/idle | | pizza | | coins=0',
+          '1.6 | YEARS LATER | | | | | title',
+          '3.0 | Those coins later topped a billion dollars. | shock | | | | set=room solo',
+          '3.0 | People still mark the day: Bitcoin Pizza Day. | dance/dance | MAY 22 | | | set=city night',
+          '3.2 | One of the first things ever bought with bitcoin. | | | | | end',
+        ].join('\n'),
+        help: PIXEL_HELP + FX_HELP,
+      },
+      { key: 'cast', label: 'Cast', type: 'text', default: 'pip;tok', help: `Who is in it, A;B(;C), from our own pixel cast: ${PIXEL_CAST_NAMES.join(', ')} (pip = red cap; mo = blue scarf, tall; ivy = pink bow, short; zed = yellow tie and glasses, tallest; tok = green headphones; lux = orange spikes). A new story gets its own cast where it can.` },
+      { key: 'set', label: 'Place', type: 'select', default: 'room', options: [...PIXEL_SETS], help: 'Where it starts; a line with set=... changes place with a block wipe.' },
+      { key: 'time', label: 'Light', type: 'select', default: 'night', options: ['day', 'night'], help: 'The light it starts in; a line with day or night changes it from there on.' },
+      { key: 'captions', label: 'Text box', type: 'select', default: 'box', options: ['box', 'off'], help: 'box = the words type out in a game text box at the bottom.' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.1, min: 0, max: 1.5, step: 0.02 },
+      ...VOICE_FIELDS.map((f) => (f.key === 'sfx_volume' ? { ...f, default: 0.4 } : f.key === 'bed' ? { ...f, default: 'pulse' } : f.key === 'bed_volume' ? { ...f, default: 0.35 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3.0, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice.' },
+      { key: 'toon', label: 'Look', type: 'text', default: 'pixel', hidden: true },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
+    ],
+  },
+  {
+    id: 'hose',
+    name: 'Rubber hose',
+    tagline: 'A story told like a 1930s ink-and-paint cartoon: our own bean-bodied cast with bendy hose arms, white gloves, big shoes and pie-cut eyes acts every line, the whole world bounces on the beat, the picture is old film (grain, flicker, dust, scratches), places change with an iris and turns get an art-deco title card.',
+    inspiredBy: '1930s-style rubber hose cartoon shorts (a story or a gag told with bouncing characters on old film): 20-60 s',
+    fields: [
+      {
+        key: 'beats',
+        label: 'Lines',
+        type: 'lines',
+        default: [
+          '3.0 | This man is selling the Eiffel Tower. | point | | paper | | set=city solo',
+          '2.6 | Paris, 1925. The tower needs costly repairs. | think | 1925 | | | set=street solo',
+          '3.2 | He poses as a government man and calls in scrap dealers. | talk/idle | | letter | | set=office',
+          '2.6 | One dealer wants it badly. | idle/happy | | | | who=b',
+          '2.6 | He pays. Plus a bribe. | laugh/idle | | B:bag | | who=b',
+          '1.6 | THE NEXT DAY | | | | | title',
+          '2.8 | The con man is gone, with the cash. | run | | bag | | set=street solo shake',
+          '3.0 | The dealer is too ashamed to tell the police. | sad | | | | set=house solo who=b',
+          '3.2 | So the con man reportedly comes back and tries it again. | sneak | | paper | | set=city solo',
+          '3.0 | If a deal needs a bribe, walk away. | point | | | | shot=close solo end',
+        ].join('\n'),
+        help: HOSE_HELP + FX_HELP,
+      },
+      { key: 'cast', label: 'Cast', type: 'text', default: 'otto;gus', help: `Who is in it, A;B(;C), from our own cast: ${HOSE_CAST_NAMES.join(', ')} (bert = bowler hat; mabel = flower, polka dots, short; gus = big, sailor cap, stripes; skip = small, propeller beanie; otto = tall and thin, top hat, long nose; pearl = curls, stripes). Pick builds that differ.` },
+      { key: 'set', label: 'Place', type: 'select', default: 'street', options: [...HOSE_SETS], help: 'Where it starts; a line with set=... irises to another place.' },
+      { key: 'time', label: 'Light', type: 'select', default: 'day', options: ['day', 'night'], help: 'The light it starts in; a line with day or night changes it from there on.' },
+      { key: 'film', label: 'Film', type: 'select', default: 'mono', options: [...HOSE_FILMS], help: 'mono = black and white; sepia = warm brown; twostrip = the early two-colour look (orange and teal).' },
+      { key: 'captions', label: 'Captions', type: 'select', default: 'words', options: ['words', 'off'], help: 'words = 2-3 words at a time in a heavy old serif.' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.05, min: 0, max: 1.5, step: 0.02 },
+      ...VOICE_FIELDS.map((f) => (f.key === 'sfx_volume' ? { ...f, default: 0.4 } : f.key === 'bed' ? { ...f, default: 'goofy' } : f.key === 'bed_volume' ? { ...f, default: 0.35 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3.3, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice.' },
+      { key: 'toon', label: 'Look', type: 'text', default: 'hose', hidden: true },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
+    ],
+  },
+  {
+    id: 'tv',
+    name: 'Retro TV',
+    tagline: 'A story played on an old CRT set: our own cast are glowing phosphor figures drawn in light on a dark screen, the places are glowing line art, the picture has scanlines, bloom, a rolling hum bar and curved corners, places change with static and a channel number, and the last line ends with the set switching off.',
+    inspiredBy: 'Glowing-figure retro TV story shorts (luminous characters on a dark CRT, a calm narrated story or explainer): 30-60 s',
+    fields: [
+      {
+        key: 'beats',
+        label: 'Lines',
+        type: 'lines',
+        default: [
+          '3.0 | A computer from 1977 starts talking nonsense. | shock | | laptop | | set=office solo',
+          '3.0 | It is on Voyager 1, the farthest thing we ever built. | point | 1977 | | | set=space solo',
+          '3.0 | Every message takes almost a day to get there. | think | | clock | | solo',
+          '3.0 | November 2023. Its data turns into gibberish. | shock/sad | NOV 2023 | chart- | | set=office',
+          '2.6 | The team tracks it to one broken chip. | think/point | | | | who=b',
+          '3.0 | They cannot fix it. So they move the code around it. | type/type | | | |',
+          '1.6 | SIGNAL BACK | | | | | title',
+          '2.8 | April 2024. Voyager makes sense again. | happy/happy | APR 2024 | | | set=office',
+          '3.2 | Old tech, still running. Because people kept it running. | wave | | | | set=space solo end',
+        ].join('\n'),
+        help: TV_HELP + FX_HELP,
+      },
+      { key: 'cast', label: 'Cast', type: 'text', default: 'rex;ada', help: `Who is in it, A;B(;C), from our own glowing cast: ${TV_CAST_NAMES.join(', ')} (neo = cap, cyan; vee = ponytail, pink; rex = glasses, green, tall; ada = bun, amber, short; max = hat, orange; kai = headphones, violet). Colours show on the colour screen; one-colour screens draw everyone in the one glow.` },
+      { key: 'set', label: 'Place', type: 'select', default: 'city', options: [...TV_SETS], help: 'Where it starts; a line with set=... changes channel (static and a channel number).' },
+      { key: 'phosphor', label: 'Screen', type: 'select', default: 'color', options: [...TV_PHOSPHORS], help: 'color = each figure in its own colour on a blue set; green, amber or cyan = a one-colour monitor.' },
+      { key: 'captions', label: 'Captions', type: 'select', default: 'words', options: ['words', 'off'], help: 'words = the words type out in glowing capitals, a few at a time.' },
+      { key: 'gap', label: 'Pause between lines (s)', type: 'number', default: 0.1, min: 0, max: 1.5, step: 0.02 },
+      ...VOICE_FIELDS.map((f) => (f.key === 'sfx_volume' ? { ...f, default: 0.35 } : f.key === 'bed' ? { ...f, default: 'ambient' } : f.key === 'bed_volume' ? { ...f, default: 0.35 } : f)),
+      { key: 'wps', label: 'Reading speed (words/s)', type: 'number', default: 3.0, min: 1.5, max: 8, step: 0.1, help: 'How fast the captions go when there is no voice.' },
+      { key: 'toon', label: 'Look', type: 'text', default: 'tv', hidden: true },
+      { key: 'motion', label: 'Motion', type: 'select', default: 'calm', options: ['calm', 'kinetic'], hidden: true },
+      ...COMMON.map((f) => (f.key === 'cta_seconds' ? { ...f, default: 0 } : f)),
+    ],
+  },
 ];
 
 /** The band of the 1080x1920 frame a preset keeps its content in (top and bottom y): the part that makes the square, 4:5 and 2:3 pictures. */
-export const contentBand = (preset: string): { top: number; bottom: number } => (preset === 'slides' ? { top: 225, bottom: 1575 } : { top: 220, bottom: 1680 });
+export const contentBand = (preset: string): { top: number; bottom: number } =>
+  preset === 'slides' ? { top: 225, bottom: 1575 } : preset === 'pixel' ? { top: 36, bottom: 1900 } : preset === 'hose' ? { top: 130, bottom: 1790 } : preset === 'tv' ? { top: 130, bottom: 1720 } : { top: 220, bottom: 1680 };
 
 /**
  * The seconds of a reel to save as the pictures of a photo post: one per slide, panel or beat, once everything on it
@@ -595,7 +979,7 @@ export function normalizeFields(p: PresetMeta, given: Fields, base?: Fields): { 
   const out: Fields = {};
   const warnings: string[] = [];
   for (const f of p.fields) {
-    const raw = f.key in given ? given[f.key] : base && f.key in base ? base[f.key] : f.default;
+    const raw = f.hidden && f.key === 'toon' ? f.default : f.key in given ? given[f.key] : base && f.key in base ? base[f.key] : f.default;
     let v: FieldValue = raw;
     if (f.type === 'number') {
       const n = typeof raw === 'number' ? raw : Number(raw);
@@ -670,6 +1054,16 @@ export function timingFor(presetId: string, f: Fields): Timing {
     case 'stickman':
     case 'blox':
     case 'duo':
+    case 'morph':
+    case 'lecture':
+    case 'space':
+    case 'cutaway':
+    case 'diorama':
+    case 'ps2':
+    case 'ink':
+    case 'tv':
+    case 'hose':
+    case 'pixel':
     case 'slides': {
       const b = storyBeats(f);
       body = b.length ? b[b.length - 1].start + b[b.length - 1].dur : 3;
@@ -786,7 +1180,7 @@ function beatFlags(raw: string): { theme: '' | 'light' | 'dark'; wipe: boolean; 
     else if (tok.startsWith('speed=')) {
       const s = Number(tok.slice(6));
       if (Number.isFinite(s) && s > 0) out.speed = Math.min(1.5, Math.max(0.7, s));
-    } else if (STICK_FLAG.test(tok) || SLIDE_FLAG.test(tok) || DUO_FLAG.test(tok) || BLOX_FLAG.test(tok)) out.tags.push(tok);
+    } else if (STICK_FLAG.test(tok) || SLIDE_FLAG.test(tok) || DUO_FLAG.test(tok) || BLOX_FLAG.test(tok) || MORPH_FLAG.test(tok) || LECTURE_FLAG.test(tok) || SPACE_FLAG.test(tok) || CUT_FLAG.test(tok) || DIO_FLAG.test(tok) || PS2_FLAG.test(tok) || INK_FLAG.test(tok) || TV_FLAG.test(tok) || HOSE_FLAG.test(tok) || PIXEL_FLAG.test(tok)) out.tags.push(tok);
     // Anything else (an old per-line voice name) is ignored: one voice per reel.
   }
   return out;
@@ -795,7 +1189,7 @@ function beatFlags(raw: string): { theme: '' | 'light' | 'dark'; wipe: boolean; 
 /** Whether a column holds only flags (never spoken). */
 const flagsOnly = (s: string): boolean => {
   const toks = flagTokens(s);
-  return toks.length > 0 && toks.every((t) => /^(?:light|dark|wipe|pause=[\d.]+|speed=[\d.]+)$/.test(t) || LAYOUTS.includes(t) || STICK_FLAG.test(t) || SLIDE_FLAG.test(t) || DUO_FLAG.test(t) || BLOX_FLAG.test(t) || !!parseFx(t));
+  return toks.length > 0 && toks.every((t) => /^(?:light|dark|wipe|pause=[\d.]+|speed=[\d.]+)$/.test(t) || LAYOUTS.includes(t) || STICK_FLAG.test(t) || SLIDE_FLAG.test(t) || DUO_FLAG.test(t) || BLOX_FLAG.test(t) || MORPH_FLAG.test(t) || LECTURE_FLAG.test(t) || SPACE_FLAG.test(t) || CUT_FLAG.test(t) || DIO_FLAG.test(t) || PS2_FLAG.test(t) || INK_FLAG.test(t) || TV_FLAG.test(t) || HOSE_FLAG.test(t) || PIXEL_FLAG.test(t) || !!parseFx(t));
 };
 
 /** A beat row's spoken line and its flags. */
@@ -938,6 +1332,17 @@ export function storyVideoTime(f: Fields, t: number, beats = storyBeats(f), vide
     const h = beats[duoLines(beats)[beats.indexOf(b)]?.held ?? -1];
     return h && h.visual === 'screen' ? Math.max(0, screenStart(h.a) + Math.min(t, b.start + b.dur) - h.start) : null;
   }
+  // Lecture reels (the only preset with a topic field): a recording stays on the board under the lines after it
+  // until a new card or a clear, and keeps playing there.
+  if (f.topic !== undefined) {
+    const at = beats.indexOf(b);
+    for (let k = at; k >= 0; k--) {
+      const x = beats[k];
+      if (x.visual === 'screen') return Math.max(0, screenStart(x.a) + Math.min(t, b.start + b.dur) - x.start);
+      if ((x.visual && x.visual !== 'none') || x.tags.includes('clear')) return null;
+    }
+    return null;
+  }
   // Story and meme screen beats: a = the start second. Stickman beats: a laptop / monitor / screen / phone prop's value.
   const from = b.visual === 'screen' ? screenStart(b.a) : stickScreenStart(b.b);
   if (from === null) return null;
@@ -963,9 +1368,9 @@ export function screenZoom(a: string): { x: number; y: number; z: number } {
 export function storyVoiceSig(f: Fields): string {
   const beats = storyBeats(f);
   const voice = beats.map((b) => `${b.key}@${(b.start + b.voStart).toFixed(3)}`).join(';');
-  const sfx = f.sfx === true ? storySfx(beats).map((e) => `${e.kind}${e.t.toFixed(2)}/${(e.dur ?? 0).toFixed(2)}/${e.gain ?? 1}`).join(';') : '';
-  const bed = f.bed && f.bed !== 'none' ? `${f.bed}@${num(f, 'bed_volume', 0.6)}` : '';
-  return hashKey(`${voice}|${num(f, 'voice_volume', 1)}|${sfx}|${num(f, 'sfx_volume', 0.5)}|${bed}|mix5`);
+  const sfx = f.sfx === true ? storySfx(beats, f).map((e) => `${e.kind}${e.t.toFixed(2)}/${(e.dur ?? 0).toFixed(2)}/${e.gain ?? 1}`).join(';') : '';
+  const bed = f.bed && f.bed !== 'none' ? `${f.bed}@${num(f, 'bed_volume', 0.6)}${num(f, 'bpm', 0) ? `/${num(f, 'bpm', 0)}bpm` : ''}` : '';
+  return hashKey(`${voice}|${num(f, 'voice_volume', 1)}|${sfx}|${num(f, 'sfx_volume', 0.5)}|${bed}|mix6`);
 }
 
 /** The mixed soundtrack (voice + effects) if one was made for the current beats, else null. */

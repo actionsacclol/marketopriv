@@ -20,9 +20,22 @@ interface HostDeps {
   log: (level: 'info' | 'warn' | 'error', message: string) => void;
   /** Added to the pipe name so a development copy doesn't collide with the installed hub. */
   pipeSuffix?: string;
+  /** An autopilot run is working right now (checked on every Kip call: a run can start in the middle of his message). */
+  runGoing?: () => boolean;
 }
 
 const READY_TIMEOUT_MS = 30_000;
+
+/** What belongs to an autopilot run while it works: Kip is refused these until it ends (his instructions say the same). */
+const RUN_ONLY = (name: string): boolean => name.startsWith('browser_') || name === 'get_today' || name === 'mark_posted' || name === 'render_reel';
+
+/**
+ * Claude Code refuses a tool result over 25,000 tokens (MAX_MCP_OUTPUT_TOKENS), and every AI pays for it in full: a read
+ * tool's text is cut well before that (the lists put the newest first, so the oldest go).
+ */
+const READ_TEXT_CAP = 60_000;
+const capRead = (r: ToolOutcome): ToolOutcome =>
+  r.text.length > READ_TEXT_CAP ? { ...r, text: `${r.text.slice(0, READ_TEXT_CAP)}\n… (${(r.text.length - READ_TEXT_CAP).toLocaleString('en-US')} more characters left out: ask for less, with a limit, an offset or one item)` } : r;
 
 function shimPath(): string | null {
   const p = app.isPackaged ? path.join(process.resourcesPath, 'resources', 'mcp', 'marketo-mcp.cjs') : path.join(app.getAppPath(), 'resources', 'mcp', 'marketo-mcp.cjs');
@@ -113,8 +126,13 @@ export async function startAgentHost(deps: HostDeps): Promise<McpHandle | null> 
       runTool: async (name, args, client, onProgress, signal) => {
         const def = TOOLS.find((t) => t.name === name);
         if (!def) return { ok: false, text: `Unknown tool ${name}` };
+        if (client === 'Kip' && RUN_ONLY(name) && deps.runGoing?.())
+          return { ok: false, text: `An autopilot run is working in this hub right now and ${name} belongs to it (the browser tabs, today's plan, posting, rendering). Do not call browser_*, get_today, mark_posted or render_reel until the run ends; tell the user this part has to wait for the run to end. Reading numbers, the queue, ideas, styles and settings is fine.` };
         try {
-          if (def.where === 'main') return await MAIN_HANDLERS[name](args as never, { focus: client === 'Kip' && name !== 'show' ? () => undefined : deps.focus, client });
+          if (def.where === 'main') {
+            const r = await MAIN_HANDLERS[name](args as never, { focus: client === 'Kip' && name !== 'show' ? () => undefined : deps.focus, client });
+            return def.kind === 'read' ? capRead(r) : r;
+          }
           checkRendererArgs(name, args);
         } catch (e) {
           return { ok: false, text: (e as Error).message };

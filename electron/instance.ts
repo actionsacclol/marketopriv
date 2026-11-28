@@ -15,6 +15,7 @@ import { app } from 'electron';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { errCode, isHeld, readText, sleepSync, stripBom, writeAtomic } from './safeFile';
 
 const override = process.env.KRYPT_MARKETO_DATA?.trim();
 /** The data folder: the Main profile's files and everything the profiles share. */
@@ -31,7 +32,8 @@ function readProfiles(): { multiInstance?: unknown; list?: Array<{ id?: unknown;
 }
 
 /** Multi-instance mode, as it was when this process started (a change takes a restart). */
-export const MULTI = readProfiles()?.multiInstance === true;
+// Each profile in its own window is the default (Open starts that profile's window); one window only when the user switched it off.
+export const MULTI = readProfiles()?.multiInstance !== false;
 
 const asked = process.argv.find((a) => a.startsWith('--profile='))?.slice('--profile='.length).trim() ?? '';
 /** The profile this process is, when it is not the base app (Main): only in multi-instance mode. */
@@ -110,9 +112,10 @@ const alive = (pid: number): boolean => {
   }
 };
 
-function readReg(): InstanceEntry[] {
+/** The list as saved. `wait`: wait out a short hold by another program (before writing it back, so no entry is dropped). */
+function readReg(wait = false): InstanceEntry[] {
   try {
-    const j = JSON.parse(fs.readFileSync(regFile(), 'utf8')) as { instances?: InstanceEntry[] };
+    const j = JSON.parse(wait ? readText(regFile()) : stripBom(fs.readFileSync(regFile(), 'utf8'))) as { instances?: InstanceEntry[] };
     return (j.instances ?? []).filter((e) => e && typeof e.id === 'string' && typeof e.pid === 'number');
   } catch {
     return [];
@@ -120,28 +123,75 @@ function readReg(): InstanceEntry[] {
 }
 
 function writeReg(list: InstanceEntry[]): void {
-  const tmp = `${regFile()}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, `${JSON.stringify({ instances: list }, null, 2)}\n`, 'utf8');
-  fs.renameSync(tmp, regFile());
+  writeAtomic(regFile(), `${JSON.stringify({ instances: list }, null, 2)}\n`);
+}
+
+// Instances started together (the background profiles, all at once) each read the list, add themselves and write it
+// back: one at a time, behind a lock file, or one would write over the other's entry.
+const lockFile = (): string => `${regFile()}.lock`;
+const LOCK_STALE_MS = 10_000;
+
+function withRegLock(fn: () => void): void {
+  const until = Date.now() + 3000;
+  let fd: number | null = null;
+  while (fd === null) {
+    try {
+      fd = fs.openSync(lockFile(), 'wx');
+    } catch (e) {
+      if (errCode(e) !== 'EEXIST' && !isHeld(e)) throw e;
+      // A lock left by an instance that died while holding it.
+      try {
+        if (Date.now() - fs.statSync(lockFile()).mtimeMs > LOCK_STALE_MS) fs.rmSync(lockFile(), { force: true });
+      } catch {
+        /* gone already */
+      }
+      // Waited long enough: write anyway (the timer below puts back an entry that gets lost).
+      if (Date.now() > until) break;
+      sleepSync(25 + Math.floor(Math.random() * 50));
+    }
+  }
+  try {
+    fn();
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+        fs.rmSync(lockFile(), { force: true });
+      } catch {
+        /* the next one treats it as stale */
+      }
+    }
+  }
 }
 
 let mine: InstanceEntry | null = null;
+let republish: NodeJS.Timeout | null = null;
 
 /** Put this process on the list (and keep its Chrome profiles current). Only in multi-instance mode. */
 export function publish(patch: Partial<InstanceEntry>): void {
   if (!MULTI) return;
   mine = { id: OWN, pid: process.pid, chromeDirs: [], startedAt: new Date().toISOString(), visible: !hidden, ...mine, ...patch };
   try {
-    writeReg([...readReg().filter((e) => e.id !== OWN && e.pid !== process.pid && alive(e.pid)), mine]);
+    withRegLock(() => writeReg([...readReg(true).filter((e) => e.id !== OWN && e.pid !== process.pid && alive(e.pid)), mine!]));
   } catch {
-    /* another instance is writing; the next change publishes again */
+    /* another instance is writing; the check below publishes again */
   }
+  // Every 30 s: an entry another instance wrote over (or a write that failed) is put back.
+  republish ??= setInterval(() => {
+    if (!mine) return;
+    const there = readReg().find((e) => e.pid === process.pid);
+    if (!there || JSON.stringify(there) !== JSON.stringify(mine)) publish({});
+  }, 30_000);
+  republish.unref();
 }
 
 export function unpublish(): void {
   if (!MULTI) return;
+  if (republish) clearInterval(republish);
+  republish = null;
+  mine = null;
   try {
-    writeReg(readReg().filter((e) => e.pid !== process.pid && alive(e.pid)));
+    withRegLock(() => writeReg(readReg(true).filter((e) => e.pid !== process.pid && alive(e.pid))));
   } catch {
     /* gone anyway once the pid is dead */
   }

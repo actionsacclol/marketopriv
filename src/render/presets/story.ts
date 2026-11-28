@@ -32,7 +32,7 @@ export interface Theme {
 }
 
 export const DARK: Theme = { light: false, ink: '#FFFFFF', sub: 'rgba(255,255,255,0.62)', panel: 'rgba(22,22,30,0.95)', stroke: 'rgba(255,255,255,0.12)', track: 'rgba(255,255,255,0.1)', pos: '#22C55E', neg: '#F43F5E', blue: '#3B82F6' };
-const LIGHT: Theme = { light: true, ink: '#0B0B0F', sub: 'rgba(11,11,15,0.55)', panel: '#FFFFFF', stroke: 'rgba(0,0,0,0.08)', track: 'rgba(0,0,0,0.08)', pos: '#16A34A', neg: '#E11D48', blue: '#2563EB' };
+export const LIGHT: Theme = { light: true, ink: '#0B0B0F', sub: 'rgba(11,11,15,0.55)', panel: '#FFFFFF', stroke: 'rgba(0,0,0,0.08)', track: 'rgba(0,0,0,0.08)', pos: '#16A34A', neg: '#E11D48', blue: '#2563EB' };
 
 function hash(n: number): number {
   const x = Math.sin(n * 91.7 + 13.1) * 43758.5453;

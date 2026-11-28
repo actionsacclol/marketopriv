@@ -127,7 +127,8 @@ class LineTransport implements Transport {
   }
 
   async start(): Promise<void> {
-    this.socket.setEncoding('utf8');
+    // The hello reader already decodes UTF-8 (one decoder for the whole connection, so a character split across chunks survives).
+    if (!this.socket.readableEncoding) this.socket.setEncoding('utf8');
     this.socket.on('data', (c: string) => this.feed(c));
     this.socket.on('close', () => this.finish());
     this.socket.on('error', (e) => this.onerror?.(e));
@@ -165,9 +166,10 @@ interface Hooks {
   call(def: ToolDef, args: unknown, extra: ToolExtra | undefined): Promise<CallToolResult>;
 }
 
-function buildServer(version: string, hooks: Hooks): McpServer {
+function buildServer(version: string, hooks: Hooks, skip?: ReadonlySet<string>): McpServer {
   const server = new McpServer({ name: SERVER_NAME, title: 'Krypt Marketo', version }, { capabilities: { tools: {} }, instructions: serverInstructions() });
-  for (const def of TOOLS) {
+  // A connection can ask for fewer tools (Kip on an AI app that takes a limited number); the rest are not offered at all.
+  for (const def of skip?.size ? TOOLS.filter((d) => !skip.has(d.name)) : TOOLS) {
     server.registerTool(
       def.name,
       { title: def.title, description: def.description, inputSchema: def.input, annotations: annotationsFor(def) },
@@ -255,7 +257,11 @@ function tokenOk(given: unknown, expected: string): boolean {
 
 function pipePath(userData: string, suffix = ''): string {
   if (process.platform === 'win32') {
-    const user = (os.userInfo().username || 'user').replace(/[^A-Za-z0-9_.-]/g, '_');
+    const raw = os.userInfo().username || 'user';
+    let user = raw.replace(/[^A-Za-z0-9_.-]/g, '_');
+    // Pipe names are machine-wide: two users whose names only differ in replaced letters would share one, so a short
+    // hash of the home folder tells them apart (plain names keep theirs). AI apps read the name from mcp.json.
+    if (user !== raw) user += `-${crypto.createHash('sha256').update(os.homedir().toLowerCase()).digest('hex').slice(0, 8)}`;
     return `\\\\.\\pipe\\krypt-marketo-mcp-${user}${suffix}`;
   }
   return path.join(userData, 'mcp.sock');
@@ -387,8 +393,10 @@ export async function startMcp(deps: McpDeps): Promise<McpHandle> {
       clearTimeout(timer);
       socket.end(`${JSON.stringify({ krypt: 'error', message })}\n`);
     };
-    const onData = (chunk: Buffer): void => {
-      buf += chunk.toString('utf8');
+    // Decode with the socket's own UTF-8 decoder: a character split across two chunks stays whole.
+    socket.setEncoding('utf8');
+    const onData = (chunk: string): void => {
+      buf += chunk;
       const nl = buf.indexOf('\n');
       if (nl < 0) {
         if (buf.length > 4096) deny('hello line too long');
@@ -396,7 +404,7 @@ export async function startMcp(deps: McpDeps): Promise<McpHandle> {
       }
       socket.removeListener('data', onData);
       clearTimeout(timer);
-      let hello: { krypt?: string; token?: unknown; client?: unknown } | null = null;
+      let hello: { krypt?: string; token?: unknown; client?: unknown; skip?: unknown } | null = null;
       try {
         hello = JSON.parse(buf.slice(0, nl));
       } catch {
@@ -413,7 +421,9 @@ export async function startMcp(deps: McpDeps): Promise<McpHandle> {
       socket.write(`${JSON.stringify({ krypt: 'ok', version: deps.version })}\n`);
       conns.set(c.id, c);
       const transport = new LineTransport(socket, rest, (m) => observe(c, m));
-      const handle = serveStdio(() => buildServer(deps.version, { client: () => c.raw ?? c.hint, call: callFor(c) }), {
+      const skip = new Set(Array.isArray(hello.skip) ? hello.skip.filter((x): x is string => typeof x === 'string').slice(0, 120) : []);
+      if (skip.size) deps.log('info', `MCP: ${clientLabel(c.hint)} asked for ${skip.size} fewer tools`);
+      const handle = serveStdio(() => buildServer(deps.version, { client: () => c.raw ?? c.hint, call: callFor(c) }, skip), {
         transport,
         onerror: (e) => deps.log('warn', `MCP (${nameOf(c)}): ${e.message}`),
       });

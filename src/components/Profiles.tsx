@@ -399,7 +399,7 @@ export function MultiRunBoard({ onProxies, onChrome }: { onProxies?: () => void;
         A profile is a complete, separate set: its own accounts and socials, brand, reels, post log, Training and settings. Shared by every profile: your AI connections, the Chrome extension, your ElevenLabs key and the autopilot schedule.
         {many
           ? windows
-            ? ' Each scheduled run works on every profile with Autopilot on at the same time, each in its own window (that uses your AI plan that many times faster). Background profiles run with no window: they start when Main opens and when a run needs them, and the sidebar list or Show window brings one up (closing it sends it back to the background; the square stops it).'
+            ? ' Each scheduled run works on every profile with Autopilot on, each in its own window: with Claude Code all at the same time (that uses your AI plan that many times faster), with other AI apps one after the other. Background profiles run with no window: they start when Main opens and when a run needs them, and the sidebar list or Show window brings one up (closing it sends it back to the background; the square stops it).'
             : autopilot?.on
               ? ' Each scheduled run works through the profiles with Autopilot on, one after the other.'
               : ' When the autopilot is on, each run works through the profiles with Autopilot on, one after the other.'

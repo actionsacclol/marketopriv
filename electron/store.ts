@@ -19,6 +19,7 @@ import { cleanSayAs, setSayAs } from '../shared/pronounce';
 import { EMPTY_BRAND, KRYPT_BRAND, cleanInvite, creatorProblem } from '../shared/brand';
 import { cleanClipping } from '../shared/clipping';
 import { cleanLongform } from '../shared/longform';
+import { HELD_WAITS, errCode, isHeld, readText, retrySync, writeDurable } from './safeFile';
 
 let file = '';
 let db: Db;
@@ -33,44 +34,121 @@ function empty(outputDir: string): Db {
   return { version: 1, settings: { handle: '', outputDir, fps: 30, agentAccess: true }, accounts: [], igAccounts: [], sessions: [], reels: [], posts: [], references: [], refVideos: [], learnings: [], voices: [], brand: { ...EMPTY_BRAND }, agent: { ...EMPTY_AGENT } };
 }
 
+/** The lists every page and tool reads as lists: a data file with one missing or null (an old version) gets an empty one. */
+const LISTS = ['accounts', 'igAccounts', 'sessions', 'reels', 'posts', 'references', 'refVideos', 'learnings', 'voices'] as const;
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** One saved data file, parsed (throws when it cannot be read or is not the hub's data). */
+function readDbFile(f: string): Partial<Db> {
+  const raw = JSON.parse(readText(f)) as unknown;
+  if (!isObj(raw)) throw new Error('not a Krypt Marketo data file');
+  return raw as Partial<Db>;
+}
+
+/** Copies to try when the data file cannot be read: the copy just kept aside, the .bak, then older kept-aside ones, newest first. */
+function fallbacks(aside: string): string[] {
+  const dir = path.dirname(file);
+  const base = path.basename(file);
+  let older: string[] = [];
+  try {
+    older = fs
+      .readdirSync(dir)
+      .filter((n) => n.startsWith(`${base}.corrupt-`))
+      .map((n) => path.join(dir, n))
+      .filter((f) => f !== aside)
+      .sort((a, b) => (Number(b.split('.corrupt-').pop()) || 0) - (Number(a.split('.corrupt-').pop()) || 0));
+  } catch {
+    /* no folder listing: the .bak alone */
+  }
+  return [...(aside ? [aside] : []), `${file}.bak`, ...older];
+}
+
+/** What went wrong reading the data file at the last start or profile switch ('' = nothing). */
+let loadNote = '';
+export const loadProblem = (): string => loadNote;
+
+/** Saved data into the hub, with the changes older versions need. */
+function load(raw: Partial<Db>): void {
+  const base = db;
+  try {
+    // A hub from before brand profiles was the Krypt one: keep it working as it did.
+    const brand: Brand = isObj(raw.brand) ? { ...EMPTY_BRAND, ...raw.brand } : { ...KRYPT_BRAND };
+    // The Krypt tools catalog used to have a switch. It is built in now.
+    delete (brand as Brand & { kryptPack?: boolean }).kryptPack;
+    db = { ...base, ...raw, settings: { ...base.settings, ...(isObj(raw.settings) ? raw.settings : {}) }, brand, agent: { ...EMPTY_AGENT, ...(isObj(raw.agent) ? raw.agent : {}) }, version: 1 };
+    for (const k of LISTS) if (!Array.isArray(db[k])) (db as unknown as Record<string, unknown[]>)[k] = [];
+    // The built-in browser is gone (2026-11-19): every account runs in the user's Chrome.
+    db.igAccounts = db.igAccounts.filter(isObj).map((a: IgAccount) => ({ ...a, browser: 'chrome' as const }));
+    // Reels posted before the post log existed go into it.
+    if (!raw.posts) db.posts = mergePosts([], db.reels.flatMap((r) => reelPosts(r, db.settings.handle)), () => newId('post'), now()).list;
+    // A recording left open by a crash or quit is closed as it stands.
+    for (const x of db.sessions) if (x?.live) delete x.live;
+  } catch (e) {
+    // A change for an older version failed on something unexpected: keep the data as it was saved rather than lose it.
+    loadNote = `${loadNote}${loadNote ? ' ' : ''}Updating the saved data failed (${(e as Error)?.message ?? e}); it was loaded as saved.`;
+    console.error(`[store] ${loadNote}`);
+    db = { ...base, ...raw, settings: { ...base.settings, ...(isObj(raw.settings) ? raw.settings : {}) }, brand: isObj(raw.brand) ? { ...EMPTY_BRAND, ...raw.brand } : { ...KRYPT_BRAND }, agent: { ...EMPTY_AGENT, ...(isObj(raw.agent) ? raw.agent : {}) }, version: 1 };
+    for (const k of LISTS) if (!Array.isArray(db[k])) (db as unknown as Record<string, unknown[]>)[k] = [];
+  }
+  try {
+    setSayAs(db.settings.sayAs);
+    setCustomStyles(db.customStyles);
+  } catch (e) {
+    console.error(`[store] saved pronunciations or own styles could not be read: ${(e as Error)?.message ?? e}`);
+  }
+}
+
 export function init(userData: string, defaultOutputDir: string): void {
   file = path.join(userData, 'marketo-db.json');
   db = empty(defaultOutputDir);
   setCustomStyles(undefined);
+  lastBak = 0;
+  bakHold = 'none';
+  pendingAside = '';
+  loadNote = '';
+  let raw: Partial<Db> | null = null;
   try {
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<Db>;
-    // A hub from before brand profiles was the Krypt one: keep it working as it did.
-    const brand: Brand = raw.brand ? { ...EMPTY_BRAND, ...raw.brand } : { ...KRYPT_BRAND };
-    // The Krypt tools catalog used to have a switch. It is built in now.
-    delete (brand as Brand & { kryptPack?: boolean }).kryptPack;
-    // The built-in browser is gone (2026-11-19): every account runs in the user's Chrome.
-    db = { ...db, ...raw, igAccounts: (raw.igAccounts ?? []).map((a: IgAccount) => ({ ...a, browser: 'chrome' as const })), learnings: raw.learnings ?? [], posts: raw.posts ?? [], refVideos: raw.refVideos ?? [], voices: raw.voices ?? [], settings: { ...db.settings, ...(raw.settings ?? {}) }, brand, agent: { ...EMPTY_AGENT, ...(raw.agent ?? {}) }, version: 1 };
-    // Reels posted before the post log existed go into it.
-    if (!raw.posts) db.posts = mergePosts([], db.reels.flatMap((r) => reelPosts(r, db.settings.handle)), () => newId('post'), now()).list;
-    // A recording left open by a crash or quit is closed as it stands.
-    for (const x of db.sessions) if (x.live) delete x.live;
-    setSayAs(db.settings.sayAs);
-    setCustomStyles(db.customStyles);
+    raw = readDbFile(file);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
-      // Unreadable: keep it aside rather than overwrite it.
+    if (errCode(e) !== 'ENOENT') {
+      // Unreadable (cut off by a power cut, held by another program, not JSON): keep it aside rather than overwrite it,
+      // then load the newest copy that reads. Never an empty hub while a good copy is there.
+      const aside = `${file}.corrupt-${Date.now()}`;
+      let kept = '';
       try {
-        fs.copyFileSync(file, `${file}.corrupt-${Date.now()}`);
-      } catch {
-        /* nothing to keep */
+        retrySync(() => fs.copyFileSync(file, aside));
+        kept = aside;
+      } catch (c) {
+        // Still held: the copy is made before the first save replaces it.
+        if (errCode(c) !== 'ENOENT') pendingAside = aside;
       }
+      let from = '';
+      for (const f of fallbacks(kept)) {
+        try {
+          raw = readDbFile(f);
+          from = f;
+          break;
+        } catch {
+          /* the next copy */
+        }
+      }
+      // Loaded from a copy: the .bak is not written over until a save has gone in. Nothing read: never this session.
+      bakHold = raw ? 'untilSaved' : 'session';
+      loadNote = `${file} could not be read (${(e as Error)?.message ?? e}). ${from ? `Loaded ${path.basename(from)} instead.` : 'No copy could be read either: the hub starts empty, and the .bak is kept as it is.'}`;
+      console.error(`[store] ${loadNote}`);
     }
   }
+  if (raw) load(raw);
   // When this install started (Krypt reposts wait two weeks from it): an older one from its first recorded session.
-  if (!db.settings.firstRunAt) db.settings.firstRunAt = db.sessions.reduce((min, x) => (x.startedAt && x.startedAt < min ? x.startedAt : min), now());
+  if (!db.settings.firstRunAt) db.settings.firstRunAt = db.sessions.reduce((min, x) => (x?.startedAt && x.startedAt < min ? x.startedAt : min), now());
 }
 
 /** Open another profile's data (electron/profiles.ts): the same as starting on it, and everything listening gets the new set. */
 export function open(dir: string, defaultOutputDir: string): void {
-  // Session time since the last save (it is written every 20 s) stays with the profile being closed.
-  if (file) persist();
+  // Session time since the last save (it is written every 20 s) stays with the profile being closed. If it cannot be
+  // written, the switch stops here: opening another set would drop it.
+  if (file && !persist()) throw new Error(`The open profile's data could not be saved (${saveNote}). Try again in a moment.`);
   init(dir, defaultOutputDir);
-  lastBak = 0;
   lastSite.clear();
   for (const l of listeners) l(db);
 }
@@ -116,34 +194,176 @@ export function seed(dir: string, outputDir: string, copy: { settings: boolean; 
     };
     next.refVideos = clone(db.refVideos).map((r) => ({ ...r, file: moved(r.file), sheets: { poster: moved(r.sheets.poster), hook: moved(r.sheets.hook), shots: moved(r.sheets.shots) } }));
   }
+  // Its first open goes through the setup wizard, prefilled or not (a prefilled one can skip it there).
+  next.settings.firstOpen = true;
   fs.writeFileSync(path.join(dir, 'marketo-db.json'), JSON.stringify(next, null, 2), 'utf8');
 }
 
 /** When the .bak copy was last made: once a minute is enough (a run saves after every like and follow). */
 let lastBak = 0;
+/**
+ * The data file could not be read at this start: 'untilSaved' = it was loaded from a copy, and the .bak is not
+ * written over until a save has gone in; 'session' = nothing could be read, and the .bak stays as it is until the
+ * next start (it may be the only copy left).
+ */
+let bakHold: 'none' | 'untilSaved' | 'session' = 'none';
+/** An unreadable data file that was held when it was to be kept aside: copied before a save replaces it. */
+let pendingAside = '';
 let lastSaveMs = 0;
-/** How long the last save took (Setup > Performance). */
+/** How long the last save held the app up (Setup > Performance). */
 export const saveTime = (): number => lastSaveMs;
-function persist(): void {
-  const t0 = performance.now();
+/** Why the last save did not go in ('' = it did). The change stays in memory and is saved again shortly. */
+let saveNote = '';
+export const saveProblem = (): string => saveNote;
+/** Saves are numbered as they are taken, so an older write never lands over a newer one. */
+let takenGen = 0;
+let savedGen = 0;
+let retryTimer: NodeJS.Timeout | null = null;
+
+/** Right before the new file replaces the old one: the kept-aside copy (if still owed) and the once-a-minute .bak. */
+function beforeReplace(): void {
+  if (pendingAside) {
+    try {
+      fs.copyFileSync(file, pendingAside);
+    } catch (e) {
+      // Held still: the save waits (and is tried again). Gone: nothing left to keep.
+      if (errCode(e) !== 'ENOENT') throw e;
+    }
+    pendingAside = '';
+  }
+  if (bakHold !== 'none' || Date.now() - lastBak < 60_000) return;
+  try {
+    if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
+    lastBak = Date.now();
+  } catch {
+    /* best effort */
+  }
+}
+
+function saved(gen: number): void {
+  savedGen = Math.max(savedGen, gen);
+  saveNote = '';
+  if (bakHold === 'untilSaved') bakHold = 'none';
+}
+
+function saveFailed(e: unknown): void {
+  saveNote = String((e as Error)?.message ?? e);
+  console.error(`[store] could not save ${file}: ${saveNote}`);
+  // What changed is in memory (every limit check reads memory): it goes in with the next save, or this retry.
+  if (!retryTimer)
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      persistSoon();
+    }, 5000);
+}
+
+function stopTimers(): void {
   // Whatever a batched save was waiting for goes in this one.
   if (batchTimer) {
     clearTimeout(batchTimer);
     batchTimer = null;
   }
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  if (Date.now() - lastBak >= 60_000)
-    try {
-      if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
-      lastBak = Date.now();
-    } catch {
-      /* best effort */
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+}
+
+/** Save now, before returning (changes the user makes, a profile switch, quitting). False = it did not go in (it is retried). */
+function persist(): boolean {
+  if (!file) return false;
+  const t0 = performance.now();
+  stopTimers();
+  const gen = ++takenGen;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp-${process.pid}`;
+    // Compact: about a quarter smaller and quicker to write than indented JSON; it reads back the same.
+    writeDurable(tmp, JSON.stringify(db));
+    retrySync(() => {
+      beforeReplace();
+      fs.renameSync(tmp, file);
+    });
+    saved(gen);
+    lastSaveMs = Math.round(performance.now() - t0);
+    return true;
+  } catch (e) {
+    saveFailed(e);
+    return false;
+  }
+}
+
+/** An async save is on its way to the disk; another one was asked for meanwhile. */
+let writing = false;
+let writeAgain = false;
+
+/**
+ * Save without holding the app up while the disk works (every like, follow and watch of a run): the data is taken at
+ * once, the writing and flushing happen in the background, and the rename waits (without blocking) while another
+ * program holds the file. It never throws: the action it records has already happened.
+ */
+function persistSoon(): void {
+  if (!file) return;
+  if (writing) {
+    writeAgain = true;
+    return;
+  }
+  stopTimers();
+  const t0 = performance.now();
+  const target = file;
+  const gen = ++takenGen;
+  let text: string;
+  try {
+    text = JSON.stringify(db);
+  } catch (e) {
+    saveFailed(e);
+    return;
+  }
+  const held = performance.now() - t0;
+  writing = true;
+  void writeInBackground(target, text, gen, held).finally(() => {
+    writing = false;
+    if (writeAgain) {
+      writeAgain = false;
+      persistSoon();
     }
-  const tmp = `${file}.tmp-${process.pid}`;
-  // Compact: about a quarter smaller and quicker to write than indented JSON; it reads back the same.
-  fs.writeFileSync(tmp, JSON.stringify(db), 'utf8');
-  fs.renameSync(tmp, file);
-  lastSaveMs = Math.round(performance.now() - t0);
+  });
+}
+
+async function writeInBackground(target: string, text: string, gen: number, held: number): Promise<void> {
+  const tmp = `${target}.tmp-${process.pid}-a`;
+  const outdated = (): boolean => gen <= savedGen || target !== file;
+  try {
+    await fs.promises.mkdir(path.dirname(target), { recursive: true });
+    const h = await fs.promises.open(tmp, 'w');
+    try {
+      await h.writeFile(text, 'utf8');
+      await h.sync();
+    } finally {
+      await h.close();
+    }
+    for (let i = 0; ; i++) {
+      // A newer save went in meanwhile (or another profile was opened): this one is out of date.
+      if (outdated()) {
+        await fs.promises.rm(tmp, { force: true });
+        return;
+      }
+      const t0 = performance.now();
+      try {
+        beforeReplace();
+        fs.renameSync(tmp, target);
+        saved(gen);
+        lastSaveMs = Math.round(held + performance.now() - t0);
+        return;
+      } catch (e) {
+        if (i >= HELD_WAITS.length || !isHeld(e)) throw e;
+      }
+      await new Promise((r) => setTimeout(r, HELD_WAITS[i]));
+    }
+  } catch (e) {
+    void fs.promises.rm(tmp, { force: true }).catch(() => undefined);
+    if (!outdated()) saveFailed(e);
+  }
 }
 
 // Batched saves (Setup > Performance, off by default): likes, follows, saves and watches are counted in memory at
@@ -155,9 +375,12 @@ export function setBatchSave(sec: number): void {
   batchSec = Math.max(0, Number(sec) || 0);
   if (!batchSec) flush();
 }
-/** Write anything a batched save is still holding (quit, profile switch). */
+/** Write anything a batched, background or failed save is still holding (quit, profile switch), before returning. */
 export function flush(): void {
-  if (batchTimer) saveLive(true);
+  if (batchTimer || retryTimer || writing || savedGen < takenGen) {
+    persist();
+    for (const l of listeners) l(db);
+  }
 }
 
 export const get = (): Db => db;
@@ -427,6 +650,8 @@ export function updateReel(id: string, patch: Partial<Reel>): { reel: Reel; warn
     // The voice cache is the hub's own bookkeeping, not content.
     const shown = (f: Fields): string => JSON.stringify({ ...f, vo_cache: '', voice_free: '' });
     if (r.slides && shown(next.fields) !== shown(r.fields)) delete next.slides;
+    // Its cover is a picture of the old content too: the settings stay, the file is made again.
+    if (r.cover?.path && shown(next.fields) !== shown(r.fields)) next.cover = { ...r.cover, path: undefined, at: undefined };
   }
   commit((d) => {
     d.reels = d.reels.map((x) => (x.id === id ? next : x));
@@ -540,6 +765,16 @@ export function deleteVoice(id: string): void {
   commit((d) => {
     d.voices = d.voices.filter((x) => x.id !== id);
   });
+}
+
+/** A reel's cover was saved (Create > Thumbnails or render_cover). */
+export function setCover(id: string, cover: ReelCover): Reel {
+  const r = findReel(id);
+  const next: Reel = { ...r, cover, updatedAt: now() };
+  commit((d) => {
+    d.reels = d.reels.map((x) => (x.id === id ? next : x));
+  });
+  return next;
 }
 
 /** A reel's slides were saved as pictures in one shape (a photo post can go up from them). */
@@ -705,7 +940,8 @@ function tick(s: Session, inside = false, away = false): void {
 function saveLive(force: boolean): void {
   if (!force && Date.now() - lastLivePersist < 20_000) return;
   lastLivePersist = Date.now();
-  persist();
+  // In the background, and never a throw: the like, follow or post it records has already happened.
+  persistSoon();
   for (const l of listeners) l(db);
 }
 
@@ -895,6 +1131,7 @@ export function deleteReference(id: string): void {
 // ── Next run (Create > Next run) ───────────────────────────────────────────
 import { cleanMix, savedStyles, setCustomStyles, styleById, stylesOf as stylesOfAccount } from '../shared/styles';
 import type { CustomStyle, StyleInput } from '../shared/types';
+import type { ReelCover } from '../shared/types';
 
 export const NEXT_RUN_MAX = 2000;
 const QUEUE_MAX = 30;
@@ -1264,6 +1501,29 @@ export function recordYtUpload(accountId: string): void {
   commit((d) => {
     d.igAccounts = d.igAccounts.map((x) => (x.id === a.id ? { ...x, youtube: { ...x.youtube!, uploads }, updatedAt: now() } : x));
   });
+}
+
+// Krypt's posts each account acted on today, per platform (browser.ts holds each install to a fan's rate). Kept with
+// the data, so a restart of the hub (a background profile's window quits after every run) does not start it over.
+type KryptActed = Record<string, string[]>;
+const kryptActed = (): KryptActed => ((db as Db & { kryptActed?: KryptActed }).kryptActed ??= {});
+const actedKey = (accountId: string, site: Site, day: string): string => `${accountId}|${site}|${day}`;
+
+/** The Krypt posts this account liked, saved, reposted or commented on today on that platform. */
+export function kryptPostsActed(accountId: string, site: Site): string[] {
+  return [...(kryptActed()[actedKey(accountId, site, localDate())] ?? [])];
+}
+
+/** One more of Krypt's posts acted on today (days before today are dropped as it goes). */
+export function addKryptPostActed(accountId: string, site: Site, post: string): void {
+  const all = kryptActed();
+  const day = localDate();
+  const key = actedKey(accountId, site, day);
+  const list = all[key] ?? [];
+  if (list.includes(post)) return;
+  for (const k of Object.keys(all)) if (!k.endsWith(`|${day}`)) delete all[k];
+  all[key] = [...list, post];
+  saveLive(true);
 }
 
 export function deleteAccount(id: string): void {

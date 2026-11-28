@@ -73,6 +73,12 @@ export function toolClip(id: string): string | null {
   return fs.existsSync(p) ? p : null;
 }
 
+/** The example videos of the reel styles that ship with the hub (resources/examples/<id>.mp4), absolute paths. */
+export function exampleVideos(): string[] {
+  const dir = app.isPackaged ? path.join(process.resourcesPath, 'resources', 'examples') : path.join(app.getAppPath(), 'resources', 'examples');
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.mp4')).sort().map((f) => path.join(dir, f)) : [];
+}
+
 /** Save a recording in the output folder's Recordings folder. */
 export function save(bytes: Uint8Array, name: string): string {
   const dir = path.join(store.get().settings.outputDir, 'Recordings');

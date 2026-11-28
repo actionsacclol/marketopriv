@@ -167,9 +167,31 @@ export async function launcher(bin: string): Promise<{ cmd: string; pre: string[
   return { cmd: process.execPath, pre: [script], env: { ELECTRON_RUN_AS_NODE: '1' } };
 }
 
+/**
+ * What the last searches found: the Autopilot page asks every 15-60 s, and each search starts where.exe and reg.exe
+ * (Windows) or a login shell (macOS). A found program is kept 5 minutes (while its file is there), a missing one 1 minute.
+ */
+const seen = new Map<string, { at: number; path: string | null }>();
+const FOUND_MS = 5 * 60_000;
+const MISSING_MS = 60_000;
+
+/** Search again next time (after Connect, or when the user says they installed something). */
+export function forgetBins(): void {
+  seen.clear();
+}
+
 /** The full path of a program by its plain name ("claude"), or null when it isn't installed. `skip`: found files that are not the program itself (Windows). */
 export async function findBin(name: string, skip?: RegExp): Promise<string | null> {
   if (!/^[\w.-]+$/.test(name)) return null;
+  const key = `${name}|${skip?.source ?? ''}`;
+  const had = seen.get(key);
+  if (had && Date.now() - had.at < (had.path ? FOUND_MS : MISSING_MS) && (!had.path || isFile(had.path))) return had.path;
+  const p = await findBinNow(name, skip);
+  seen.set(key, { at: Date.now(), path: p });
+  return p;
+}
+
+async function findBinNow(name: string, skip?: RegExp): Promise<string | null> {
   if (process.platform === 'win32') return findWin(name, skip);
   // 1. The PATH the app has, plus the usual folders.
   const PATH = [...new Set([...(process.env.PATH ?? '').split(':').filter(Boolean), ...UNIX_BIN_DIRS])].join(':');

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { app } from 'electron';
 import type { RunUsage } from '../shared/aiUsage';
 import * as instance from './instance';
+import { stripBom, writeAtomic } from './safeFile';
 
 // The usage ledger: one row per autopilot run (what the AI app reported when
 // it finished) and one per day and model for the built-in chat. It belongs to
@@ -13,26 +14,39 @@ const KEEP = 600;
 const file = (): string => path.join(instance.ROOT, 'autopilot', 'usage.json');
 
 let rows: RunUsage[] | null = null;
+/** The file's time when it was last read or written here: another window's write since then is read again first. */
+let readAt = -1;
+
+const mtimeOf = (): number => {
+  try {
+    return fs.statSync(file()).mtimeMs;
+  } catch {
+    return 0;
+  }
+};
 
 function load(): RunUsage[] {
-  if (rows) return rows;
+  // Every profile window shares the ledger (multi-instance mode): take up rows another one added since.
+  const m = mtimeOf();
+  if (rows && m === readAt) return rows;
   try {
-    const j = JSON.parse(fs.readFileSync(file(), 'utf8')) as unknown;
+    const j = JSON.parse(stripBom(fs.readFileSync(file(), 'utf8'))) as unknown;
     rows = Array.isArray(j) ? (j as RunUsage[]).filter((r) => r && typeof r.key === 'string' && typeof r.at === 'string') : [];
+    readAt = m;
   } catch {
-    rows = [];
+    // Mid-write or held: the rows read last stay (none on a first read).
+    rows ??= [];
   }
   return rows;
 }
 
-function save(): void {
-  const list = load();
+function save(list: RunUsage[]): void {
   if (list.length > KEEP) list.splice(0, list.length - KEEP);
   try {
     fs.mkdirSync(path.dirname(file()), { recursive: true });
-    const tmp = `${file()}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(list), 'utf8');
-    fs.renameSync(tmp, file());
+    // A temp name of this process's own, so two windows saving at once do not write into one file.
+    writeAtomic(file(), JSON.stringify(list));
+    readAt = mtimeOf();
   } catch {
     /* the ledger is a convenience: a run never fails over it */
   }
@@ -44,10 +58,11 @@ export function has(key: string): boolean {
 
 /** Record a finished run once (by its report file name). */
 export function addRun(row: RunUsage): void {
-  if (has(row.key)) return;
-  load().push(row);
-  load().sort((a, b) => a.at.localeCompare(b.at));
-  save();
+  const list = load();
+  if (list.some((r) => r.key === row.key)) return;
+  list.push(row);
+  list.sort((a, b) => a.at.localeCompare(b.at));
+  save(list);
 }
 
 const day = (): string => {
@@ -59,6 +74,7 @@ const day = (): string => {
 export function addChat(model: string, input: number, output: number, cached = 0): void {
   if (!(input > 0 || output > 0)) return;
   const key = `chat ${day()} ${model}`;
+  // Read again here (not earlier): the tokens are added to the row as the file has it now.
   const list = load();
   let row = list.find((r) => r.key === key);
   if (!row) {
@@ -70,7 +86,7 @@ export function addChat(model: string, input: number, output: number, cached = 0
   row.cacheRead += cached;
   row.output += output;
   row.turns = (row.turns ?? 0) + 1;
-  save();
+  save(list);
 }
 
 /** The last `days` days of rows, oldest first. */

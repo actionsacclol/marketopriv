@@ -227,6 +227,61 @@ export const STYLE_PAGES: Record<string, StylePage> = {
     hooks: ['"Same game. Same PC."', '"Why does your PC get slower every year?"', '"Why your mouse feels like it\'s on ice."', '"Overthinker vs Doer: the 3 AM fix."'],
     structure: ['Versus: two named figures in the same situation', 'Each beat: what each one does', 'The payoff: the smart one lights up, the real screen for 2-3 s', '"Which one are you?"', 'Explainer: the question, the cause in scenes, the fix on a real screen, the result'],
   },
+  ps2: {
+    length: '15-35s',
+    benefits: [
+      'The early-2000s console look is instant nostalgia: people stop on it before they know what the video is about.',
+      'A hard cut every line keeps the picture moving, so even a two-person chat feels edited.',
+      'Short relatable lines with subtitles work with the sound off and get sent to "the friend who does this".',
+      'Nothing to film or animate: the hub builds the characters, the set, the moves, the mouths and every shot.',
+    ],
+    hooks: ['"So... what are you up to these days?"', '"Bro, why does your PC sound like a jet?"', '"Wait. You still have that on?"'],
+    structure: ['The setup line', 'Back and forth, a new move each line', 'The line everyone recognises, close up', 'The reaction', 'A time jump as the tag'],
+  },
+  pixel: {
+    length: '30-60s',
+    benefits: [
+      'The game look is instantly familiar and plays to a huge gaming audience, so people stop on it.',
+      'A choice menu and a HUD turn a story into a level: people watch to see what was picked and what it cost.',
+      'The quiet typed ending lands the lesson and gets replays and shares.',
+      'Nothing to film or animate: the hub draws the cast, the places, the menu, the HUD and every move.',
+    ],
+    hooks: ['"He is about to pay 10,000 bitcoin. For pizza."', '"Level 1: quit your job."', '"She had 3 lives left. She used 2 in one week."'],
+    structure: ['The strangest moment, HUD set', 'Who, when, what they wanted', 'The choice, as a menu', 'What it cost, the HUD changes', 'One last line typed on black'],
+  },
+  hose: {
+    length: '30-60s',
+    benefits: [
+      'The 1930s cartoon look is rare in a modern feed and instantly reads as fun, so people stop and watch.',
+      'Everything bounces on the beat, so the picture never sits still even when the story slows down.',
+      'Cons, blunders and old inventions are made for this look: they are history people love to share.',
+      'Nothing to film or animate: the hub draws the cast, the places, the old film and every iris.',
+    ],
+    hooks: ['"This man is selling the Eiffel Tower."', '"In 1929 a man sold a bridge. Twice."', '"Nobody believed the bank was empty."'],
+    structure: ['The strangest moment', 'Where, when, what they wanted', 'The trick, acted out', 'A title card, then what happened', 'One closing line, the iris closes'],
+  },
+  tv: {
+    length: '30-60s',
+    benefits: [
+      'Glowing figures on a dark screen look nothing like the rest of the feed, so they stop the scroll.',
+      'The calm, cosy look keeps people watching a slower story or explainer to the end.',
+      'Static and channel numbers between places make every change feel like an event.',
+      'Nothing to film or animate: the hub draws the glowing cast, the places, the tube and every move.',
+    ],
+    hooks: ['"A computer from 1977 starts talking nonsense."', '"This signal has been travelling for 40 years."', '"The internet once fit on one floppy disk."'],
+    structure: ['The strangest fact', 'What and where, one channel per place', 'The problem, acted out', 'An on-screen title for the turn', 'One calm line, the set switches off'],
+  },
+  ink: {
+    length: '30-60s',
+    benefits: [
+      'A true story told fast keeps people to the end: they want to know how it turns out, so watch time and shares go up.',
+      'The hand-inked old-cartoon look stands out in a feed of screen recordings and talking heads.',
+      'Every line is acted out and every thing is drawn, so the picture changes as fast as the story.',
+      'Nothing to film or animate: the hub draws the cast, the places, the props and every camera move.',
+    ],
+    hooks: ['"This man wants to dig up a whole landfill."', '"He paid 10,000 bitcoin for two pizzas."', '"She found $400 in a jacket. It was hers."'],
+    structure: ['The worst moment, present tense', 'Who, and what they wanted', 'The turn, acted out with the thing it is about', 'The twist, a number on a big prop', 'One closing line, close up'],
+  },
   blox: {
     length: '7-12s dances, 12-25s skits, 25-45s rants',
     benefits: [
@@ -248,6 +303,47 @@ export const STYLE_PAGES: Record<string, StylePage> = {
     ],
     hooks: ['"4 Windows settings to turn off today"', '"Stop apps from starting with Windows"', '"5 things your PC does behind your back"', '"3 mistakes every new streamer makes"'],
     structure: ['The cover: a number or a promise, big', 'One idea a slide: a short title and two lines at most', 'A real screenshot every second or third slide', 'The last slide: a reason to save or send it'],
+  },
+  whatif: {
+    length: "25-40s space, 25-45s stickman",
+    benefits: ["A question nobody can answer keeps people watching to the end, and the end is what makes them comment and rewatch.","Told in order of time (\"after 8 minutes\", \"within a week\"), so there is always a next thing to wait for.","Two looks from one style: bright space scenes with a little astronaut, or a stick-figure cartoon at dusk.","Nothing to film: the hub draws every scene and times the captions to the voice."],
+    hooks: ["\"What if the Sun vanished right now?\"","\"What if Earth stopped spinning?\"","\"What if you stayed awake for 24 hours?\""],
+    structure: ["The question","The first thing that happens, with its time","What changes, scene by scene","The big moment, close up","A strange true fact to end on"],
+  },
+  survival: {
+    length: "25-40s per part",
+    benefits: ["Told to \"you\", so the viewer is the one in trouble and stays to see if they make it.","The day, time and battery bar runs down on screen: a clock people can see makes every part tense.","Each part ends on an A or B vote, so the comments decide part 2 and people come back for it.","A rule card and a real fact card in every part make it worth saving."],
+    hooks: ["\"You wake up. The power is out.\"","\"Your phone has 9% left.\"","\"You hear knocking. It is 3 AM.\""],
+    structure: ["The vote result (part 2 on)","The situation, second person","A rule card","A real fact card","The twist, the bar moving on","A or B: comment to decide part N+1"],
+  },
+  cutaway: {
+    length: "25-40s",
+    benefits: ["Seeing under the ground is something people never get to see, so they stop scrolling.","Every line adds something that stays, so the picture keeps getting fuller and people wait for the next build.","A running total in the corner turns it into a \"how much?\" game that people argue about in the comments.","Nothing to film: the hub builds the 3D yard, digs every build and moves the camera."],
+    hooks: ["\"You just bought a house with a big backyard.\"","\"This is what a $200,000 backyard looks like.\"","\"How deep can you dig under your house?\""],
+    structure: ["The setup","A small, normal build first","Bigger and stranger, one a line, each with its cost","The biggest, close up","\"Would you build this?\""],
+  },
+  diorama: {
+    length: '25-45s',
+    benefits: [
+      'A little world that changes every line is satisfying to watch, so people stay to see the next piece land.',
+      'Growth and time-lapse stories ("from a garage to a tower", "your house in 10,000 years") are made for it and get shared.',
+      'A number climbing in the corner turns it into a game people argue about in the comments.',
+      'Nothing to film: the hub builds the 3D world, places every piece, runs the weather and moves the camera.',
+    ],
+    hooks: ['"Day one. A garage, a desk and you."', '"This is your house. Today."', '"Watch this empty lot turn into a city."'],
+    structure: ['The start', 'It grows or changes, one line at a time', 'The counter climbs', 'The big change, close or low', 'One line to end on'],
+  },
+  lecture: {
+    length: "40-60s",
+    benefits: ["A teacher and a board read as a real lesson, so people save it to come back to.","Each card lands on the exact word that names it, which keeps eyes on the screen while the voice talks.","A series name on the board (\"PC BASICS #4\") turns single lessons into a show people follow.","Nothing to film: the hub draws the character, the board and every card, and moves the mouth with the voice."],
+    hooks: ["\"Windows has a mouse setting called Enhance pointer precision.\"","\"Your PC has a setting that slows your games down.\"","\"This is why your Wi-Fi drops at night.\""],
+    structure: ["What it is and why it matters","Why it happens","How to fix or use it, step by step","The result","What to do next"],
+  },
+  uimotion: {
+    length: "8-16s, loops",
+    benefits: ["Smooth, satisfying motion gets watched twice, and a loop with no clear end gets watched many times.","It shows what an app does in its own words, with no voice and no talking head.","Clicks land on the beat of the music, so it feels made with care.","Nothing to design: the hub morphs one shape through the states you list."],
+    hooks: ["The first state is the hook: one word people want (\"Get started\", \"Clean\", \"Boost\")"],
+    structure: ["The button that starts it","What you set","What happens","The payoff","The logo, then it loops"],
   },
   ask: {
     length: '45-70s',

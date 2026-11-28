@@ -25,7 +25,7 @@ export interface CharFrame {
   /** Mouth open 0..1 (from the spoken line). */
   talk: number;
   /** Where the character stands: 'stage' = the star of the beat, 'corner' = small, bottom left, presenting a diagram. */
-  place: 'stage' | 'corner';
+  place: 'stage' | 'corner' | 'right';
   /** Camera variety per beat: -1..1. */
   side: number;
   /** 0 = wide, 1 = close. */
@@ -624,17 +624,19 @@ export function renderCharacter(f: CharFrame): CharOut {
 
   // Camera: wide shows the whole body, close is head and shoulders. It drifts and pushes in a little over the beat.
   const corner = f.place === 'corner';
-  const zoom = corner ? 0 : f.zoom;
-  const visible = corner ? 12 : 5.6 - 2.2 * zoom;
-  const focusY = corner ? 1.3 : 1.2 + 0.8 * zoom;
+  // 'right' = a teacher bottom right, waist up, beside a board (the lecture preset).
+  const right = f.place === 'right';
+  const zoom = corner || right ? 0 : f.zoom;
+  const visible = corner ? 12 : right ? 10.5 : 5.6 - 2.2 * zoom;
+  const focusY = corner || right ? 1.3 : 1.2 + 0.8 * zoom;
   const push = 1 - 0.06 * Math.min(1, f.local / 4);
   const dist = ((visible / 2) / Math.tan((camera.fov * D) / 2)) * push;
   const orbit = f.side * 0.42 + 0.06 * s(f.t * 0.35);
   camera.position.set(Math.sin(orbit) * dist, focusY + 0.25 + (corner ? 0.6 : 0), Math.cos(orbit) * dist);
   camera.lookAt(0, focusY, 0);
   // Place the focus point on screen: the stage sits below the headline, the corner bottom left.
-  const fx = corner ? 0.19 : 0.5;
-  const fy = corner ? 0.84 : f.low ? 0.74 : 0.66;
+  const fx = corner ? 0.19 : right ? 0.8 : 0.5;
+  const fy = corner ? 0.84 : right ? 0.86 : f.low ? 0.74 : 0.66;
   camera.setViewOffset(st.w, st.h, (0.5 - fx) * st.w, (0.5 - fy) * st.h, st.w, st.h);
   camera.updateProjectionMatrix();
 

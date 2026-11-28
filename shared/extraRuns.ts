@@ -2,7 +2,7 @@
 // owed today and a platform's spacing allows one now. Only with the token saver off (every run uses AI plan), and
 // never more a day than the user's own number.
 
-import type { Db, IgAccount, Site } from './types';
+import type { Db, IgAccount, Session, Site } from './types';
 import { humanCheckUntil } from './humanCheck';
 import { linkOn, localDate, postGap, postTarget, sameHandle, sitesOf, watchOnlyOn } from './warmup';
 
@@ -32,9 +32,29 @@ export interface PostOwed {
   at: number;
 }
 
-/** The account's last confirmed post on a platform (ms; 0 = none). */
-export function lastPostAt(d: Pick<Db, 'reels' | 'posts'>, a: IgAccount, site: Site): number {
+/**
+ * The account's newest Post / Share / Publish click on a platform that the hub recorded (ms; 0 = none), confirmed or not.
+ * Kept in the sessions, so it holds across a hub restart; post_failed takes back a click whose post never went live.
+ */
+export function lastPostClickAt(sessions: Session[], a: Pick<IgAccount, 'handle'>, site: Site): number {
+  let last = 0;
+  for (const s of sessions) {
+    if ((s.site ?? 'instagram') !== site || !s.postClicks?.length || !sameHandle(s.handle, a.handle)) continue;
+    for (const c of s.postClicks) {
+      const t = Date.parse(c);
+      if (Number.isFinite(t) && t <= Date.now() + 60_000 && t > last) last = t;
+    }
+  }
+  return last;
+}
+
+/**
+ * The account's last post on a platform (ms; 0 = none): confirmed ones, and (with the sessions) a Post click not
+ * confirmed yet, so a run that skipped mark_posted does not get the next post early.
+ */
+export function lastPostAt(d: Pick<Db, 'reels' | 'posts'> & Partial<Pick<Db, 'sessions'>>, a: IgAccount, site: Site): number {
   const times: number[] = [];
+  if (d.sessions && site !== 'youtube') times.push(lastPostClickAt(d.sessions, a, site));
   for (const r of d.reels) {
     const at = linkOn(r, site)?.at;
     if (at && (!r.postedBy || sameHandle(r.postedBy, a.handle))) times.push(Date.parse(at));

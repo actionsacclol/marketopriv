@@ -53,12 +53,27 @@ export function userDataDir(): string | null {
 const DIR = /^(Default|Profile \d{1,4})$/;
 let cache: { at: number; list: LocalChrome[] } | null = null;
 
+/**
+ * What a file said the last time it was read, by its path, kept while its size and change time stay the same: the
+ * profile list is read again on every extension hello and every few seconds, and with dozens of Chrome profiles
+ * reading each one's (large) Preferences files every time held up the hub's main thread.
+ */
+const byStamp = new Map<string, { stamp: string; value: unknown }>();
+function readCached<T>(file: string, parse: (text: string) => T): T {
+  const st = fs.statSync(file);
+  const stamp = `${st.size}:${st.mtimeMs}`;
+  const hit = byStamp.get(file);
+  if (hit && hit.stamp === stamp) return hit.value as T;
+  const value = parse(fs.readFileSync(file, 'utf8'));
+  byStamp.set(file, { stamp, value });
+  return value;
+}
+
 function hasExtension(profileDir: string): boolean {
   // An unpacked extension is recorded in "Secure Preferences"; a store one can be in either file.
   for (const f of ['Secure Preferences', 'Preferences']) {
     try {
-      const text = fs.readFileSync(path.join(profileDir, f), 'utf8');
-      if (CHROME_EXT_IDS.some((id) => text.includes(`"${id}"`))) return true;
+      if (readCached(path.join(profileDir, f), (text) => CHROME_EXT_IDS.some((id) => text.includes(`"${id}"`)))) return true;
     } catch {
       /* no such file in that profile */
     }
@@ -73,7 +88,9 @@ export function list(fresh = false): LocalChrome[] {
   let out: LocalChrome[] = [];
   if (root) {
     try {
-      const state = JSON.parse(fs.readFileSync(path.join(root, 'Local State'), 'utf8')) as { profile?: { info_cache?: Record<string, { name?: unknown; user_name?: unknown }> } };
+      type State = { profile?: { info_cache?: Record<string, { name?: unknown; user_name?: unknown }> } };
+      // Only the part used here is kept (Local State holds much more).
+      const state = readCached<State>(path.join(root, 'Local State'), (text) => ({ profile: { info_cache: (JSON.parse(text) as State).profile?.info_cache } }));
       out = Object.entries(state.profile?.info_cache ?? {})
         .filter(([dir]) => DIR.test(dir) && fs.existsSync(path.join(root, dir)))
         .map(([dir, p]) => ({

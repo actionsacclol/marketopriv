@@ -29,7 +29,8 @@ import * as editor from './editor';
 import type { VoiceTune } from '../shared/voice';
 import { SITES, linkOn } from '../shared/warmup';
 import { startAgentHost } from './mcp/host';
-import { setKipShowsInstructions } from './mcp/tools';
+import { TOOLS, profileSwitchBy, setKipShowsInstructions } from './mcp/tools';
+import { isLongform } from '../shared/longform';
 import { shortVersion, startUpdateCheck, updateInfo } from './update';
 import * as profiles from './profiles';
 import * as proxy from './proxy';
@@ -43,6 +44,9 @@ import { setBanner } from './campaignBanner';
 import { cleanPerf } from '../shared/perf';
 import type { ChromeLocalRow, ProfilesResult } from '../shared/types';
 import { MAX_SLIDES, STILL_SHAPES, type StillShape } from '../shared/types';
+import type { ReelCover } from '../shared/types';
+import { cleanCover } from '../shared/covers';
+import { timingFor } from '../shared/presets';
 import { locked, lockWindows, startedForDebugging } from './lock';
 import type { McpHandle } from './mcp/index';
 
@@ -274,11 +278,17 @@ async function switchProfile(id: string): Promise<void> {
   if (autopilot.running() && !returnTo) returnTo = from.id;
   const closed = browser.closeRunTabs();
   agent.reset();
-  // Kip's conversation was about the profile being left.
-  kip.reset();
+  // Kip's conversation was about the profile being left (unless he asked for the switch himself: he is in the middle of answering).
+  if (profileSwitchBy() !== 'Kip') kip.reset();
   approvals.clear();
   store.settleNextRun(autopilot.reportRunning);
-  store.open(profiles.dir(id), outputDirFor(profiles.find(id)));
+  try {
+    store.open(profiles.dir(id), outputDirFor(profiles.find(id)));
+  } catch (e) {
+    // The open profile's data could not be saved: it stays open, and the caller (Multi run page, use_profile) is told why.
+    log('error', `profile "${from.name}" not closed: ${(e as Error).message}`);
+    throw e;
+  }
   profiles.setActive(id);
   store.settleNextRun(autopilot.reportRunning);
   proxy.reset();
@@ -400,6 +410,8 @@ function registerIpc(): void {
       await autopilot.refresh();
     }),
   );
+  // The recorded sound effects shipped with the app (resources/sfx).
+  ipcMain.handle('app:sfxDir', () => (app.isPackaged ? path.join(process.resourcesPath, 'resources', 'sfx') : path.join(app.getAppPath(), 'resources', 'sfx')));
   // The example videos shipped with the app (Create > Examples).
   ipcMain.handle('app:examples', () => {
     const dir = app.isPackaged ? path.join(process.resourcesPath, 'resources', 'examples') : path.join(app.getAppPath(), 'resources', 'examples');
@@ -417,7 +429,7 @@ function registerIpc(): void {
   ipcMain.handle('app:openExternal', (_e, url: string) => (/^https?:\/\//i.test(url) ? shell.openExternal(url) : undefined));
   ipcMain.handle('app:editorStatus', () => editor.status());
   ipcMain.handle('app:showItemInFolder', (_e, p: string) => shell.showItemInFolder(p));
-  ipcMain.handle('app:openMediaFolder', wrapAsync((kind: string) => mediaFolders.open(kind === 'memes' ? 'memes' : kind === 'images' ? 'images' : 'backgrounds')));
+  ipcMain.handle('app:openMediaFolder', wrapAsync((kind: string) => mediaFolders.open(kind === 'memes' || kind === 'images' || kind === 'footage' || kind === 'music' ? kind : 'backgrounds')));
   ipcMain.handle('app:openCampaignFolder', wrapAsync((title: string) => mediaFolders.open('campaigns', String(title ?? '') || 'Campaign')));
   ipcMain.handle('app:resolveYtChannel', wrapAsync((input: string) => resolveYtChannel(String(input ?? ''))));
   // Setup > Help: the logs in one zip for the user to send to Krypt (redacted, see logExport.ts).
@@ -834,6 +846,30 @@ function registerIpc(): void {
       return { ok: false, message: (e as Error).message };
     }
   });
+  // A reel's cover: "<title> <id> cover.png" next to its video, and the settings it was drawn with on the reel.
+  ipcMain.handle('render:saveCover', async (_e, reelId: string, png: string, cover: ReelCover) => {
+    try {
+      const reel = store.findReel(reelId);
+      const dir = store.get().settings.outputDir;
+      await fs.promises.mkdir(dir, { recursive: true });
+      const file = path.join(dir, `${safeName(reel.title)} ${reel.id.slice(5)} cover.png`);
+      await fs.promises.writeFile(file, Buffer.from(String(png), 'base64'));
+      const total = timingFor(reel.preset, reel.fields).total;
+      store.setCover(reel.id, cleanCover({ ...cover, path: file, at: new Date().toISOString() }, total));
+      log('info', `saved cover ${reel.id} → ${file}`);
+      return { ok: true, data: file };
+    } catch (e) {
+      return { ok: false, message: (e as Error).message };
+    }
+  });
+  ipcMain.handle('render:setLongThumbText', async (_e, id: string, text: string) => {
+    try {
+      store.saveLongVideo({ id: store.findLongVideo(id).id, thumbnailText: String(text ?? '').slice(0, 80) });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, message: (e as Error).message };
+    }
+  });
   // A reel's slides as pictures for a photo post: "<title> <id> slides <shape>/01.jpg ...", and their paths on the reel.
   ipcMain.handle('render:saveSlides', async (_e, reelId: string, images: string[], shape: StillShape) => {
     try {
@@ -915,6 +951,8 @@ async function bootstrap(): Promise<void> {
   profiles.init(instance.ROOT, instance.MULTI ? instance.OWN : null);
   profiles.setSwitcher(switchProfile);
   store.init(profiles.dir(), outputDirFor(profiles.active()));
+  const loadNote = store.loadProblem();
+  if (loadNote) log('warn', `db: ${loadNote}`);
   // Every window Marketo opens (the hub, its Instagram / YouTube / ... windows) follows the mute.
   app.on('web-contents-created', (_e, wc) => wc.setAudioMuted(soundOff));
   app.on('browser-window-focus', () => applyMute());
@@ -994,6 +1032,9 @@ async function bootstrap(): Promise<void> {
     },
     model: () => autopilot.claudeModel(),
     runGoing: () => autopilot.running(),
+    saver: () => !!autopilot.settings().saver,
+    longform: () => isLongform(store.get().settings),
+    toolNames: () => TOOLS.map((t) => t.name),
     onState: (st) => send('kip:state', st),
     log,
   });
@@ -1016,7 +1057,9 @@ async function bootstrap(): Promise<void> {
     }
   });
 
-  showMainWindow();
+  const shown = showMainWindow();
+  // The saved data could not be read and a backup copy was loaded: the user hears it once, at start.
+  if (loadNote) void dialog.showMessageBox(shown, { type: 'warning', title: 'Krypt Marketo', message: 'Your saved hub data could not be read.', detail: loadNote }).catch(() => undefined);
   void startAgentHost({
     pipeSuffix: instance.pipeSuffix,
     getMainWindow: () => {
@@ -1029,6 +1072,7 @@ async function bootstrap(): Promise<void> {
     focus: (f: UiFocus) => send('ui:focus', f),
     isEnabled: () => store.get().settings.agentAccess !== false,
     setEnabled: (on) => store.updateSettings({ agentAccess: on }),
+    runGoing: () => autopilot.running(),
     log,
   }).then((h) => {
     mcpHandle = h;

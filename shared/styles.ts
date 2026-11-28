@@ -27,7 +27,7 @@ export interface ChannelStyle {
 }
 
 // Shared by the meme styles (reddit, greentext, meme, dumb).
-const BG_RULE = "Background: rotate the built-in ones (bg runner, bounce, slice) so reels in a row differ, or a video: list_media kind backgrounds lists the user's own (gameplay, parkour, soap cutting); set bg video, video = its path, bg_start somewhere random in it. A YouTube video the user gave for backgrounds: save_clip a part of it (up to 90 s; it loops) and use that file. Prefer footage without its own captions or big watermarks.";
+const BG_RULE = "Background: rotate the built-in ones (bg runner, bounce, slice) so reels in a row differ, or a video: list_media kind backgrounds lists the user's own (gameplay, parkour, soap cutting); set bg video, video = its path, bg_start somewhere random in it. A YouTube video the user gave for backgrounds: save_clip a part of it (up to 90 s; it loops) and use that file. Prefer footage without its own captions or big watermarks. Old public-domain films work too (find_archive kind film, then save_archive: it lands in the Footage folder; its credit line goes in the post caption).";
 const TONE_RULE = "Follow the account's tone (its account line; Styles page): clean = nothing a parent would mind, no swearing (\"jerk\", not \"a-hole\"); edgy = dark humour and mild swearing, strong words censored on screen and in the voice line (\"f*ck\" on screen, \"freaking\" read out); raw = swearing allowed, written and said as people say it. In every tone: no slurs, no sexual content, nothing about minors and sex or self-harm, no real violence shown, nothing that targets a real private person; those get accounts struck.";
 const FREE_RULE = "It is not a brand reel: no product, logo, end card, link or disclaimer on the video or in the caption (the preset leaves them off), unless the user asked for them. The account's niche is the topic when there is one.";
 
@@ -285,7 +285,7 @@ export const STYLES: ChannelStyle[] = [
     format: 'dumb-edit',
     rules: [
       "create_reel preset meme (or format dumb-edit): 1-4 panels, 5-15 s in all, layout over (the picture fills the screen, the caption on top). The setup panel plays it straight; the punchline stacks the edit at one moment: zoom (onto the face or the detail: zoom=x,y) with boom and shake, or freeze with scratch, or fry with bass, or flash with horn. Effects at the exact second (zoom@1.4=0.5,0.35 boom@1.4 shake@1.4).",
-      "Source: a part of a clip (screen panels on fields.video: a saved stream clip, the user's own footage from the Memes folder via list_media, a screen recording), a picture from the Memes folder, or the mascot (char panels). Captions in the voice of shitpost pages: \"bro thought...\", \"nah because why did he...\", \"the way he...\", lowercase, a few words.",
+      "Source: a part of a clip (screen panels on fields.video: a saved stream clip, the user's own footage from the Memes folder via list_media, a screen recording), a picture from the Memes folder, an old public-domain film (find_archive kind film, save_archive; credit in the post caption), or the mascot (char panels). Captions in the voice of shitpost pages: \"bro thought...\", \"nah because why did he...\", \"the way he...\", lowercase, a few words.",
       "Music: none (the hits carry it) or phonk. loop on so the end runs back into the start.",
       TONE_RULE,
       FREE_RULE,
@@ -303,6 +303,7 @@ export const STYLES: ChannelStyle[] = [
     rules: [
       "create_reel preset stickman, alternating two formats. stick-versus (10-25 s, wordless): two figures named in labels (\"Default Windows guy;Tweaked guy\", \"Overthinker;Doer\"), the same situation for both, every beat \"poseA/poseB\", voiceover off, captions title with one short setup line per beat (*word* in the highlight colour), the payoff beat with win=a or win=b and a big word, the product (if any) for 2-3 s as a laptop or screen prop showing its real recording; bed phonk or lofi, sfx on, loop on; the post caption ends \"Which one are you?\". stick-explainer (45-65 s, narrated): a \"Why...\" / \"How...\" question the viewer can't answer in the first line, one or two sentences a beat and a new pose or prop every beat (a scene every 2-4 s), cam=close on the reveal, the fix on a real screen (a screen or laptop prop with the tool's bundled recording from krypt_tools or a record_screen one; look at every frame for private data first), captions words, the user's voice, bed lofi low.",
       "Frame the topic as a rivalry, a mystery or a mini-story, never a definition: \"stickman explains RAM\" style videos get a few hundred views. The stickman shows the problem; the real screen shows the fix.",
+      "Make it look made, not empty: put the story in places (set=bedroom, office, street, door, kitchen, store, park, camp...), a new place every 1-3 lines, with weather when it fits (weather=night, rain, storm, snow), the figure walking in (enter=left) on a new place, and held things (torch, bottle, bag, key, money). figure cartoon (the default) is the polished look; captions box suits relatable skits. Places render as real 3D sets the flat figures stand in (world 3d, the default: the 2.5D look of the biggest stickman story channels), with the camera always gliding, so keep the frame busy too: every line gets an action the figure does on that word and a new framing (cam=close, cam=a/b, push) every line or two; every noun said gets something on screen (a prop, a place, a big word); and in about a quarter of the scenes a second or third figure reacts (\"talk/laugh/shock\" with labels for three). Narration with almost no pauses reads best (gap 0.08, the default).",
       "Every video different (platforms cut reach for whole accounts whose videos look mass-produced): a new script with a real point, different poses, props, camera and hook each time, never the same opening twice. Keep one figure per series (gear, look and highlight colour), change them between series, and keep mixing in the account's other styles.",
       "Scenes and characters are made up; every fact, setting, menu path and tool feature is real (krypt_tools for Krypt tools). Numbers only as the recording shows them.",
       "Trading and prediction-market tools: the figure hands the work to a robot prop (\"AI trades for you, easy\"), never the bot's screens, never a chart going up, P&L, wins, profit or \"bet\"; a plain risk line on screen or in the voice (\"It can lose too.\") and disclaimer \"Not financial advice.\".",
@@ -330,6 +331,88 @@ export const STYLES: ChannelStyle[] = [
     ].join(' '),
   },
   {
+    id: 'ps2',
+    label: 'ps2',
+    name: 'PS2 cutscene',
+    about: 'Our own low-poly 3D characters act out a relatable moment like a cutscene from an old console game: faceted faces, warm light, a hard cut to a new shot every line, blocky subtitles and a soft, slightly fuzzy picture.',
+    preview: 'ps2-skit',
+    bestOn: 'Reels, TikTok, Shorts',
+    format: 'ps2-skit',
+    rules: [
+      "create_reel format ps2-skit (preset ps2), 15-35 s, a short scene between two or three people from our own cast (the cast field: jay, brad, mia, gus, kai, zoe, max, ava): a conversation everyone has had, told in short lines, one line a row, who=a/b/c on each. A new move on every line (talk, cross, smirk, drink, shrug, facepalm, laugh, shock...), props that fit (cup, glass, phone). Leave the shots to the hub (it cuts like a cutscene: two-shot, close-up, over the shoulder) and add shot=close or push only on the line that lands. The punchline is the last line or the one before it; a time jump with a top label (\"3 HOURS LATER\", \"2:14 AM\") in a new set is a good tag. Subtitles say exactly what is said, and the funniest version is the shortest.",
+      "Voice: off by default (music under console subtitles is the look). When the user wants it voiced, one voice reads every line (one voice per reel), so keep it to lines that still work in one voice, or leave it voice-off.",
+      "Keep a cast and a set per series (\"jay and brad\" at the cafe) so people come back for the characters. A product or tool comes in only as part of the joke (\"I closed one.\" after a Cleaner run), by name in a line, never the hook and never a pitch; scenes and characters are made up, anything said about a real tool or setting is true (krypt_tools for Krypt tools).",
+      "Trading and prediction-market tools: never in a cutscene about money won, a chart or \"bet\"; at most \"AI trades for you, easy\" said once, a plain risk line (\"It can lose too.\") and disclaimer \"Not financial advice.\".",
+      "Our own characters, sets and words only: never a real person, celebrity or creator, never a real game's characters, logo, map, menu or music, never another account's series name, catchphrase or captions line for line. No swearing or anything a brand would not post, whatever the account's tone.",
+      "Every video different (platforms cut reach for whole accounts whose videos look mass-produced): a new situation and a new opening line each time, never the same first line twice, and keep mixing in the account's other styles. Post caption: the situation as a question (\"who is this in your friend group?\"), 3-5 hashtags (#relatable plus the niche).",
+    ].join(' '),
+  },
+  {
+    id: 'ink',
+    label: 'ink',
+    name: 'Ink cartoon',
+    about: 'A true, strange story told fast by a narrator while our own caricature cast acts out every line, drawn like hand-inked cartoon cels: thin warm-brown pen lines, flat colours, big lumpy heads, plaid and stubble, a camera that never stops moving and a warm grainy print look.',
+    preview: 'ink-story',
+    bestOn: 'Shorts, Reels, TikTok',
+    format: 'ink-story',
+    rules: [
+      "create_reel format ink-story (preset ink), 30-60 s (90 at most), narrated at about 3.5 words a second with almost no pauses (gap 0.05). Open in the middle of the worst or strangest moment, present tense, one line; then who it is, what they wanted, the turn, the twist, one closing line. Short sentences. Titles like \"He [did X] for [Y]\" or \"How [someone] [outcome]\".",
+      "Every line is a shot: who it is about (who=), a move that acts it out (shock, anger, smug, grief, joy, dig, hold, phone, point...), a new move every line, and a prop for every thing the line names (drive, cash, coin, letter, phone, gavel...): never leave a noun as just a word. Change places with set= (it whip-pans), use solo on lines about one person, a top label for a time jump (\"2013\", \"3 YEARS LATER\"). Leave the shots to the hub (it cycles close, wide, insert and reaction and never holds one framing twice); shot=close on the closing line.",
+      "True stories only, and every fact checked from a source (dates, amounts, what a court or company did); say \"reportedly\" or leave out what is not confirmed. The people in it are drawn as our own cast, never named or drawn as a real person's likeness; never the source creator's characters or words.",
+      "Cast: pick builds that differ (one huge, one thin, one short) from our own cast (bubba, vince, dot, rico, gramps, lulu, tex, kev), and give a new story a new cast and places where it can. Colours: one palette per video (sunset, neon or rust).",
+      "Money and crypto stories are fine as stories (a lost drive, a scam, a famous mistake), told straight: no profit claims, no \"you could have made\", no price calls, and \"Not financial advice.\" on the end. A Krypt tool comes in only where the story makes it the lesson, never as the hook.",
+      "Voice: one voice reads the whole story (one voice per reel), the user's default voice. Every video different: a new story and a new first line each time, and keep mixing in the account's other styles.",
+    ].join(' '),
+  },  {
+    id: 'pixel',
+    label: 'pixel',
+    name: 'Pixel Theater',
+    about: 'A story played like a little 16-bit game: our own pixel cast acts every line, the words type out in a game text box, choices pop up as a menu and the last line types out alone on black.',
+    preview: 'pixel-story',
+    bestOn: 'Shorts, Reels, TikTok',
+    format: 'pixel-story',
+    rules: [
+      'create_reel format pixel-story (preset pixel), 30-60 s, narrated at about 3 words a second (gap 0.1). Open on the strangest moment in one line; then who, when and what they wanted, the choice, what it cost or brought, and one quiet last line on black (end).',
+      'Play it like a game: a new move every line (talk, think, shock, happy, sad, walk, run, jump, type, phone, fall...), a prop for every thing the line names (coin, cash, phone, letter, key, chest, chart, laptop, pizza...), the decision as a menu (choice=pay/wait: the first one is what they did), the HUD when money or chances move (coins=, hp=), a title card for a time jump ("YEARS LATER", "LEVEL 2", "GAME OVER"), set= to change places, a top label for dates.',
+      'True stories checked from a source (dates, amounts), or a relatable everyday one told as a level; never a real game\'s characters, names, sprites, music or logos, and never a real person\'s likeness. Our own pixel cast only (pip, mo, ivy, zed, tok, lux), a new cast for a new story where it can.',
+      'Money and crypto stories told straight: no profit claims, no "you could have", no price calls, "Not financial advice." on the end; a Krypt tool comes in only where the story makes it the lesson, never as the hook.',
+      'Voice: one voice reads it all (the user\'s default). Every video different: a new story and a new first line each time, and keep mixing in the account\'s other styles.',
+    ].join(' '),
+  },  {
+    id: 'hose',
+    label: 'hose',
+    name: 'Rubber hose',
+    about: 'A true, strange story told like a 1930s ink-and-paint cartoon: our own bouncing bean-bodied cast with hose arms and white gloves on old black-and-white film, irises between places and art-deco title cards.',
+    preview: 'hose-story',
+    bestOn: 'Shorts, Reels, TikTok',
+    format: 'hose-story',
+    rules: [
+      'create_reel format hose-story (preset hose), 30-60 s, narrated at about 3.3 words a second (gap 0.05). Open on the strangest moment, present tense; then where and when, the trick or mistake, a title card for the turn, what happened, one closing line (shot=close end).',
+      'Every line is acted: who it is about (who=), a new move every line (talk, point, shock, laugh, sneak, run, sad, anger, whistle, shrug, fall...), a prop for every thing the line names (cash, bag, letter, paper, phone, key, safe, clock, bomb, pie...), set= for a new place (it irises), solo for lines about one person, a top sign for dates, title for "THE NEXT DAY" or "MEANWHILE".',
+      'True stories checked from a source; history, cons, blunders and odd inventions suit it best; say "reportedly" where accounts differ. The people are our own cast (bert, mabel, gus, skip, otto, pearl), never named or drawn as a real person, and never an old studio\'s characters (no mouse, cat, sailor or cup characters from real cartoons). Film: mono most of the time, sepia or twostrip for variety.',
+      'Money and crypto stories told straight: no profit claims, no price calls, "Not financial advice." on the end; a Krypt tool only where the story makes it the lesson, never as the hook.',
+      'Voice: one voice reads it all (the user\'s default). Every video different: a new story and a new first line each time, and keep mixing in the account\'s other styles.',
+    ].join(' '),
+  },  {
+    id: 'tv',
+    label: 'tv',
+    name: 'Retro TV',
+    about: 'A calm true story or explainer played on an old CRT: our own glowing figures drawn in light on a dark screen, glowing line-art places, scanlines and bloom, static between channels and a switch-off at the end.',
+    preview: 'tv-story',
+    bestOn: 'Shorts, Reels, TikTok',
+    format: 'tv-story',
+    rules: [
+      'create_reel format tv-story (preset tv), 30-60 s, narrated calmly at about 3 words a second (gap 0.1). Open on the strangest fact; then what and where, the problem, the fix or turn (a title like "SIGNAL BACK"), one calm closing line (end: the set switches off).',
+      'Every line is acted by a glowing figure: who=, a new move every line (talk, point, think, type, phone, shock, sad, happy, wave, walk, run, shrug...), a prop for every thing the line names (laptop, chart, chart- for one going down, clock, phone, coin, letter, lock, bulb...), set= for a new place (static and a new channel), solo for lines about one person, a corner label for dates ("NOV 2023", "LIVE").',
+      'Tech, space, internet history and how-things-work stories suit it best. True stories checked from a source; say "reportedly" where accounts differ. Our own glowing cast only (neo, vee, rex, ada, max, kai), never a real person\'s likeness and never a real TV show\'s characters, logos or idents. Screen: color most of the time, green or amber for variety.',
+      'Money and crypto stories told straight: no profit claims, no price calls, "Not financial advice." on the end; a Krypt tool only where the story makes it the lesson, never as the hook.',
+      'Voice: one voice reads it all (the user\'s default), calm and close. Every video different: a new story and a new first line each time, and keep mixing in the account\'s other styles.',
+    ].join(' '),
+  },
+
+
+
+  {
     id: 'ask',
     label: 'ask',
     name: 'Ask the AI',
@@ -348,6 +431,71 @@ export const STYLES: ChannelStyle[] = [
       "The end card's next step is something the account really does: a keyword to comment (\"Comment *TWEAK* for the steps\") only when the steps are in the caption or the pinned comment and the run answers those comments (the per-thread limit applies); otherwise \"Follow for *part two*\" or the tool's link. Never promise a DM.",
       "Post caption: the hook as two short sentences, one line on what the reel shows, the same next step as the end card, \"send this to the friend who...\", 4-5 niche hashtags. It is narrated by an AI voice: turn on TikTok's AI-generated label and Meta's AI info label.",
     ].join(' '),
+  },
+  {
+    id: "whatif",
+    label: "whatif",
+    name: "What if",
+    about: "One impossible question answered step by step with real numbers: \"What if the Sun vanished?\" in bright, flat space scenes with a little astronaut, or \"What if you never slept?\" as a stick-figure cartoon at dusk. People stay to hear how it ends.",
+    preview: "whatif-space",
+    bestOn: "Shorts, TikTok, Reels",
+    format: "whatif-space",
+    rules: "Two looks, rotated. whatif-space (preset space, 25-40 s, narrated): a space or Earth-scale question (\"What if the Moon disappeared?\", \"What if Earth stopped spinning?\", \"What if you fell into a black hole?\"), a new scene every line or two (title, earth, sun, orbit, compare, number, clock, impact, blackhole, surface, astronaut), the big moment on its own line with cam=close, the last line a strange true fact that makes people rewatch or comment. stick-whatif (preset stickman, bg dusk, 25-45 s, narrated): an everyday-life question (\"What if you stayed awake for 24 hours?\", \"What if you only ate fast food for a month?\", \"What if you never used your phone again?\"), the figure living through it one scene a line, each scene in a place (set=bedroom, office, street, park...) with weather when it fits, a big word on each number, the props that fit (clock, zzz, phone, coffee, sign=...). Open on the question itself, 6-10 words, and answer it in order of time (\"After 8 minutes...\", \"Within a week...\", \"A year later...\"): the clock is what keeps people watching. Every number and fact is real and from a source you checked (NASA, a university, a health agency or a peer-reviewed paper); say \"about\" when a source rounds. When scientists do not know, say so. No made-up deaths, disasters or \"experts say\" without a name. A Krypt tool only when the question really is about it (\"What if your PC never restarted?\" for Cleaner or Tweaker): the last scene, by name, as the answer; never the hook. Most of these reels have no product at all: they grow the account. Those leave the logo, end card and disclaimer off (cta_seconds 0, disclaimer empty). Our own drawings and mascot only: never another channel's characters, art style copied scene for scene, intro or music; the look is flat and bright, the words are ours. Every video different (platforms cut reach for whole accounts whose videos look mass-produced): a new topic, a new opening line and new scenes each time, never the same first line twice, and keep mixing in the account's other styles. Narrated ones use a realistic AI voice: turn on TikTok's AI-generated label and Meta's AI info label when posting them. Post caption: the question, one line that dares a guess (\"guess what happens at minute 9\"), 3-5 hashtags (#space #science #whatif).",
+  },
+  {
+    id: "survival",
+    label: "survival",
+    name: "Survival story",
+    about: "A second-person survival series drawn as a stickman: \"You wake up. The power is out.\" A bar with the day, the time and a phone battery runs down, a rule card and a real survival fact land, and every part ends on a choice the comments vote on.",
+    preview: "stick-survival",
+    bestOn: "TikTok, Shorts, Reels",
+    format: "stick-survival",
+    rules: "create_reel format stick-survival (preset stickman), 25-40 s a part, narrated, told to the viewer in the second person (\"You wake up...\", \"You hear...\"). The hud field turns on the bar (\"Day 1;06:40;100%\"); flags day=, clock= and battery= move it on as the story goes (the battery only ever goes down unless the story charges it). One rule card a part (a prop rule=..., said out loud as a rule the viewer must follow), one fact card a part (a prop fact=..., a real survival fact from a source: the Red Cross, a government ready.gov-style guide, a wilderness manual), a new pose and prop every beat, cam=close on the twist. Put each scene in a place (set=bedroom, street, door, kitchen, store, forest, camp...) with weather that fits (weather=night, rain, storm, snow, fog), the figure walking in on a new place (enter=left), knock on a door scene, held things that matter to the story (torch, bottle, food, bag, key). Every part ends on a vote: the last beat has the prop vote=option A/option B, the line names both and ends \"Comment A or B.\" Pass vote: {series, part, a, b} to create_reel with style survival, so the hub tracks the series like the vote style: count the votes about 12 hours after posting (record_votes, each person once, never invented), and the next part opens with the result (\"Most of you said stay quiet.\"). 3-6 parts, then a finale. Keep it tense, not gory: no blood, no deaths shown, nothing a parent would mind; the danger is the clock, the battery and the choice. Made-up story, real facts. A Krypt tool only where the story really needs it (a VPN on hotel Wi-Fi, a cleaner on the only laptop that works) and never in part 1; most parts have no product: logo, end card and disclaimer off. Every video different (platforms cut reach for whole accounts whose videos look mass-produced): a new topic, a new opening line and new scenes each time, never the same first line twice, and keep mixing in the account's other styles. Narrated ones use a realistic AI voice: turn on TikTok's AI-generated label and Meta's AI info label when posting them. Post caption: \"Part N.\" plus the situation in one line, then \"Comment A or B. Most votes decides part N+1.\" and 3-5 hashtags.",
+  },
+  {
+    id: "cutaway",
+    label: "cutaway",
+    name: "Backyard cutaway",
+    about: "The ground under a house cut open like a cake in 3D: each line builds one thing (a pool, a basement, a bunker, a tunnel) and it stays, while a total of what it all costs climbs in the corner. People watch to see how far it goes.",
+    preview: "cutaway-build",
+    bestOn: "Shorts, TikTok, Reels",
+    format: "cutaway-build",
+    rules: "create_reel format cutaway-build (preset cutaway), 25-40 s, narrated, one build a line (pool, basement, well, pipe, cable, septic, tunnel, bunker, cave, tree, garden, water, house), each with a short tag and its real cost. A story with an escalation: \"You just bought a house with a big backyard.\" then builds that get bigger and stranger, the biggest on its own line with cam=close, the last line a question (\"Would you build this?\", \"Which one would you skip?\"). Another angle: the price of one dream backyard, or how deep things really go (a well, a mine, a bunker), with depths as tags. Every cost and depth is real and from a source you checked that day (a cost guide like HomeGuide, Angi or Fixr, a builder's price list, a government page), in one currency, said as \"about\" when the source gives a range; the total only adds what was said. No invented records or \"the deepest ever\". A Krypt tool almost never fits; leave the logo, end card and disclaimer off (cta_seconds 0, disclaimer empty) unless the reel is about one. Our own drawing and words: never another channel's intro, captions style copied line for line or music. Every video different (platforms cut reach for whole accounts whose videos look mass-produced): a new topic, a new opening line and new scenes each time, never the same first line twice, and keep mixing in the account's other styles. Narrated ones use a realistic AI voice: turn on TikTok's AI-generated label and Meta's AI info label when posting them. Post caption: the hook, \"which one would you build?\", 3-5 hashtags (#diy #home #backyard).",
+  },
+  {
+    id: 'diorama',
+    label: 'diorama',
+    name: '3D diorama',
+    about: 'A little 3D world on a floating block of ground, any scene (a yard, a city block, a farm, a desert, the moon...): each line adds pieces that stay, takes some away or makes something happen (a storm, a fire, a flood, years passing), with a tag on what changed and a number climbing in the corner.',
+    preview: 'dio-grow',
+    bestOn: 'Shorts, TikTok, Reels',
+    format: 'dio-grow',
+    rules: [
+      'create_reel format dio-grow, dio-time, dio-disaster or dio-versus (preset diorama), 25-45 s, narrated. Pick the scene base (set) that fits the story: yard, park, farm, city, desert, beach, snow, forest, moon, studio (a clean stand for one object). Each line adds pieces that stay, takes some away (-car, -all) or makes something happen (mow, rain, snow, storm, fire, flood, drain, grow, clear, night, day, launch, quake, tornado, meteor, erupt, tsunami), so the little world changes every line. Buildings go up floor by floor, cars drive in, people wander; money is a pile that follows the counter; text=... puts words on signs, billboards and shop fronts; Blocks two puts two blocks one over the other (block=1 / block=2 lines) for before / after and us / them.',
+      'Angles that suit it: how something grows (a company from a garage to a tower, a farm, a town, a launch site), what years do to a place (age=10, 100, 1000, 10000 with a YEAR counter and a title for each jump), what something costs as it fills up (counter total with real prices), weather and disasters, and what is under the ground (basement, bunker, tunnel, well... cut the front open). Use the tag (label) for the newest piece and a title with nothing new ("100 YEARS LATER"); cam=close on the piece the line is about (or on=<piece>), cam=low for something tall, cam=orbit for the big reveal, cam=wide to end.',
+      'Every fact, price, date and number is real and from a source you checked that day; a made-up "you" story says so by being told to "you" and claims no records; time-passing stories say "could" and follow real estimates. Never draw or name a real company\'s logo or building as theirs, never a real person\'s likeness. A Krypt tool almost never fits; leave the logo, end card and disclaimer off (cta_seconds 0, disclaimer empty) unless the reel is about one.',
+      'Our own drawing and words: never another channel\'s intro or captions copied line for line. Every video different (platforms cut reach for whole accounts whose videos look mass-produced): a new scene, a new opening line and new pieces each time, never the same first line twice, and keep mixing in the account\'s other styles. Narrated ones use a realistic AI voice: turn on TikTok\'s AI-generated label and Meta\'s AI info label when posting them. Post caption: the hook, a question, 3-5 hashtags.',
+    ].join(' '),
+  },
+  {
+    id: "lecture",
+    label: "lecture",
+    name: "Lecture",
+    about: "A one-minute lesson: your character stands in the corner like a teacher while a board above builds the lesson, a title, steps, a number or a stamp landing on the exact word that names it. Saved by people who want to remember it.",
+    preview: "lecture-reel",
+    bestOn: "Reels, Shorts, TikTok",
+    format: "lecture-reel",
+    rules: "create_reel format lecture-reel (preset lecture), 40-60 s, narrated, one lesson a reel: a setting, a habit, a term, a mistake, a how-to people in the niche search for. The first line names the thing and why it matters in one breath; then what it is, why it happens, how to fix or use it, and the result. Each line puts one card on the board at the word that names it (at=word: the card lands as that word is said), a new card every one or two lines (title, steps, number, stamp, bars, card, a screen line with the real recording), clear to wipe the board between sections, act= for the teacher's gesture on a big moment. Menu paths, settings and numbers exactly as they are on a real machine today (record_screen or the tool's bundled recording when a step is shown); a Krypt tool is the \"how\" in the fix section when it really does it (krypt_tools), never the hook. A series name in the topic field (\"PC BASICS #4\") makes people follow for the next one. The last line is the end card: something to do next (\"Save this for your next fresh install\", \"Follow for *one fix a day*\"), never a promise the account does not keep. Trading and prediction-market tools: \"AI trades for you, easy\" in words only, never the bot's screens, a chart going up, P&L, wins, profit or \"bet\"; a plain risk line (\"It can lose too.\") and disclaimer \"Not financial advice.\". Every video different (platforms cut reach for whole accounts whose videos look mass-produced): a new topic, a new opening line and new scenes each time, never the same first line twice, and keep mixing in the account's other styles. Narrated ones use a realistic AI voice: turn on TikTok's AI-generated label and Meta's AI info label when posting them. Post caption: the lesson's name, the steps in one line when there are steps, \"save this\", 3-5 hashtags.",
+  },
+  {
+    id: "uimotion",
+    label: "uimotion",
+    name: "UI motion",
+    about: "One shape that keeps morphing through an app's screens, a button into a toggle into a search bar into a chart, with a cursor clicking each change on the beat. A satisfying loop that shows what the app does without a word.",
+    preview: "ui-morph",
+    bestOn: "X, Reels, TikTok",
+    format: "ui-morph",
+    rules: "create_reel format ui-morph (preset morph), 8-16 s, 8-12 states, no voice, music only (bed pulse at bpm 120, or phonk), loop on so the last state morphs back into the first. The states tell the app's story in order: the button that starts it, what you set (toggle, slider, input, search), what happens (loader, progress, notify, message), and the payoff (graph, panel, player, window with the real recording), ending on the logo or one word. Every text on the states is the app's real wording, short (1-3 words a state); numbers only as the app really shows them. A Krypt tool: its real feature names from krypt_tools, the logo state last. The post caption says what the app is in one line. Pick look light or dark to match the app, the accent from the brand colours; vary the order of states, the colours and the speed between reels so no two look the same. Trading and prediction-market tools: \"AI trades for you, easy\" in words only, never a chart going up, P&L, wins, profit or \"bet\"; a plain risk line (\"It can lose too.\") and disclaimer \"Not financial advice.\". Post caption: what it does in one line, the link, 2-4 hashtags (#uidesign #motiondesign plus the niche).",
   },
   {
     id: 'slides',
@@ -393,7 +541,38 @@ export function setCustomStyles(list: CustomStyle[] | undefined): void {
   });
 }
 /** The built-in styles, then the user's own. */
+/**
+ * The built-in styles best first (the user, 2026-11-27: "move our best styles to the top and have styles be sorted by
+ * what we think is best"). Our call, from what did well (screen recordings, voiced stories), proven viral formats
+ * (cutaway worlds, stream clips, Reddit stories) and how good each looks. Only the order they are SHOWN in: an
+ * account's saved list keeps its own order. The default mix follows the ranking (rankWeight).
+ */
+export const STYLE_RANK = ['diorama', 'screen', 'main', 'clipping', 'reddit', 'ink', 'stickman', 'ask', 'hose', 'proof', 'versus', 'top', 'cutaway', 'ps2', 'blox', 'meme', 'greentext', 'pov', 'slides', 'whatif', 'series', 'speed', 'survival', 'tv', 'pixel', 'lecture', 'uimotion', 'myth', 'wyr', 'quiz', 'tier', 'chat', 'tips', 'case', 'dumb', 'vote', 'retro', 'toy'];
+
+/**
+ * How much of the default mix a style gets, from its place in STYLE_RANK (the user, 2026-11-27, yes to "the top 5
+ * styles get most of the reels and the rest rotate less"): the top 5 count 8, the next 5 count 3, the rest 1. A style
+ * of the user's own counts 3. With every style on, the top 5 get about half the reels between them.
+ */
+export function rankWeight(id: string): number {
+  const i = STYLE_RANK.indexOf(id);
+  if (i < 0) return 3;
+  return i < 5 ? 8 : i < 10 ? 3 : 1;
+}
+
+/** Any list of styles in STYLE_RANK order; styles it does not name (the user's own) keep their order after them. */
+export function bestFirst<T extends { id: string }>(xs: T[]): T[] {
+  const at = (id: string): number => {
+    const i = STYLE_RANK.indexOf(id);
+    return i < 0 ? STYLE_RANK.length : i;
+  };
+  return xs.map((x, i) => ({ x, i })).sort((a, b) => at(a.x.id) - at(b.x.id) || a.i - b.i).map((o) => o.x);
+}
+
 export const allStyles = (): ChannelStyle[] => (custom.length ? [...STYLES, ...custom] : STYLES);
+
+/** Every style best first, for showing (the Styles page, the lists the AI reads). */
+export const rankedStyles = (): ChannelStyle[] => bestFirst(allStyles());
 
 export const styleById = (id: string): ChannelStyle | undefined => {
   const k = id.trim().toLowerCase();
@@ -438,7 +617,7 @@ export function cleanStyles(input: string[]): string[] {
   const out: string[] = [];
   for (const x of input) {
     const s = styleById(x);
-    if (!s) throw new Error(`No style "${x}". Styles: ${allStyles().map((y) => y.label).join(', ')} (krypt = main).`);
+    if (!s) throw new Error(`No style "${x}". Styles: ${rankedStyles().map((y) => y.label).join(', ')} (krypt = main).`);
     if (!out.includes(s.id)) out.push(s.id);
   }
   return out;
@@ -446,7 +625,7 @@ export function cleanStyles(input: string[]): string[] {
 
 /**
  * The share of reels each of an account's styles gets, in percent, adding up to about 100. The user's own mix
- * when one is set (Styles page); otherwise the main style gets half and the others share the rest.
+ * when one is set (Styles page); otherwise the ranking decides (rankWeight): the best styles get the most.
  */
 export function styleMix(a: Pick<IgAccount, 'styles' | 'styleMix'>): Array<{ id: string; share: number }> {
   const ids = stylesOf(a);
@@ -455,7 +634,7 @@ export function styleMix(a: Pick<IgAccount, 'styles' | 'styleMix'>): Array<{ id:
   const set = ids.some((id) => Number(own[id]) > 0);
   // A style switched on after the mix was saved has no number yet: it gets the smallest share in the mix, so it is tried.
   const least = Math.min(...ids.map((id) => Number(own[id]) || 0).filter((n) => n > 0));
-  const raw = ids.map((id, i) => (set ? (id in own ? Math.max(0, Number(own[id]) || 0) : least) : i === 0 ? ids.length - 1 : 1));
+  const raw = ids.map((id) => (set ? (id in own ? Math.max(0, Number(own[id]) || 0) : least) : rankWeight(id)));
   const total = raw.reduce((n, x) => n + x, 0) || 1;
   // Whole percents, but never 0 for a style that has a share: with many styles on, each one's is small.
   return ids.map((id, i) => ({ id, share: raw[i] > 0 ? Math.max(1, Math.round((raw[i] / total) * 100)) : 0 }));

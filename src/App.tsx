@@ -17,6 +17,7 @@ import Dashboard from './pages/Dashboard';
 import Studio from './pages/Studio';
 import NextRun from './pages/NextRun';
 import LongVideos from './pages/LongVideos';
+import Thumbnails from './pages/Thumbnails';
 import Resources from './pages/Resources';
 import Campaigns from './pages/Campaigns';
 import Usage from './pages/Usage';
@@ -72,7 +73,7 @@ interface NavGroup {
 const GROUPS: NavGroup[] = [
   { id: 'home', label: 'Home', icon: Gauge, pages: [{ id: 'dashboard', label: 'Home' }] },
   { id: 'styles', label: 'Styles', icon: Palette, pages: [{ id: 'styles', label: 'Styles' }] },
-  { id: 'create', label: 'Create', icon: Clapperboard, first: 'studio', pages: [{ id: 'next-run', label: 'Next run' }, { id: 'studio', label: 'Studio' }, { id: 'long', label: 'Long videos' }, { id: 'examples', label: 'Examples' }, { id: 'library', label: 'Library' }, { id: 'campaigns', label: 'Campaigns' }, { id: 'voices', label: 'Voices' }] },
+  { id: 'create', label: 'Create', icon: Clapperboard, first: 'studio', pages: [{ id: 'next-run', label: 'Next run' }, { id: 'studio', label: 'Studio' }, { id: 'long', label: 'Long videos' }, { id: 'thumbnails', label: 'Thumbnails' }, { id: 'examples', label: 'Examples' }, { id: 'library', label: 'Library' }, { id: 'campaigns', label: 'Campaigns' }, { id: 'voices', label: 'Voices' }] },
   { id: 'grow', label: 'Grow', icon: TrendingUp, pages: [{ id: 'accounts', label: 'Accounts' }, { id: 'warming', label: 'Warm-up' }, { id: 'results', label: 'Results' }, { id: 'research', label: 'Research' }] },
   { id: 'train', label: 'Training', icon: GraduationCap, pages: [{ id: 'train-rank', label: 'Rank' }, { id: 'train-hooks', label: 'Hooks' }, { id: 'train-topics', label: 'Topics' }, { id: 'train-notes', label: 'Notes' }] },
   { id: 'ai', label: 'AI', icon: Bot, pages: [{ id: 'autopilot', label: 'Autopilot' }, { id: 'agents', label: 'Connect' }, { id: 'chat', label: 'Chat' }, { id: 'usage', label: 'Usage' }] },
@@ -310,8 +311,8 @@ class PageBoundary extends Component<{ page: PageId; children: ReactNode }, { er
 export default function App() {
   const page = useApp((s) => s.page);
   const ready = useApp((s) => !!s.db);
-  // The setup wizard: on its own until the brand is set up, and whenever the user reopens it.
-  const wizard = useApp((s) => !!s.db && (s.wizard || !s.db.brand.setupDone));
+  // The setup wizard: on its own until the brand is set up, on a new profile's first open, and whenever the user reopens it.
+  const wizard = useApp((s) => !!s.db && (s.wizard || !s.db.brand.setupDone || !!s.db.settings.firstOpen));
   useEffect(() => initStore(), []);
   // Errors are turned into text here: a thrown Error loses its message on its
   // way through the preload bridge and would reach the AI as "[object Object]".
@@ -348,7 +349,7 @@ export default function App() {
         <ApprovalBar />
         <div className="min-h-0 flex-1">
           <PageBoundary page={page}>
-          {!ready ? null : page === 'dashboard' ? <Dashboard /> : page === 'warming' ? <Warming /> : page === 'accounts' ? <Accounts /> : page === 'next-run' ? <NextRun /> : page === 'long' ? <LongVideos /> : page === 'resources' ? <Resources /> : page === 'campaigns' ? <Campaigns /> : page === 'kip' ? <Kip /> : page === 'multi-run' ? <MultiRun /> : page === 'studio' ? <Studio /> : page === 'examples' ? <Examples /> : page === 'styles' ? <Styles /> : page === 'library' ? <Library /> : page === 'results' ? <Results /> : page === 'train-rank' ? <Training tab="rank" /> : page === 'train-hooks' ? <Training tab="hooks" /> : page === 'train-topics' ? <Training tab="topics" /> : page === 'train-notes' ? <Training tab="notes" /> : page === 'research' ? <Research /> : page === 'voices' ? <Voices /> : page === 'krypt' ? <KryptTools /> : page === 'chat' ? <Chat /> : page === 'setup' ? <Setup /> : page === 'autopilot' ? <Autopilot /> : page === 'usage' ? <Usage /> : <Agents />}
+          {!ready ? null : page === 'dashboard' ? <Dashboard /> : page === 'warming' ? <Warming /> : page === 'accounts' ? <Accounts /> : page === 'next-run' ? <NextRun /> : page === 'long' ? <LongVideos /> : page === 'thumbnails' ? <Thumbnails /> : page === 'resources' ? <Resources /> : page === 'campaigns' ? <Campaigns /> : page === 'kip' ? <Kip /> : page === 'multi-run' ? <MultiRun /> : page === 'studio' ? <Studio /> : page === 'examples' ? <Examples /> : page === 'styles' ? <Styles /> : page === 'library' ? <Library /> : page === 'results' ? <Results /> : page === 'train-rank' ? <Training tab="rank" /> : page === 'train-hooks' ? <Training tab="hooks" /> : page === 'train-topics' ? <Training tab="topics" /> : page === 'train-notes' ? <Training tab="notes" /> : page === 'research' ? <Research /> : page === 'voices' ? <Voices /> : page === 'krypt' ? <KryptTools /> : page === 'chat' ? <Chat /> : page === 'setup' ? <Setup /> : page === 'autopilot' ? <Autopilot /> : page === 'usage' ? <Usage /> : <Agents />}
           </PageBoundary>
         </div>
       </main>

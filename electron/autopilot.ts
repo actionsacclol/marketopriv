@@ -22,6 +22,7 @@ import { EXTRA_AFTER_LAST_MIN, EXTRA_AFTER_RUN_MIN, EXTRA_BEFORE_RUN_MIN, EXTRA_
 import { SITE_LABEL } from '../shared/warmup';
 import { entry as editorEntry } from './editor';
 import { EDITOR_SERVER } from '../shared/longform';
+import { TOOL_TIMEOUT_SEC, clientsWith } from './mcp/clients';
 
 const home = os.homedir();
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -55,6 +56,16 @@ export function init(d: typeof deps): void {
     if (wasRunning && !now) deps.onRunEnd?.();
     wasRunning = now;
     deps.onTick?.(now);
+    // Settings changed during a scheduled run: its script is written now that the run is over.
+    if (rewriteLater && !inChange && !scriptsInUse()) {
+      const s = settings();
+      if (!s.on) rewriteLater = false;
+      else
+        void oneAtATime(() => writeFiles(s.ai, s.model, s.saver)).catch((e: Error) => {
+          rewriteLater = false;
+          deps.log(`autopilot: could not rewrite the run after it ended: ${e.message}`);
+        });
+    }
   }, 20_000).unref?.();
   // Goal-driven extra runs: looked at once a minute. Never in a test copy unless asked (KRYPT_MARKETO_EXTRA_RUNS=1).
   if (!deps.dev || process.env.KRYPT_MARKETO_EXTRA_RUNS === '1') setInterval(() => void tickExtra(), 60_000).unref?.();
@@ -73,7 +84,7 @@ const taskName = (): string => `Krypt Marketo Autopilot${deps.dev ? ' (dev)' : '
 export const PROMPT = `This is a scheduled, unattended Krypt Marketo run. Nobody is watching: work through today's plan with the marketo tools, then stop.
 
 1. get_overview, then get_today. get_today is the plan: follow its order (inbox, engagement, posts against today's targets, replies to comments, metrics, stats, log_session). When it opens with instructions from the user for this run, those come first: they decide what this run makes or does, inside the same limits and rules. It ends with the last run's report: don't redo what it did, and pick up what it left.
-2. Research every reel with WebSearch and WebFetch, whatever its type (story, list, versus, stats, tool reels too): find a real, current angle (news, on-chain events, launches, trends, what people are asking about this week) and check every number and claim against the source you read. Never invent a story or a number; if you can't source it, pick another angle. (The reddit, greentext, meme and dumb styles are the exception: made-up stories and jokes on purpose, written the way their style rules say, never presented as news or fact. The stickman and blox styles' scenes are made-up too, but every fact, setting and tool in them is real.) Before making a reel: get_performance (its "User feedback" part is the user's own ratings, rules and more / less of: it sets the direction), get_playbook (its notes say which content goes on which platform, if there are any), and list_posts with your idea as the query so you don't repeat a story. Read krypt_tools for any Krypt tool you feature. For a story reel, set its art style (art: flat, cartoon, ps2, 3d) to what get_performance's art style test says for the platform it is mainly for, and give the mascot character beats (shock, think, cheer...) where the line has an emotion. Make it, preview it, render it (square too for X), post it where it fits, and mark_posted each link. X is not a video feed: of its posts each day, at most 1-2 are videos; the others are text posts (a sharp sourced take, a stat with its source, a question, a short thread) and image posts (render_image of a reel's strongest frame).
+2. Research every reel on the web (WebSearch and WebFetch, or your app's own web search), whatever its type (story, list, versus, stats, tool reels too): find a real, current angle (news, on-chain events, launches, trends, what people are asking about this week) and check every number and claim against the source you read. Never invent a story or a number; if you can't source it, pick another angle. (The reddit, greentext, meme and dumb styles are the exception: made-up stories and jokes on purpose, written the way their style rules say, never presented as news or fact. The stickman and blox styles' scenes are made-up too, but every fact, setting and tool in them is real.) Before making a reel: get_performance (its "User feedback" part is the user's own ratings, rules and more / less of: it sets the direction), get_playbook (its notes say which content goes on which platform, if there are any), and list_posts with your idea as the query so you don't repeat a story. Read krypt_tools for any Krypt tool you feature. For a story reel, set its art style (art: flat, cartoon, ps2, 3d) to what get_performance's art style test says for the platform it is mainly for, and give the mascot character beats (shock, think, cheer...) where the line has an emotion. Make it, preview it, render it (square too for X), post it where it fits, and mark_posted each link. X is not a video feed: of its posts each day, at most 1-2 are videos; the others are text posts (a sharp sourced take, a stat with its source, a question, a short thread) and image posts (render_image of a reel's strongest frame).
 3. Engagement is half the job, not an extra: on every platform, do the "THIS RUN" engagement goal get_today lists (likes, comments or replies, follows, reposts, saves and favorites, spread through the run between posts). It is a goal to reach, not a ceiling to stay far under: a run that ends with half of it undone on a platform says why in the report. Watch first and like only what you actually watched; follow accounts in the niche that post well. Comments and replies are in the goal (the writing rules in the instructions); when the hub turns one back as machine-written, rewrite it and send it again: that is not a failed post. Watch one platform at a time, so the videos really play. If a feed or search is off-niche or empty, try the niche's keywords and hashtags, or the accounts it already follows, before giving up. Stay human-paced and under the limits: the recommended ones are ceilings to stay well under, and a limit the user set themselves (get_warmup_plan names those) is a number they want reached. Never change a limit yourself. Post once per platform in a run, unless that platform's get_today line says more for this run: the hub refuses a post that comes sooner than the platform's gap after the last one (2 hours, 90 min on X, or the user's own number), so the next one goes later in the run or in the next run. Spread the platforms through the run (post on one, engage or answer the inbox on another, then post on the next) instead of uploading everywhere in one burst.
 3b. Lines starting ONE-TIME (following Krypt's accounts) and KRYPT VISIT (looking in on them, with likes and sometimes a comment) in get_today or in a browser_open answer are part of every run: do them partway through that platform's engagement (not as the very first action there), before you leave that platform, and never skip them for time. Say in the report what you did there.
 4. Anything only the user can do (a sign-in, a security check or captcha, a passcode, a checkpoint, a "verify it's you", a Page/profile switch, an approval card that is still waiting): do not try to solve it. Skip that platform for this run and put it in the report.
@@ -89,10 +100,16 @@ End with a short report, plain text, one line per platform: what was posted (wit
 `;
 
 /** What a run for one profile starts with, when the hub has more than one. */
-const profileHeader = (id: string, name: string): string =>
-  instance.MULTI
+const profileHeader = (id: string, name: string, pinned: boolean): string =>
+  pinned
     ? `This run is for the Krypt Marketo profile "${name}" (id ${id}). Its tools reach that profile's own window only, so never call use_profile. Everything below is about this profile only.\n\n`
     : `This run is for the Krypt Marketo profile "${name}" (id ${id}). Before anything else, call use_profile with id "${id}" and check that its answer says that profile is open. If it does not, stop and say so in the report: never work in another profile. Everything below is about this profile only.\n\n`;
+
+/**
+ * Each profile in its own window and Claude Code: the profiles' runs go side by side, each pinned to its window. Other
+ * AI apps cannot be pinned per run, so they go one after another and open each profile's window with use_profile.
+ */
+const sideBySide = (ai: AutopilotAi): boolean => instance.MULTI && ai === 'claude';
 
 /**
  * Multi-instance mode: each profile's run gets its own MCP config, pinned to that profile's window (--profile), and
@@ -109,11 +126,25 @@ function pinnedArgs(ai: AutopilotAi, id: string): string[] {
   return ['--strict-mcp-config', '--mcp-config', file];
 }
 
+/**
+ * Codex settings for an unattended run, as `-c key=value` (the value is TOML: single quotes keep it one word in run.cmd
+ * and run.sh). Like Kip's: shell commands stay read-only, nothing waits for a person to approve a tool call (with no
+ * window that means refusing it), live web search for the research step, and the long tools get time to finish.
+ */
+const codexServer = (name: string): string[] => ['-c', `mcp_servers.${name}.default_tools_approval_mode='approve'`, '-c', `mcp_servers.${name}.tool_timeout_sec=${TOOL_TIMEOUT_SEC}`];
+
 /** The AI apps that can run headless, and how. Claude Code is the one this is built and tested with. */
 const AIS: Record<AutopilotAi, { name: string; bin: string; args: string[]; client: string; note?: string; /** Its answer comes as JSON with the tokens used (kept beside the report). */ json?: boolean; /** The option that picks the model. */ modelFlag?: string; /** The setting that makes it summarise a long conversation earlier (the token saver). */ saverEnv?: string }> = {
-  claude: { name: 'Claude Code', bin: 'claude', args: ['-p', '--output-format', 'json', '--allowedTools', `mcp__marketo,mcp__${EDITOR_SERVER},WebSearch,WebFetch`], client: 'claude-code', json: true, modelFlag: '--model', saverEnv: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW' },
+  // stream-json: one line per message as the run goes, so a run that is stopped still leaves its last words and the tokens it used.
+  claude: { name: 'Claude Code', bin: 'claude', args: ['-p', '--output-format', 'stream-json', '--verbose', '--allowedTools', `mcp__marketo,mcp__${EDITOR_SERVER},WebSearch,WebFetch`], client: 'claude-code', json: true, modelFlag: '--model', saverEnv: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW' },
   codex: { name: 'Codex', bin: 'codex', args: ['exec', '--skip-git-repo-check', '-'], client: 'codex', note: 'Not tested with Marketo yet.', modelFlag: '--model' },
 };
+
+/** Everything after the program on a run's start line. Codex gets its unattended settings, and Krypt Editor's when it is connected there. */
+function runArgs(ai: AutopilotAi, pick: string[], pinned: string[]): string[] {
+  const codex = ai === 'codex' ? ['-c', "approval_policy='never'", '-c', "sandbox_mode='read-only'", '-c', "web_search='live'", ...codexServer('marketo'), ...(clientsWith(EDITOR_SERVER).includes('Codex') ? codexServer(EDITOR_SERVER) : [])] : [];
+  return [...AIS[ai].args, ...codex, ...pick, ...pinned];
+}
 
 const where = (name: string): Promise<string | null> => findBin(name);
 
@@ -180,6 +211,67 @@ const WIN_WAIT_EXTRA = [
 ];
 /** cmd.exe reads a script in the console's code page: the scripts are UTF-8, so paths with letters like ü or é need this. */
 const WIN_UTF8 = 'chcp 65001 >nul 2>&1';
+
+/** One program argument as Windows splits a command line (quoted only when it has a space or a quote). */
+function winArg(a: string): string {
+  if (a && !/[\s"]/.test(a)) return a;
+  let out = '"';
+  let slashes = 0;
+  for (const ch of a) {
+    if (ch === '\\') {
+      slashes++;
+      continue;
+    }
+    out += ch === '"' ? `${'\\'.repeat(slashes * 2 + 1)}"` : `${'\\'.repeat(slashes)}${ch}`;
+    slashes = 0;
+  }
+  return `${out}${'\\'.repeat(slashes * 2)}"`;
+}
+
+/**
+ * Windows: the line in run.cmd that starts the AI, with a watchdog like run.sh's. A hidden PowerShell starts the AI
+ * (the prompt file on its input), waits up to `limitMin`, and past that stops the AI and everything it started, but
+ * not Chrome or the hub it opened (they keep running for the user). While it waits it asks Windows not to sleep, so a
+ * laptop woken for the run does not doze off halfway (that ends with the run). What the AI printed goes into the
+ * report when it is done (%LOG%; a JSON app's answer to %OUT%). The script travels encoded, so run.cmd stays plain
+ * ASCII whatever the paths hold.
+ */
+function winAiLine(ai: AutopilotAi, bin: string, args: string[], prompt: string, limitMin: number): string {
+  const argv = args.map(winArg).join(' ');
+  // An npm launcher (.cmd) goes through cmd.exe; /s keeps the quotes inside as they are.
+  const viaCmd = /\.(cmd|bat)$/i.test(bin);
+  const file = viaCmd ? `"$env:SystemRoot\\System32\\cmd.exe"` : psQuote(bin);
+  const line = viaCmd ? `/d /s /c ""${bin}" ${argv}"` : argv;
+  const json = !!AIS[ai].json;
+  const ps = [
+    "$ErrorActionPreference='Stop'",
+    `$log=$env:LOG.Trim('"');$err="$log.err";$out=${json ? `$env:OUT.Trim('"')` : '"$log.out"'};$stop='';$code=1`,
+    // ES_CONTINUOUS | ES_SYSTEM_REQUIRED for as long as this waits (Windows drops it when this ends).
+    `try{Add-Type -Name P -Namespace KryptAwake -MemberDefinition '[DllImport("kernel32.dll")]public static extern uint SetThreadExecutionState(uint f);';$null=[KryptAwake.P]::SetThreadExecutionState([uint32]2147483649)}catch{}`,
+    'try{',
+    `$p=Start-Process -FilePath ${file} -ArgumentList ${psQuote(line)} -RedirectStandardInput ${psQuote(prompt)} -RedirectStandardOutput $out -RedirectStandardError $err -NoNewWindow -PassThru`,
+    '$null=$p.Handle;$t0=$p.StartTime',
+    `if($p.WaitForExit(${limitMin * 60_000})){$p.WaitForExit();$code=$p.ExitCode}else{`,
+    // The AI's process tree, from the processes Windows lists now: started after it, minus Chrome and the hub (and what they started).
+    '$ids=New-Object System.Collections.ArrayList;[void]$ids.Add([int]$p.Id);$i=0',
+    `try{$all=@(Get-CimInstance Win32_Process);while($i -lt $ids.Count){$id=$ids[$i];$i++;foreach($c in $all){if($c.ParentProcessId -eq $id -and $c.CreationDate -ge $t0 -and -not $ids.Contains([int]$c.ProcessId) -and $c.Name -ne 'chrome.exe' -and "$($c.CommandLine)" -notmatch 'launched-by-agent'){[void]$ids.Add([int]$c.ProcessId)}}}}catch{}`,
+    'foreach($id in $ids){Stop-Process -Id $id -Force -ErrorAction SilentlyContinue}',
+    `$stop=${psQuote(`${AIS[ai].name} was stopped at its ${limitMin}-minute limit.`)}`,
+    '}',
+    `}catch{$stop=${psQuote(`${AIS[ai].name} could not be started: `)}+$_.Exception.Message}`,
+    `foreach($f in @($err${json ? '' : ',$out'})){if(Test-Path -LiteralPath $f){$b=[IO.File]::ReadAllBytes($f);$s=[IO.File]::Open($log,'Append','Write','ReadWrite');$s.Write($b,0,$b.Length);$s.Close();Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue}}`,
+    'if($stop){[IO.File]::AppendAllText($log,"`r`n$stop`r`n")}',
+    'exit $code',
+  ].join('\n');
+  const enc = Buffer.from(ps, 'utf16le').toString('base64');
+  const out = `"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -NonInteractive -EncodedCommand ${enc} >nul 2>&1`;
+  // cmd.exe takes lines of up to 8191 characters.
+  if (out.length > 8100) throw new Error(`The paths to ${AIS[ai].name} and Marketo's folder are too long for a scheduled run on Windows.`);
+  return out;
+}
+
+/** A plain-text note of how the AI is started (its start line itself is encoded): older scripts are found by it. */
+const winAiNote = (ai: AutopilotAi): string => `rem ${AIS[ai].name} starts with: ${AIS[ai].args.join(' ')} (stopped after its time limit)`;
 /**
  * A scheduled run keeps this file while it is going, from its first line (its report only starts after the waits
  * for an extra run and for Chrome), so no extra run starts under it. With each profile in its own window, each
@@ -194,6 +286,17 @@ const SH_WAIT_EXTRA = [
   'for i in $(seq 1 40); do ls extra-running*.flag >/dev/null 2>&1 || break; sleep 30; done',
 ];
 
+/** New settings came while a scheduled run was reading its script: written once it ends (init's tick). */
+let rewriteLater = false;
+/** A scheduled run is going (its flag is there, or a report of one is still being written). */
+function scriptsInUse(): boolean {
+  try {
+    return scheduledFlags().length > 0 || liveReports().some((r) => r.running && !r.extra);
+  } catch {
+    return false;
+  }
+}
+
 /** Write the prompt and the script the scheduled task starts. */
 async function writeFiles(ai: AutopilotAi, model?: string, saver?: boolean): Promise<string> {
   // The model name goes into a script: only a plain name gets there.
@@ -207,10 +310,17 @@ async function writeFiles(ai: AutopilotAi, model?: string, saver?: boolean): Pro
   const targets = multi ? profiles.autopilotList() : profiles.list();
   if (!targets.length) throw new Error('No profile has autopilot switched on. Switch it on for at least one (Multi run page).');
   const chrome = multi || store.get().igAccounts.some((a) => a.browser === 'chrome');
+  // A run is reading these files right now (cmd.exe and bash read a script as they go, by its place in the file, so a
+  // rewrite would make it skip or cut lines): they are written when it ends, from the settings saved by then.
+  if (scriptsInUse()) {
+    if (!rewriteLater) deps.log('autopilot: a run is going; its script is rewritten with the new settings when it ends');
+    rewriteLater = true;
+    return scriptFile();
+  }
+  rewriteLater = false;
   // Prompts written for profiles that no longer take part.
-  for (const f of fs.readdirSync(dir())) if (/^run-(prompt|mcp|part)-[a-z0-9_]+\.(md|json|cmd)$/.test(f) && !(multi && targets.some((p) => f === `run-prompt-${p.id}.md` || (instance.MULTI && (f === `run-mcp-${p.id}.json` || f === `run-part-${p.id}.cmd`))))) fs.rmSync(path.join(dir(), f), { force: true });
-  if (ai !== 'claude' && instance.MULTI && multi) throw new Error('With each profile in its own window, scheduled runs need Claude Code (it can be pinned to one window per run).');
-  for (const p of targets) fs.writeFileSync(promptFile(multi, p.id), multi ? `${profileHeader(p.id, p.name)}${PROMPT}` : PROMPT, 'utf8');
+  for (const f of fs.readdirSync(dir())) if (/^run-(prompt|mcp|part)-[a-z0-9_]+\.(md|json|cmd)$/.test(f) && !(multi && targets.some((p) => f === `run-prompt-${p.id}.md` || (sideBySide(ai) && (f === `run-mcp-${p.id}.json` || f === `run-part-${p.id}.cmd`))))) fs.rmSync(path.join(dir(), f), { force: true });
+  for (const p of targets) fs.writeFileSync(promptFile(multi, p.id), multi ? `${profileHeader(p.id, p.name, sideBySide(ai))}${PROMPT}` : PROMPT, 'utf8');
   if (process.platform === 'darwin') return writeShScript(ai, bin, pick, saver, multi, targets, chrome);
   const q = (s: string): string => `"${s.replace(/%/g, '%%')}"`;
   const lines = [
@@ -224,8 +334,8 @@ async function writeFiles(ai: AutopilotAi, model?: string, saver?: boolean): Pro
     'for /f %%i in (\'powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"\') do set STAMP=%%i',
     ...(chrome ? ['rem The accounts live in Chrome: open it if it is not running.', WIN_CHROME] : []),
   ];
-  // Multi-instance mode: every profile's run is a script of its own, all started together; this one waits for them.
-  const together = instance.MULTI && multi;
+  // Side by side: every profile's run is a script of its own, all started together; this one waits for them.
+  const together = sideBySide(ai) && multi;
   const parts: string[] = [];
   for (const p of targets) {
     const prompt = promptFile(multi, p.id);
@@ -240,7 +350,8 @@ async function writeFiles(ai: AutopilotAi, model?: string, saver?: boolean): Pro
       ...(AIS[ai].json ? [`set OUT=${q(logsDir()).slice(0, -1)}\\run-%STAMP%${multi ? `--${p.id}` : ''}.json"`] : []),
       // Token saver: the app summarises its conversation at this size instead of letting it grow.
       ...(saver && AIS[ai].saverEnv ? [`set ${AIS[ai].saverEnv}=${SAVER_WINDOW}`] : []),
-      `type ${q(prompt)} | ${/\.(cmd|bat)$/i.test(bin) ? 'call ' : ''}${q(bin)} ${[...AIS[ai].args, ...pick, ...pinned].map((a) => (/\s/.test(a) ? q(a) : a)).join(' ')} ${AIS[ai].json ? '> %OUT% 2>> %LOG%' : '>> %LOG% 2>&1'}`,
+      winAiNote(ai),
+      winAiLine(ai, bin, runArgs(ai, pick, pinned), prompt, LIMIT_MIN),
       `echo ${AIS[ai].name} exited with code %ERRORLEVEL% >> %LOG%`,
       'echo. >> %LOG%',
       'echo Run ended %DATE% %TIME% >> %LOG%',
@@ -326,14 +437,14 @@ function writeShScript(ai: AutopilotAi, bin: string, pick: string[], saver: bool
     ...(chrome ? [SH_CHROME_NOTE, SH_CHROME] : []),
   ];
   // Each profile in its own window: from here each profile's run keeps a flag of its own.
-  if (instance.MULTI && multi) lines.push(...targets.map((p) => `touch ${shq(schedFlagFor(p.id))}`), `rm -f ${shq(SCHED_FLAG)}`);
+  if (sideBySide(ai) && multi) lines.push(...targets.map((p) => `touch ${shq(schedFlagFor(p.id))}`), `rm -f ${shq(SCHED_FLAG)}`);
   for (const p of targets) {
     const shown = p.name.replace(/[^\w .-]+/g, '_');
     const base = `${logsDir()}/run-`;
     const suffix = multi ? `--${p.id}` : '';
     const out = AIS[ai].json ? `> "$OUT" 2>> "$LOG"` : `>> "$LOG" 2>&1`;
     // Multi-instance mode: each profile's run in a subshell of its own, all at the same time.
-    const together = instance.MULTI && multi;
+    const together = sideBySide(ai) && multi;
     if (together) lines.push('(');
     lines.push(
       `LOG=${shq(base)}"$STAMP"${shq(`${suffix}.txt`)}`,
@@ -341,9 +452,11 @@ function writeShScript(ai: AutopilotAi, bin: string, pick: string[], saver: bool
       ...(AIS[ai].json ? [`OUT=${shq(base)}"$STAMP"${shq(`${suffix}.json`)}`] : []),
       ...(saver && AIS[ai].saverEnv ? [`export ${AIS[ai].saverEnv}=${SAVER_WINDOW}`] : []),
       // In the background with a watchdog: a run is stopped after LIMIT_MIN, like the Windows task's time limit.
-      `${shq(bin)} ${[...AIS[ai].args, ...pick, ...pinnedArgs(ai, p.id)].map(shq).join(' ')} < ${shq(promptFile(multi, p.id))} ${out} &`,
+      `${shq(bin)} ${runArgs(ai, pick, pinnedArgs(ai, p.id)).map(shq).join(' ')} < ${shq(promptFile(multi, p.id))} ${out} &`,
       'PID=$!',
-      `( sleep ${LIMIT_MIN * 60}; kill -TERM $PID 2>/dev/null ) &`,
+      // The Mac stays awake while the AI works (an idle Mac would sleep mid-run).
+      'caffeinate -i -w $PID >/dev/null 2>&1 &',
+      `( sleep ${LIMIT_MIN * 60}; kill -TERM $PID 2>/dev/null && echo "${AIS[ai].name} was stopped at its ${LIMIT_MIN}-minute limit." >> "$LOG" ) &`,
       'DOG=$!',
       'wait $PID',
       'CODE=$?',
@@ -354,7 +467,7 @@ function writeShScript(ai: AutopilotAi, bin: string, pick: string[], saver: bool
     );
     if (together) lines.push(`rm -f ${shq(schedFlagFor(p.id))}`, ') &');
   }
-  if (instance.MULTI && multi) lines.push('wait');
+  if (sideBySide(ai) && multi) lines.push('wait');
   lines.push(`rm -f ${shq(SCHED_FLAG)}`, '');
   const sh = path.join(dir(), 'run.sh');
   fs.writeFileSync(sh, lines.join('\n'), { encoding: 'utf8', mode: 0o755 });
@@ -455,10 +568,13 @@ let inChange = 0;
 function oneAtATime<T>(fn: () => Promise<T>): Promise<T> {
   const run = async (): Promise<T> => {
     inChange++;
+    // The task is asked about afresh after a change (and inside it, by the status() it ends with).
+    taskSeen = null;
     try {
       return await fn();
     } finally {
       inChange--;
+      taskSeen = null;
     }
   };
   const p = changes.then(run, run);
@@ -472,7 +588,7 @@ function oneAtATime<T>(fn: () => Promise<T>): Promise<T> {
  */
 function taskLimitMin(): number {
   const n = profiles.count() > 1 ? profiles.autopilotList().length : 1;
-  if (!instance.MULTI || n <= 1) return LIMIT_MIN * Math.max(1, n) + 10;
+  if (!sideBySide(settings().ai) || n <= 1) return LIMIT_MIN * Math.max(1, n) + 10;
   const { aiAtOnce, staggerMin } = perf.values();
   const rounds = aiAtOnce > 0 ? Math.ceil(n / aiAtOnce) : 1;
   return LIMIT_MIN * rounds + staggerMin + 10;
@@ -500,6 +616,19 @@ function scheduledFlags(): string[] {
   });
 }
 
+/**
+ * Several profiles in one window run one after another. A chain longer than the gap to the next start time makes the
+ * scheduler skip that start (a run still going is never started twice): said in the log, nothing is changed.
+ */
+function warnLongChain(times: string[], tier?: UsageTier): void {
+  const n = profiles.count() > 1 ? profiles.autopilotList().length : 1;
+  if (sideBySide(settings().ai) || n < 2 || times.length < 2) return;
+  const mins = times.map(toMin).sort((a, b) => a - b);
+  const gap = Math.min(...mins.map((m, i) => (i + 1 < mins.length ? mins[i + 1] : mins[0] + 1440) - m));
+  const each = (tier && USAGE_TIERS[tier]?.runMin) || 60;
+  if (n * each > gap) deps.log(`autopilot: warning: ${n} profiles run one after another (about ${n * each} min in all), longer than the ${gap} min between two start times, so the next start is skipped while the chain is still going. Each profile in its own window, fewer profiles in the runs or fewer start times avoid it.`);
+}
+
 async function enableNow(input: { ai: AutopilotAi; times: string[]; keepMinutes?: boolean; /** '' = the AI app's own setting; left out = as it was. */ model?: string; /** Left out = as it was. */ saver?: boolean; /** Left out = as it was. */ tier?: UsageTier }): Promise<AutopilotStatus> {
   if (!SUPPORTED) throw new Error('Autopilot runs on Windows and macOS only for now.');
   const times =[...new Set(input.times.map((t) => t.trim()).filter((t) => TIME.test(t)))].sort();
@@ -512,6 +641,7 @@ async function enableNow(input: { ai: AutopilotAi; times: string[]; keepMinutes?
   const tier = input.tier ?? prev.tier;
   if (model && !MODEL_NAME.test(model)) throw new Error('That is not a model name: letters, digits, dots and dashes only.');
   const cmd = await writeFiles(input.ai, model, saver);
+  warnLongChain(times, tier);
   // A profile change rewrites the run but leaves today's start minutes where they are.
   const same = input.keepMinutes && prev.picked?.length === times.length && prev.times.join() === times.join() && prev.pickedOn === todayStr();
   const picked = same ? prev.picked! : pickMinutes(times, prev.on ? prev : undefined);
@@ -645,6 +775,7 @@ export async function runNow(want?: AutopilotAi): Promise<AutopilotStatus> {
     }
   }
   const cmd = await writeFiles(s.ai, s.model, s.saver);
+  taskSeen = null;
   if (MAC) {
     // The LaunchAgent starts it when there is one (launchd then knows it is running and won't start it twice).
     const kicked = fs.existsSync(plistFile()) && (await launchctl(['kickstart', `${guiDomain()}/${launchLabel()}`])).ok;
@@ -671,7 +802,7 @@ export async function runNow(want?: AutopilotAi): Promise<AutopilotStatus> {
 export const EXTRA_PROMPT = `This is a short goal-driven extra run of Krypt Marketo, between the scheduled runs. Nobody is watching. It started because posts are still owed today and a platform's spacing between posts allows one now.
 
 1. get_overview, then get_today. Its EXTRA RUN line is the plan: post on the platforms marked THIS RUN (one post on each), then answer new comments and replies on the account's own posts there. Nothing else: no inbox sweep, no engagement goal, no metrics, no learning step, no Krypt follow or visit.
-2. Post what is ready first (get_today lists the ready reels and what went where). On X and Threads a text post works: one sharp take or a stat, checked against its source with WebSearch and WebFetch. Make at most one new reel, only when a platform needs a video and nothing ready fits, researched and checked like any reel. Never post the same thing twice on a platform.
+2. Post what is ready first (get_today lists the ready reels and what went where). On X and Threads a text post works: one sharp take or a stat, checked against its source on the web (WebSearch and WebFetch, or your app's own web search). Make at most one new reel, only when a platform needs a video and nothing ready fits, researched and checked like any reel. Never post the same thing twice on a platform.
 3. Anything only the user can do (a sign-in, a security check, a passcode, an approval card that is still waiting): skip that platform and put it in the report. A posting flow that fails twice: stop on that platform and put the exact error in the report.
 4. Stop within about ${EXTRA_RUN_MIN} minutes (the run is stopped at ${EXTRA_KILL_MIN}). Last step: browser_close for each account (no site).
 
@@ -690,11 +821,10 @@ async function writeExtra(): Promise<string> {
   if (!bin) throw new Error(`${AIS[ai].name} is not installed on this computer (or not on PATH).`);
   fs.mkdirSync(logsDir(), { recursive: true });
   const multi = profiles.count() > 1;
-  // Like the scheduled runs: only Claude Code can be pinned to this window, and the prompt forbids use_profile.
-  if (ai !== 'claude' && instance.MULTI && multi) throw new Error('With each profile in its own window, runs need Claude Code (it can be pinned to one window per run).');
+  // Like the scheduled runs: Claude Code is pinned to this window (the prompt forbids use_profile); other AI apps open it with use_profile.
   const p = profiles.active();
   const prompt = extraPromptFile(multi, p.id);
-  fs.writeFileSync(prompt, multi ? `${profileHeader(p.id, p.name)}${EXTRA_PROMPT}` : EXTRA_PROMPT, 'utf8');
+  fs.writeFileSync(prompt, multi ? `${profileHeader(p.id, p.name, sideBySide(ai))}${EXTRA_PROMPT}` : EXTRA_PROMPT, 'utf8');
   const chrome = multi || store.get().igAccounts.some((a) => a.browser === 'chrome');
   const suffix = `${multi ? `--${p.id}` : ''}-extra`;
   const flag = extraFlag(p.id);
@@ -715,9 +845,10 @@ async function writeExtra(): Promise<string> {
       `LOG=${shq(base)}"$STAMP"${shq(`${suffix}.txt`)}`,
       `echo "Run started $(date) with ${AIS[ai].name} (extra run)" > "$LOG"`,
       ...(AIS[ai].json ? [`OUT=${shq(base)}"$STAMP"${shq(`${suffix}.json`)}`] : []),
-      `${shq(bin)} ${[...AIS[ai].args, ...pick, ...pinned].map(shq).join(' ')} < ${shq(prompt)} ${out} &`,
+      `${shq(bin)} ${runArgs(ai, pick, pinned).map(shq).join(' ')} < ${shq(prompt)} ${out} &`,
       'PID=$!',
-      `( sleep ${EXTRA_KILL_MIN * 60}; kill -TERM $PID 2>/dev/null ) &`,
+      'caffeinate -i -w $PID >/dev/null 2>&1 &',
+      `( sleep ${EXTRA_KILL_MIN * 60}; kill -TERM $PID 2>/dev/null && echo "${AIS[ai].name} was stopped at its ${EXTRA_KILL_MIN}-minute limit." >> "$LOG" ) &`,
       'DOG=$!',
       'wait $PID',
       'CODE=$?',
@@ -745,7 +876,8 @@ async function writeExtra(): Promise<string> {
     `set LOG=${q(logsDir()).slice(0, -1)}\\run-%STAMP%${suffix}.txt"`,
     `echo Run started %DATE% %TIME% with ${AIS[ai].name} (extra run) > %LOG%`,
     ...(AIS[ai].json ? [`set OUT=${q(logsDir()).slice(0, -1)}\\run-%STAMP%${suffix}.json"`] : []),
-    `type ${q(prompt)} | ${/\.(cmd|bat)$/i.test(bin) ? 'call ' : ''}${q(bin)} ${[...AIS[ai].args, ...pick, ...pinned].map((a) => (/\s/.test(a) ? q(a) : a)).join(' ')} ${AIS[ai].json ? '> %OUT% 2>> %LOG%' : '>> %LOG% 2>&1'}`,
+    winAiNote(ai),
+    winAiLine(ai, bin, runArgs(ai, pick, pinned), prompt, EXTRA_KILL_MIN),
     `echo ${AIS[ai].name} exited with code %ERRORLEVEL% >> %LOG%`,
     'echo. >> %LOG%',
     'echo Run ended %DATE% %TIME% >> %LOG%',
@@ -853,8 +985,8 @@ async function tickExtra(): Promise<void> {
       return;
     }
     // Windows: through Task Scheduler, like the scheduled runs, as a task of its own with no times (it only ever runs
-    // when started here). Windows stops it at the limit.
-    if (!(await startOnDemand(extraTaskName(), file, EXTRA_KILL_MIN, 'Krypt Marketo: a short extra run for posts still owed today, started by the hub between the scheduled runs. Set on the Autopilot page.'))) deps.log('autopilot: Windows did not start the extra run');
+    // when started here). The script stops the AI at EXTRA_KILL_MIN itself; Windows' limit is the backstop a little later.
+    if (!(await startOnDemand(extraTaskName(), file, EXTRA_KILL_MIN + 5, 'Krypt Marketo: a short extra run for posts still owed today, started by the hub between the scheduled runs. Set on the Autopilot page.'))) deps.log('autopilot: Windows did not start the extra run');
   } catch (e) {
     deps.log(`autopilot: could not start an extra run: ${(e as Error).message}`);
   }
@@ -920,16 +1052,96 @@ export const setExtraRuns = (n: number): Promise<AutopilotStatus> =>
     return status();
   });
 
+/**
+ * A run's report counts as going this long after it started. Each AI is stopped at LIMIT_MIN (run.sh, and run.cmd's
+ * watchdog), so this is that plus a few minutes for the stop to land in the report.
+ */
+const LIVE_MIN = LIMIT_MIN + 5;
+
+type RunOutput = ReturnType<typeof readRunOutput>;
+
+/**
+ * Claude Code's stream-json (one event a line): its result line when the run finished. A run that was stopped has
+ * none: its last words and the tokens its messages used stand in for it. Anything else is read as it is.
+ */
+function runOutput(raw: string): RunOutput {
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length < 2) return readRunOutput(raw);
+  let events = 0;
+  type Usage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+  let result = '';
+  let last = '';
+  const loose: string[] = [];
+  // One message can come as several events (one per part), each with the message's usage so far: the last one counts.
+  const msgs = new Map<string, { model: string; usage: Usage }>();
+  type Event = { type?: unknown; message?: { id?: unknown; model?: unknown; usage?: Usage; content?: unknown } };
+  const parse = (line: string): Event | null => {
+    try {
+      const v = JSON.parse(line) as unknown;
+      return v && typeof v === 'object' && !Array.isArray(v) ? (v as Event) : null;
+    } catch {
+      return null;
+    }
+  };
+  for (const line of lines) {
+    const o = parse(line);
+    if (!o || typeof o.type !== 'string') {
+      loose.push(line);
+      continue;
+    }
+    events++;
+    if (o.type === 'result') result = line;
+    else if (o.type === 'assistant' && o.message && typeof o.message === 'object') {
+      const m = o.message;
+      if (m.usage && typeof m.usage === 'object') msgs.set(typeof m.id === 'string' ? m.id : `#${msgs.size}`, { model: typeof m.model === 'string' ? m.model : 'unknown', usage: m.usage });
+      const said = (Array.isArray(m.content) ? (m.content as unknown[]) : [])
+        .filter((b): b is { type: 'text'; text: string } => !!b && typeof b === 'object' && (b as { type?: unknown }).type === 'text' && typeof (b as { text?: unknown }).text === 'string')
+        .map((b) => b.text)
+        .join('\n')
+        .trim();
+      if (said) last = said;
+    }
+  }
+  if (!events) return readRunOutput(raw);
+  if (result) return readRunOutput([...loose, result].join('\n'));
+  const modelUsage: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }> = {};
+  for (const { model, usage: u } of msgs.values()) {
+    const t = (modelUsage[model] ??= { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 });
+    t.inputTokens += u.input_tokens ?? 0;
+    t.outputTokens += u.output_tokens ?? 0;
+    t.cacheReadInputTokens += u.cache_read_input_tokens ?? 0;
+    t.cacheCreationInputTokens += u.cache_creation_input_tokens ?? 0;
+  }
+  const text = [...loose, 'The run was stopped before it wrote its report. Its last message:', last || '(none)'].join('\n');
+  return readRunOutput(JSON.stringify({ type: 'result', result: text, modelUsage, num_turns: msgs.size }));
+}
+
+/** What each finished run's answer file says, by file, size and time (a stream-json file can be large: read once). */
+const outputs = new Map<string, { stamp: string; out: RunOutput }>();
+
+function sideOutput(side: string): RunOutput {
+  const st = fs.statSync(side);
+  const stamp = `${st.size}:${st.mtimeMs}`;
+  const had = outputs.get(side);
+  if (had?.stamp === stamp) return had.out;
+  const out = runOutput(fs.readFileSync(side, 'utf8'));
+  if (outputs.size > 40) outputs.delete(outputs.keys().next().value!);
+  outputs.set(side, { stamp, out });
+  return out;
+}
+
 function reportOf(file: string): AutopilotReport {
   const full = path.join(logsDir(), file);
   const log = fs.readFileSync(full, 'utf8');
   const st = fs.statSync(full);
   const ended = /^Run ended/m.test(log);
-  // An app that answers in JSON left its answer (and the tokens it used) in a file beside the report.
-  let out: ReturnType<typeof readRunOutput> = { text: '', warnings: [] };
+  const running = !ended && Date.now() - st.mtimeMs < LIVE_MIN * 60_000;
+  // An app that answers in JSON left its answer (and the tokens it used) in a file beside the report. Read once the
+  // run is over: while it runs the file is only growing.
+  let out: RunOutput = { text: '', warnings: [] };
   try {
     const side = full.replace(/\.txt$/, '.json');
-    if (fs.existsSync(side)) out = readRunOutput(fs.readFileSync(side, 'utf8'));
+    if (!running && fs.existsSync(side)) out = sideOutput(side);
   } catch {
     /* unreadable: the report is what the log says */
   }
@@ -946,11 +1158,12 @@ function reportOf(file: string): AutopilotReport {
     profile: profiles.count() > 1 ? profiles.list().find((p) => p.id === profileId)?.name ?? 'a deleted profile' : undefined,
     file: full,
     at: m ? `${m[1]}T${m[2]}:${m[3]}` : st.mtime.toISOString(),
-    running: !ended && Date.now() - st.mtimeMs < LIMIT_MIN * 60_000,
+    running,
     ended,
     needs: lines.filter((l) => /NEEDS YOU/i.test(l)).map((l) => l.replace(/^[\s\-*•]+/, '').trim()).slice(0, 12),
-    warnings: lines.filter((l) => /^(warning|error)\b|sign-in ends|please run \/login|invalid api key|not logged in|authentication|exited with code [1-9]/i.test(l.trim())).map((l) => l.trim()).slice(0, 6),
-    text: text.length > 20_000 ? `${text.slice(0, 20_000)}\n…` : text,
+    warnings: lines.filter((l) => /^(warning|error)\b|sign-in ends|please run \/login|invalid api key|not logged in|authentication|exited with code [1-9]|stopped at its \d+-minute limit|could not be started/i.test(l.trim())).map((l) => l.trim()).slice(0, 6),
+    // The end of a long log is the report (an app that is not JSON prints its final answer last).
+    text: text.length > 20_000 ? `…\n${text.slice(-20_000)}` : text,
     ...(isExtraReport(file) ? { extra: true } : {}),
     usage: out.usage ? { key: file, at: m ? `${m[1]}T${m[2]}:${m[3]}` : st.mtime.toISOString().slice(0, 16), kind: 'run', profileId, ...out.usage } : undefined,
   };
@@ -974,7 +1187,7 @@ function reports(n = 8): AutopilotReport[] {
  */
 function liveReports(): AutopilotReport[] {
   if (!fs.existsSync(logsDir())) return [];
-  const since = Date.now() - LIMIT_MIN * 60_000;
+  const since = Date.now() - LIVE_MIN * 60_000;
   // Names carry the start date (local time): only the last two days can still be written to.
   const day = (d: number): string => new Date(d).toISOString().slice(0, 10);
   const oldest = `run-${day(Date.now() - 2 * 86_400_000)}`;
@@ -999,7 +1212,7 @@ export function pruneReports(days: number): number {
   const before = Date.now() - days * 86_400_000;
   let n = 0;
   for (const f of fs.readdirSync(logsDir())) {
-    if (!/^run-.*\.(txt|json)$/.test(f)) continue;
+    if (!/^run-.*\.(txt|json|txt\.err|txt\.out)$/.test(f)) continue;
     const full = path.join(logsDir(), f);
     try {
       if (fs.statSync(full).mtimeMs < before) {
@@ -1115,8 +1328,8 @@ async function rerollIfStale(): Promise<void> {
     // With each profile in its own window, the AI's start lines are in the per-profile scripts (run-part-<id>.cmd).
     const parts = fs.readdirSync(dir()).filter((f) => /^run-part-[a-z0-9_]+\.cmd$/.test(f));
     const text = [fs.readFileSync(scriptFile(), 'utf8'), ...parts.map((f) => fs.readFileSync(path.join(dir(), f), 'utf8'))].join('\n');
-    // run.sh has each word in single quotes; run.cmd has them bare (none has a space).
-    const sig = MAC ? AIS[s.ai].args.map(shq).join(' ') : AIS[s.ai].args.join(' ');
+    // run.sh has each word in single quotes; run.cmd starts the AI encoded, with a plain note of it above.
+    const sig = MAC ? AIS[s.ai].args.map(shq).join(' ') : winAiNote(s.ai);
     old = !!AIS[s.ai].json && !isRunning() && !scheduledFlags().length && !text.includes(sig);
   } catch {
     /* no script yet: turning autopilot on writes it */
@@ -1133,6 +1346,11 @@ async function rerollIfStale(): Promise<void> {
   }
 }
 
+type TaskInfo = { registered: boolean; nextRun?: string; lastRun?: string; lastResult?: number; state?: string };
+/** The scheduled task's state as last asked (status() is polled every 15-60 s all day). */
+let taskSeen: { at: number; task: TaskInfo } | null = null;
+const TASK_MS = 60_000;
+
 export async function status(): Promise<AutopilotStatus> {
   await rerollIfStale();
   const s = settings();
@@ -1143,8 +1361,10 @@ export async function status(): Promise<AutopilotStatus> {
       return { id, name: AIS[id].name, found: !!p, path: p ?? undefined, client: AIS[id].client, note: AIS[id].note };
     }),
   );
-  let task: { registered: boolean; nextRun?: string; lastRun?: string; lastResult?: number; state?: string } = { registered: false };
-  if (MAC) task = await macTask(s.pickedOn === todayStr() && s.picked?.length ? s.picked : s.times);
+  let task: TaskInfo = { registered: false };
+  // The task's state is asked of Windows (a PowerShell) or launchd at most once a minute, and again after any change.
+  if (taskSeen && Date.now() - taskSeen.at < TASK_MS) task = taskSeen.task;
+  else if (MAC) task = await macTask(s.pickedOn === todayStr() && s.picked?.length ? s.picked : s.times);
   else if (supported) {
     const r = await powershell(
       `$t = Get-ScheduledTask -TaskName ${psQuote(taskName())} -ErrorAction SilentlyContinue; if ($t) { $i = $t | Get-ScheduledTaskInfo; [pscustomobject]@{ state = "$($t.State)"; next = if ($i.NextRunTime) { $i.NextRunTime.ToString('o') } else { '' }; last = if ($i.LastRunTime -and $i.LastRunTime.Year -gt 2000) { $i.LastRunTime.ToString('o') } else { '' }; result = $i.LastTaskResult } | ConvertTo-Json -Compress } else { '{}' }`,
@@ -1156,6 +1376,7 @@ export async function status(): Promise<AutopilotStatus> {
       /* leave it unregistered */
     }
   }
+  if (task !== taskSeen?.task) taskSeen = { at: Date.now(), task };
   const rs = reports();
   // Every finished run goes into the usage ledger once.
   for (const r of rs) if (r.ended && r.usage) usage.addRun({ ...r.usage, ...(s.saver && AIS[s.ai].saverEnv ? { saver: true } : {}), ...(s.tier ? { tier: s.tier } : {}) });

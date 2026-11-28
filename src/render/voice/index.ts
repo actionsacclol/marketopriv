@@ -5,6 +5,7 @@ import { cleanTune, clipKey, isEleven, readVoiceCache, voiceName, type VoiceCach
 import { lexiconFor, spokenText } from '@shared/pronounce';
 import { mediaUrl } from '../media';
 import { scheduleSfx } from './sfx';
+import { scheduleRoomTone, scheduleSamples } from './samples';
 import { BED_STYLES, duckGain, renderBed, seedOf, type BedStyle } from './bed';
 
 // Soundtrack for story reels: each beat's line is spoken by Kokoro-82M (the
@@ -390,7 +391,13 @@ async function build(reel: Reel, onStatus?: (s: string) => void, final = false):
     gain.gain.value = num(fields, 'voice_volume', 1);
     gain.connect(ctx.destination);
     const beats = storyBeats(fields);
-    if (fields.sfx === true) scheduleSfx(ctx, ctx.destination, storySfx(beats), num(fields, 'sfx_volume', 0.5) * 0.9);
+    if (fields.sfx === true) {
+      const events = storySfx(beats, fields);
+      const vol = num(fields, 'sfx_volume', 0.5) * 0.9;
+      scheduleSfx(ctx, ctx.destination, events, vol);
+      await scheduleSamples(ctx, ctx.destination, events, vol, reel.id);
+      for (const e of events) if (e.kind === 'roomtone') scheduleRoomTone(ctx, ctx.destination, e.t, e.dur ?? 2, vol * (e.gain ?? 1));
+    }
     const style = fields.bed as BedStyle;
     if (BED_STYLES.includes(style)) {
       const speech: Array<[number, number]> = [];
@@ -399,7 +406,7 @@ async function build(reel: Reel, onStatus?: (s: string) => void, final = false):
         if (c && fields.voiceover === true) speech.push([b.start + b.voStart, b.start + b.voStart + c.dur]);
       }
       const bed = ctx.createBufferSource();
-      bed.buffer = await renderBed(style, total, seedOf(reel.id), MIX_RATE);
+      bed.buffer = await renderBed(style, total, seedOf(reel.id), MIX_RATE, num(fields, 'bpm', 0));
       bed.connect(duckGain(ctx, num(fields, 'bed_volume', 0.6), speech)).connect(ctx.destination);
       bed.start(0);
     }

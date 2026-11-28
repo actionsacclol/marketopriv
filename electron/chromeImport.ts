@@ -13,6 +13,7 @@ import * as chromeBridge from './chromeBridge';
 import * as instance from './instance';
 import * as profiles from './profiles';
 import * as store from './store';
+import { readText, writeAtomic } from './safeFile';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const NETS: Network[] = ['x', 'tiktok', 'threads', 'pinterest'];
@@ -58,8 +59,7 @@ function build(dir: string, chromeName: string, sites: ProfileScan['sites'], fre
 
 /** The saved data of a profile that is not open here. */
 function readDb(file: string): { igAccounts?: IgAccount[]; settings?: { handle?: string }; brand?: { niche?: string } } & Record<string, unknown> {
-  const text = fs.readFileSync(file, 'utf8');
-  return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+  return JSON.parse(readText(file));
 }
 
 /**
@@ -87,14 +87,20 @@ export async function addAccounts(dir: string, fresh: boolean): Promise<ChromeIm
     await sleep(1500);
   }
   const scan: ProfileScan = FAKE_SCAN ? { sites: fakeSites(dir) } : await browser.scanChromeProfile(dir, p.id);
-  const niche = p.active ? store.get().brand.niche : (readDb(file).brand?.niche ?? '');
+  // Opening Chrome and reading it took a while: where that profile's data is now decides where the account goes (an
+  // instance of it may have started, or another profile been opened here, since the start).
+  const openHere = path.resolve(store.dbPath()) === path.resolve(file);
+  if (!openHere && instance.MULTI && profiles.list().find((x) => x.id === p.id)?.running) return { ...base, note: `"${p.name}" opened in its own window meanwhile: add its account there.` };
+  const niche = openHere ? store.get().brand.niche : (readDb(file).brand?.niche ?? '');
   const made = build(dir, chromeRow.name, scan.sites, fresh, niche ?? '');
   const unread = (['instagram'] as Site[]).filter((s) => scan.sites[s]?.signedIn && !scan.sites[s]?.handle).map((s) => `${label(s)} is signed in but its name could not be read (add it on the Accounts page)`);
   if (!made) return { ...base, note: unread[0] ?? 'Not signed in to any platform there yet. Sign in, then try again.' };
 
   let handle: string;
-  if (p.active) handle = store.saveAccount(made.input).handle;
-  else {
+  if (openHere) {
+    if (store.get().igAccounts.length) return { ...base, note: 'It already has an account.' };
+    handle = store.saveAccount(made.input).handle;
+  } else {
     // The profile is not open anywhere: its account goes straight into its saved data.
     const t = new Date().toISOString();
     handle = normalizeHandle(made.input.handle!);
@@ -104,9 +110,7 @@ export async function addAccounts(dir: string, fresh: boolean): Promise<ChromeIm
     if ((db.igAccounts ?? []).length) return { ...base, note: 'It already has an account.' };
     db.igAccounts = [acct];
     db.settings = { ...(db.settings ?? {}), handle };
-    const tmp = `${file}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, JSON.stringify(db, null, 2), 'utf8');
-    fs.renameSync(tmp, file);
+    writeAtomic(file, JSON.stringify(db, null, 2));
   }
   const fb = scan.sites.facebook?.signedIn ? 'Facebook is signed in too: pick its Page on the Accounts page.' : '';
   return { ...base, added: handle, sites: made.on.map(label), ...(unread.length || fb ? { note: [...unread, fb].filter(Boolean).join(' ') } : {}) };

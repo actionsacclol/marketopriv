@@ -112,7 +112,18 @@ export function initStore(): () => void {
   void api.agent.state().then((chat) => useApp.setState({ chat }));
   void api.kip.state().then((kip) => useApp.setState({ kip }));
   void refreshAutopilot();
+  // Each read starts processes in the main process (the scheduled task, the AI apps): while the window is hidden
+  // (minimized, in the tray) one every 10 minutes is enough (the read also re-picks the day's run minutes, so it never
+  // stops), and one as soon as it shows again.
+  const onVisible = (): void => {
+    if (!document.hidden) void refreshAutopilot();
+  };
+  document.addEventListener('visibilitychange', onVisible);
   const apTimer = window.setInterval(() => {
+    if (document.hidden) {
+      if (Date.now() - lastAutopilotRead >= HIDDEN_POLL_MS) void refreshAutopilot();
+      return;
+    }
     const ap = useApp.getState().autopilot;
     const soon = !!ap && (ap.running || (!!ap.task.nextRun && Math.abs(Date.parse(ap.task.nextRun) - Date.now()) < 5 * 60_000));
     if (soon || Date.now() % 60_000 < 15_000) void refreshAutopilot();
@@ -135,12 +146,18 @@ export function initStore(): () => void {
   ];
   return () => {
     window.clearInterval(apTimer);
+    document.removeEventListener('visibilitychange', onVisible);
     offs.forEach((o) => o());
   };
 }
 
+/** When the autopilot's state was last asked for, and how often while the window is hidden. */
+let lastAutopilotRead = 0;
+const HIDDEN_POLL_MS = 10 * 60_000;
+
 /** Read the autopilot's state (scheduled task, reports) into the store. */
 export async function refreshAutopilot(): Promise<AutopilotStatus | null> {
+  lastAutopilotRead = Date.now();
   try {
     const autopilot = await window.marketo.autopilot.status();
     useApp.setState({ autopilot });
@@ -157,9 +174,43 @@ export const cancelCurrentRender = (): void => {
   cancelRender = true;
 };
 
-/** Render a reel to MP4 and save it. One at a time; the UI and the agent share this. */
-export async function renderReel(reel: Reel, onProgress?: (ratio: number, phase: string) => void, shape: RenderShape = 'vertical'): Promise<{ path: string; seconds: number; bytes: number }> {
-  if (useApp.getState().job) throw new Error('A render is already running. Wait for it to finish.');
+type RenderResult = { path: string; seconds: number; bytes: number };
+type RenderProgress = (ratio: number, phase: string) => void;
+/** The render going now: the same one asked for again waits for it instead of being refused. */
+let current: { key: string; done: Promise<RenderResult>; listeners: Set<RenderProgress> } | null = null;
+const renderKey = (reel: Reel, shape: RenderShape): string => JSON.stringify([reel.id, shape, reel.updatedAt, reel.fields]);
+
+/**
+ * Render a reel to MP4 and save it. One at a time; the UI and the agent share this. The same reel, unchanged, asked for
+ * again while it renders (an AI app whose call timed out tries again) waits for that render and gets its file.
+ */
+export async function renderReel(reel: Reel, onProgress?: RenderProgress, shape: RenderShape = 'vertical'): Promise<RenderResult> {
+  const job = useApp.getState().job;
+  if (current && current.key === renderKey(reel, shape)) {
+    const same = current;
+    if (onProgress) same.listeners.add(onProgress);
+    try {
+      return await same.done;
+    } finally {
+      if (onProgress) same.listeners.delete(onProgress);
+    }
+  }
+  if (job) {
+    const title = reelById(job.reelId)?.title;
+    throw new Error(`A render is already running${title ? ` ("${title}", ${Math.round(job.ratio * 100)}%, ${job.phase})` : ''}. Wait for it to finish.`);
+  }
+  const listeners = new Set<RenderProgress>(onProgress ? [onProgress] : []);
+  const done = renderNow(reel, (ratio, phase) => listeners.forEach((f) => f(ratio, phase)), shape);
+  const mine = { key: renderKey(reel, shape), done, listeners };
+  current = mine;
+  try {
+    return await done;
+  } finally {
+    if (current === mine) current = null;
+  }
+}
+
+async function renderNow(reel: Reel, onProgress: RenderProgress, shape: RenderShape): Promise<RenderResult> {
   cancelRender = false;
   const fps = useApp.getState().db?.settings.fps ?? 30;
   useApp.setState({ job: { reelId: reel.id, ratio: 0, phase: 'starting' } });

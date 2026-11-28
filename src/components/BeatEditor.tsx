@@ -4,6 +4,16 @@ import { SLIDE_FLAG, parseFx } from '@shared/presets';
 import { STICK_FLAG, STICK_POSES } from '@shared/stickman';
 import { DUO_FLAG } from '@shared/duo';
 import { BLOX_FLAG, BLOX_MOVES } from '@shared/blox';
+import { MORPH_FLAG, MORPH_STATES } from '@shared/morph';
+import { LECTURE_FLAG } from '@shared/lecture';
+import { SPACE_FLAG } from '@shared/space';
+import { CUT_FLAG, CUT_ITEMS } from '@shared/cutaway';
+import { DIO_ACTIONS, DIO_FLAG, DIO_PIECES, DIO_UNDER } from '@shared/diorama';
+import { PS2_FLAG, PS2_MOVES } from '@shared/ps2';
+import { INK_FLAG, INK_MOVES } from '@shared/ink';
+import { TV_FLAG, TV_MOVES } from '@shared/tv';
+import { HOSE_FLAG, HOSE_MOVES } from '@shared/hose';
+import { PIXEL_FLAG, PIXEL_MOVES } from '@shared/pixel';
 import { cls } from '../lib/format';
 
 // Story beats as cards: one card per beat instead of the raw
@@ -82,12 +92,51 @@ const DUO_VISUALS: Visual[] = [
   ...VISUALS.filter((v) => !['none', 'cta', 'tier', 'chat', 'crosshair', 'radar', 'wallets'].includes(v.id)),
   { id: 'end', name: 'Closing card', a: 'Next step', b: 'Small line', aHint: 'Follow for *part two*' },
 ];
-const visualsFor = (preset: string): Visual[] => (preset === 'duo' ? DUO_VISUALS : preset === 'narrated' ? NARRATED_VISUALS : preset === 'meme' ? MEME_VISUALS : preset === 'stickman' ? STICK_VISUALS : preset === 'blox' ? BLOX_VISUALS : preset === 'slides' ? SLIDE_VISUALS : VISUALS);
+/** UI motion: the state the shape morphs into, and its text. */
+const MORPH_VISUALS: Visual[] = MORPH_STATES.map((s) => ({ id: s, name: s, a: 'Text', b: 'Second line', aHint: s === 'slider' || s === 'progress' ? '72' : 'Get started' }));
+/** Lecture lines: the card that lands on the board on the at= word (keep, a diagram, or the closing card). */
+const LECTURE_VISUALS: Visual[] = [
+  { id: 'none', name: 'Keep the board as it is', a: '', b: '' },
+  ...VISUALS.filter((v) => !['none', 'cta', 'tier', 'chat', 'crosshair', 'radar', 'wallets'].includes(v.id)),
+  { id: 'screen', name: 'Screen recording', a: 'Start second', b: 'Line under it', aHint: '12.5' },
+  { id: 'end', name: 'Closing card', a: 'Next step', b: 'Small line', aHint: 'Follow for *one fix a day*' },
+];
+/** Space what-if scenes. */
+const SPACE_VISUALS: Visual[] = [
+  { id: 'title', name: 'Question', a: 'The question', b: 'Small line', aHint: 'What if the Sun *vanished*?' },
+  { id: 'earth', name: 'Earth', a: 'Look', b: 'Label', aHint: 'normal, dark, ice or hot' },
+  { id: 'sun', name: 'Sun', a: 'Look', b: 'Label', aHint: 'normal, gone or giant' },
+  { id: 'moon', name: 'Moon', a: '', b: 'Label' },
+  { id: 'planet', name: 'Planet', a: 'Which', b: 'Label', aHint: 'mars, jupiter, saturn...' },
+  { id: 'orbit', name: 'Orbit', a: 'gone = the Sun vanishes', b: 'Label' },
+  { id: 'impact', name: 'Asteroid impact', a: 'Rock label', b: '', aHint: '10 km' },
+  { id: 'blackhole', name: 'Black hole', a: 'Label', b: '' },
+  { id: 'compare', name: 'Sizes side by side', a: 'Bodies', b: 'Line under them', aHint: 'earth;jupiter' },
+  { id: 'number', name: 'Number counting up', a: 'Number', b: 'Label', aHint: '-18°C' },
+  { id: 'clock', name: 'Timer', a: 'From', b: 'To', aHint: '0:00', bHint: '8:20' },
+  { id: 'surface', name: 'Astronaut on the ground', a: 'Where', b: '', aHint: 'day, night, ice or mars' },
+  { id: 'astronaut', name: 'Astronaut', a: 'Move', b: '', aHint: 'wave, point, shock or float' },
+];
+/** Backyard cutaway builds. */
+const CUT_VISUALS: Visual[] = [
+  ...CUT_ITEMS.map((s) => ({ id: s, name: s, a: 'Tag', b: 'Cost', aHint: 'Bunker', bHint: '$80,000' })),
+  { id: 'none', name: 'No new build', a: '', b: '' },
+];
+/** PS2 cutscene: what the speaker does, the label over the shot and the props. */
+const PS2_VISUALS: Visual[] = PS2_MOVES.map((m) => ({ id: m, name: m, a: 'Top label', b: 'Props', aHint: '2:14 AM', bHint: 'cup;B:phone' }));
+/** Ink cartoon: what the cast does, the label over the shot and the props. */
+const INK_VISUALS: Visual[] = INK_MOVES.map((m) => ({ id: m, name: m, a: 'Top label', b: 'Props', aHint: '2013', bHint: 'drive;B:cash' }));
+const PIXEL_VISUALS: Visual[] = PIXEL_MOVES.map((m) => ({ id: m, name: m, a: 'Top label', b: 'Props', aHint: 'DAY 1', bHint: 'coin;B:phone' }));
+const HOSE_VISUALS: Visual[] = HOSE_MOVES.map((m) => ({ id: m, name: m, a: 'Top label', b: 'Props', aHint: '1925', bHint: 'bag;B:letter' }));
+const TV_VISUALS: Visual[] = TV_MOVES.map((m) => ({ id: m, name: m, a: 'Top label', b: 'Props', aHint: 'NOV 2023', bHint: 'chart-;B:laptop' }));
+/** 3D diorama: pieces, underground builds and actions (join several with +). */
+const DIO_VISUALS: Visual[] = [...DIO_PIECES, ...DIO_UNDER, ...DIO_ACTIONS].map((s) => ({ id: s, name: s, a: 'Tag', b: 'Number', aHint: 'HQ', bHint: '300' }));
+const visualsFor = (preset: string): Visual[] => (preset === 'diorama' ? DIO_VISUALS : preset === 'tv' ? TV_VISUALS : preset === 'hose' ? HOSE_VISUALS : preset === 'pixel' ? PIXEL_VISUALS : preset === 'ink' ? INK_VISUALS : preset === 'ps2' ? PS2_VISUALS : preset === 'morph' ? MORPH_VISUALS : preset === 'lecture' ? LECTURE_VISUALS : preset === 'space' ? SPACE_VISUALS : preset === 'cutaway' ? CUT_VISUALS : preset === 'duo' ? DUO_VISUALS : preset === 'narrated' ? NARRATED_VISUALS : preset === 'meme' ? MEME_VISUALS : preset === 'stickman' ? STICK_VISUALS : preset === 'blox' ? BLOX_VISUALS : preset === 'slides' ? SLIDE_VISUALS : VISUALS);
 
 /** Flag tokens (spaces between them; commas too, except inside an effect's point like zoom=0.5,0.3). */
 const tokens = (s: string): string[] => s.split(/\s+/).flatMap((t) => (/=\d*\.?\d+,\d/.test(t) ? [t] : t.split(','))).filter(Boolean);
 const KNOWN = /^(?:light|dark|wipe|pause=[\d.]+|speed=[\d.]+|top|impact|over)$/i;
-const onlyFlags = (s: string): boolean => tokens(s).length > 0 && tokens(s).every((t) => KNOWN.test(t) || STICK_FLAG.test(t.toLowerCase()) || SLIDE_FLAG.test(t.toLowerCase()) || DUO_FLAG.test(t.toLowerCase()) || BLOX_FLAG.test(t.toLowerCase()) || !!parseFx(t));
+const onlyFlags = (s: string): boolean => tokens(s).length > 0 && tokens(s).every((t) => KNOWN.test(t) || STICK_FLAG.test(t.toLowerCase()) || SLIDE_FLAG.test(t.toLowerCase()) || DUO_FLAG.test(t.toLowerCase()) || BLOX_FLAG.test(t.toLowerCase()) || MORPH_FLAG.test(t.toLowerCase()) || LECTURE_FLAG.test(t.toLowerCase()) || SPACE_FLAG.test(t.toLowerCase()) || CUT_FLAG.test(t.toLowerCase()) || DIO_FLAG.test(t.toLowerCase()) || PS2_FLAG.test(t.toLowerCase()) || INK_FLAG.test(t.toLowerCase()) || TV_FLAG.test(t.toLowerCase()) || HOSE_FLAG.test(t.toLowerCase()) || PIXEL_FLAG.test(t.toLowerCase()) || !!parseFx(t));
 
 const clean = (v: string): string => v.replace(/\|/g, '/').replace(/\n/g, ' ');
 
@@ -130,14 +179,18 @@ function serialize(beats: Beat[]): string {
     .join('\n');
 }
 
-const blankFor = (preset: string): Beat => ({ secs: preset === 'story' ? '3' : preset === 'slides' ? '3.5' : '1', headline: preset === 'story' ? 'New beat' : preset === 'slides' ? 'New slide' : 'New line', visual: preset === 'narrated' || preset === 'duo' ? 'none' : preset === 'meme' ? 'image' : preset === 'stickman' || preset === 'blox' ? 'talk' : preset === 'slides' ? 'text' : 'title', a: '', b: '', say: '', theme: '', wipe: false, pause: '', speed: '', extra: '' });
+const blankFor = (preset: string): Beat => ({ secs: preset === 'story' ? '3' : preset === 'slides' ? '3.5' : '1', headline: preset === 'story' ? 'New beat' : preset === 'slides' ? 'New slide' : 'New line', visual: preset === 'narrated' || preset === 'duo' || preset === 'lecture' || preset === 'cutaway' || preset === 'diorama' ? 'none' : preset === 'morph' ? 'button' : preset === 'space' ? 'earth' : preset === 'meme' ? 'image' : preset === 'stickman' || preset === 'blox' || preset === 'ps2' || preset === 'ink' || preset === 'pixel' || preset === 'hose' || preset === 'tv' ? 'talk' : preset === 'slides' ? 'text' : 'title', a: '', b: '', say: '', theme: '', wipe: false, pause: '', speed: '', extra: '' });
 
 export function BeatEditor({ value, onChange, starts, onSeek, help, preset = 'story' }: { value: string; onChange: (v: string) => void; starts: number[]; onSeek: (t: number) => void; help?: string; preset?: string }) {
   const visuals = visualsFor(preset);
   const blox = preset === 'blox';
-  const stick = preset === 'stickman' || blox;
-  // Stickman poses and avatar moves are typed (two figures: "think/type"), so any text is kept as written.
-  const visualOf = (id: string): Visual => (stick ? { ...(blox ? BLOX_VISUALS : STICK_VISUALS)[0], id, name: id || 'idle' } : (visuals.find((v) => v.id === id) ?? visuals[visuals.length - 1]));
+  const ink = preset === 'ink';
+  const toon = preset === 'pixel' ? PIXEL_MOVES : preset === 'hose' ? HOSE_MOVES : preset === 'tv' ? TV_MOVES : null;
+  const ps2 = preset === 'ps2' || ink || !!toon;
+  const stick = preset === 'stickman' || blox || ps2;
+  const dio = preset === 'diorama';
+  // Stickman poses, avatar moves and cutscene moves are typed (two figures: "think/type"), so any text is kept as written.
+  const visualOf = (id: string): Visual => (dio ? { id, name: id || 'none', a: 'Tag', b: 'Number', aHint: 'HQ', bHint: '300' } : stick ? { ...(preset === 'pixel' ? PIXEL_VISUALS : preset === 'hose' ? HOSE_VISUALS : preset === 'tv' ? TV_VISUALS : ink ? INK_VISUALS : ps2 ? PS2_VISUALS : blox ? BLOX_VISUALS : STICK_VISUALS)[0], id, name: id || 'idle' } : (visuals.find((v) => v.id === id) ?? visuals[visuals.length - 1]));
   const BLANK = blankFor(preset);
   const [raw, setRaw] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
@@ -222,12 +275,12 @@ export function BeatEditor({ value, onChange, starts, onSeek, help, preset = 'st
                 </div>
                 <div className="grid grid-cols-[1fr_88px] gap-2">
                   <div>
-                    <label className="label">{blox ? 'Move (two avatars: sad/dance)' : stick ? 'Pose (two figures: think/type)' : 'Visual'}</label>
-                    {stick ? (
+                    <label className="label">{dio ? 'Things (shop+person*2, -car, mow)' : ink || toon ? 'Acting (one each: talk/smug)' : ps2 ? 'Move (one each: talk/cross)' : blox ? 'Move (two avatars: sad/dance)' : stick ? 'Pose (two figures: think/type)' : 'Visual'}</label>
+                    {stick || dio ? (
                       <>
                         <input className="input font-mono text-xs" list="stick-poses" value={b.visual} onChange={(e) => edit(i, { visual: e.target.value.toLowerCase() })} />
                         <datalist id="stick-poses">
-                          {(blox ? BLOX_MOVES : STICK_POSES).map((p) => (
+                          {(dio ? [...DIO_PIECES, ...DIO_UNDER, ...DIO_ACTIONS] : toon ?? (ink ? INK_MOVES : ps2 ? PS2_MOVES : blox ? BLOX_MOVES : STICK_POSES)).map((p) => (
                             <option key={p} value={p} />
                           ))}
                         </datalist>

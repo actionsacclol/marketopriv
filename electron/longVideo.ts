@@ -29,8 +29,20 @@ export interface NarrateResult {
   notes: string[];
 }
 
+/** Narrations going right now, by video id: a second call (an AI retrying after its own timeout) waits for the first instead of buying the sections again. */
+const inFlight = new Map<string, Promise<NarrateResult>>();
+
 /** Speak every section that has no audio yet (or all, with redo). Each section is one MP3: NN <heading>.mp3. */
 export async function narrate(id: string, redo = false): Promise<NarrateResult> {
+  const key = store.findLongVideo(id).id;
+  const going = inFlight.get(key);
+  if (going) return going;
+  const p = narrateNow(key, redo).finally(() => inFlight.delete(key));
+  inFlight.set(key, p);
+  return p;
+}
+
+async function narrateNow(id: string, redo: boolean): Promise<NarrateResult> {
   let v = store.findLongVideo(id);
   if (!v.sections.length) throw new Error('This video has no script yet: save_long_video with sections first.');
   const voice = voiceId();
@@ -43,6 +55,12 @@ export async function narrate(id: string, redo = false): Promise<NarrateResult> 
   for (let i = 0; i < sections.length; i++) {
     const s = sections[i];
     if (!redo && s.audio && fs.existsSync(s.audio) && s.spoken === s.text) continue;
+    // Bought meanwhile by another call (a Kip chat beside a run): keep that one.
+    const saved = store.findLongVideo(v.id).sections[i];
+    if (!redo && saved && saved.text === s.text && saved.audio && fs.existsSync(saved.audio) && saved.spoken === saved.text) {
+      sections[i] = saved;
+      continue;
+    }
     const r = await eleven.tts({ voice: voice.id, text: s.text, speed: voice.speed, prev: sections[i - 1]?.text, next: sections[i + 1]?.text });
     const file = path.join(dir, `${String(i + 1).padStart(2, '0')} ${safe(s.heading)}.mp3`);
     await fs.promises.writeFile(file, r.audio);

@@ -396,7 +396,8 @@ export function drawReel(ctx: Ctx, input: FrameInput): Timing {
   if (timing.cta > 0 && input.t >= timing.body + 0.2) endCard(ctx, env, input.t - timing.body - 0.2);
   // Slideshows write the disclaimer into their own footer, inside the part every picture shape keeps.
   // Duo reels: on the desk's front, under the two characters.
-  if (input.preset !== 'slides') disclaimer(ctx, env, input.preset === 'duo' ? 1672 : 1585);
+  // Lecture reels place their own (under the board, lower on the closing card).
+  if (input.preset !== 'slides' && input.preset !== 'lecture') disclaimer(ctx, env, input.preset === 'duo' ? 1672 : input.preset === 'pixel' ? 1884 : input.preset === 'hose' ? 1770 : input.preset === 'tv' ? 1700 : 1585);
   finish(ctx, env);
   // Over the vignette and grain, so the brand's banner shows as they made it.
   if (banner) drawBanner(ctx, banner);

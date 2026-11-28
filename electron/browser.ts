@@ -32,6 +32,7 @@ import { resolveYtChannel } from './ytChannel';
 import { NETWORKS, NETWORK_LABEL, isNetwork, linkOn, localDate, netOf, normalizeHandle, planFor, postGap, quotaKeys, quotaLabel, sameHandle, siteOn, watchOnlyOn, ytLimit, ytUploadsToday, type Quota } from '../shared/warmup';
 import { rewriteNote, textProblems, type TextKind } from '../shared/humanText';
 import { HUMAN_CHECK_HOURS, humanCheckUntil } from '../shared/humanCheck';
+import { lastPostClickAt } from '../shared/extraRuns';
 import { followsKrypt, kryptAccountsOn, isKryptOwn, isKryptPage, isSubscribeButton, isSubscribedButton, kryptFollowDue, kryptFollowLine, kryptKey, kryptRepostDue, kryptTarget, kryptVisitDue, kryptVisitOf, kryptVisitsLine, onKryptPost, showsFollowing, type KryptAccount } from '../shared/kryptFollow';
 import * as approvals from './approvals';
 import * as chrome from './chromeBridge';
@@ -102,8 +103,8 @@ const TH_POST_URL = /^https:\/\/(www\.)?threads\.(com|net)\/@[A-Za-z0-9._]+\/pos
 const PIN_HOME = 'https://www.pinterest.com/';
 const PIN_UPLOAD = 'https://www.pinterest.com/pin-creation-tool/';
 /** pinterest.com (with its country subdomains, uk.pinterest.com …) and its country domains. */
-const PIN_HOST = /(^|\.)pinterest\.(com|co\.uk|ca|com\.au|de|fr)$/i;
-const PIN_SIGN_IN_HOST = /(^|\.)(pinterest\.(com|co\.uk|ca|com\.au|de|fr)|google\.com|facebook\.com|apple\.com)$/i;
+const PIN_HOST = /(^|\.)pinterest\.(com|co\.uk|ca|com\.au|de|fr|es|it|jp|com\.mx|pt|at|ch|ie|nz|se|dk|cl|co\.kr|ph)$/i;
+const PIN_SIGN_IN_HOST = /(^|\.)(pinterest\.(com|co\.uk|ca|com\.au|de|fr|es|it|jp|com\.mx|pt|at|ch|ie|nz|se|dk|cl|co\.kr|ph)|google\.com|facebook\.com|apple\.com)$/i;
 const PIN_GATED_PATH = /^\/(login|signup|password|_\/_\/authentication|oauth)(\/|$)/i;
 const PIN_URL = /^https:\/\/([a-z]+\.)?pinterest\.[a-z.]+\/pin\/[A-Za-z0-9_-]+/i;
 const PIN_CREATE_PATH = /^\/(pin-creation-tool|pin-builder|idea-pin-builder)(\/|$)/i;
@@ -186,6 +187,8 @@ interface Tab {
   settleUntil?: number;
   /** The hub closed this tab (the entry stays so its pacing carries over when it opens again). */
   closed?: boolean;
+  /** When a tool last drove this tab (a profile scan leaves a tab in use alone). */
+  lastUse?: number;
   /** A navigation the guard stopped since the last tool result. */
   blocked: string | null;
   queue: Promise<unknown>;
@@ -449,12 +452,23 @@ function chromeSurface(conn: ChromeConn, site: BrowserSite): Surface {
 
 /** The extension reported something about a Chrome profile. */
 export function onChromeEvent(conn: ChromeConn, ev: ChromeEvent): void {
-  for (const [key, t] of tabs) {
+  for (const t of tabs.values()) {
     if (t.conn !== conn) continue;
     if (ev.type === 'blocked' && ev.site === t.site) t.blocked = ev.url;
-    if (ev.type === 'gone') tabs.delete(key);
+    // The entry stays (closed): its pacing and a post still going up carry over when the profile connects again (ensureTab).
+    if (ev.type === 'gone') t.closed = true;
   }
-  if (ev.type !== 'blocked') void broadcast();
+  if (ev.type !== 'blocked') broadcastSoon();
+}
+
+/** Tab events come in bursts (every page change): the hub window hears about them at most a few times a second. */
+let broadcastTimer: NodeJS.Timeout | null = null;
+function broadcastSoon(): void {
+  if (broadcastTimer) return;
+  broadcastTimer = setTimeout(() => {
+    broadcastTimer = null;
+    void broadcast();
+  }, 300);
 }
 
 const OUTDATED_EXT = 'The Krypt Marketo extension in that Chrome profile is an older version without this site (YouTube needs 0.2, X 0.3, TikTok 0.4, Facebook, Threads and Pinterest 0.5, Content Rewards 0.10). The user reloads it: chrome://extensions > Krypt Marketo > the reload arrow (or Load unpacked again from the folder the Accounts page shows). Then try again.';
@@ -467,8 +481,10 @@ async function chromeFor(a: IgAccount): Promise<ChromeConn> {
   try {
     return chrome.pick(a, store.get().igAccounts);
   } catch (e) {
-    if (!chrome.openFor(a)) throw e;
-    for (let i = 0; i < 30; i++) {
+    // Opened now, or already on its way (opened a moment ago, or the hub itself just started): wait for it to connect.
+    // A cold Chrome start on a slow or just-woken PC can take more than a minute.
+    if (!chrome.openFor(a) && !chrome.comingUp(a)) throw e;
+    for (let i = 0; i < 90; i++) {
       await sleep(1000);
       const c = chrome.match(a, store.get().igAccounts);
       if (c) return c;
@@ -591,12 +607,19 @@ async function ensureTab(a: IgAccount, site: BrowserSite, url?: string): Promise
   makeRoom(conn);
   // The profile's proxy first: nothing loads before it is in place and checked.
   await chromeProxyGate(a.handle, conn);
+  let carry: Partial<Tab> | null = null;
   if (tab && (!tab.s.alive() || tab.conn !== conn)) {
-    // The account moved to another Chrome profile.
+    // Chrome connected again (an extension reload, a Chrome restart, the pipe dropping after sleep), or the account moved
+    // to another Chrome profile: a new connection, but the pacing and a post still going up carry over.
+    const { lastCounted, streak, lastMove, lastPost, menuPost, settleUntil, lastUse } = tab;
+    carry = { lastCounted, streak, lastMove, lastPost, menuPost, settleUntil, lastUse };
     tabs.delete(keyOf(a.id, site));
     tab = undefined;
   }
   const t = tab ?? newTab(a, site, () => chromeSurface(conn, site), conn);
+  if (carry) Object.assign(t, carry);
+  if (url && (t.settleUntil ?? 0) > Date.now())
+    throw new Error(`A post is still going up in this ${SITES[site].label} tab: opening another page here now can lose it. browser_wait with site "${site}" and look again until the upload is gone.`);
   // Always through the extension's open: a tab the user (or browser_close) closed is opened again, and one that is still
   // there only comes to the front, on the page it is on (it never navigated without a url).
   await t.s.load(url);
@@ -647,8 +670,26 @@ export async function openForUser(accountId: string, url?: string, site?: Site):
   const s: Site = site ?? (found && found !== 'rewards' ? found : null) ?? 'instagram';
   if (url && !(SITES[s].host.test(hostOf(url)) && /^https:/i.test(url))) throw new Error(`Only ${SITES[s].domain} pages open here.`);
   if (!siteOn(a, s)) throw new Error(`${s === 'youtube' ? 'YouTube Shorts' : SITES[s].label} is not turned on for ${a.handle}. Edit the account to turn it on.`);
-  const tab = await ensureTab(a, s, url);
+  const tab = await openInTurn(a, s, url);
   await tab.s.reveal(true);
+}
+
+/**
+ * ensureTab in the tab's turn: a page is never loaded under an action still going on in that tab (a caption being
+ * typed, a Post click waiting for its upload), and two opens of one tab never race each other. YouTube also waits for
+ * the Chrome profile's shared YouTube tab.
+ */
+function openInTurn(a: IgAccount, site: BrowserSite, url?: string): Promise<Tab> {
+  const prev = tabOf(a.id, site);
+  const go = (): Promise<Tab> => {
+    const now = tabOf(a.id, site);
+    if (url && now && (now.settleUntil ?? 0) > Date.now())
+      return Promise.reject(new Error(`A post is still going up in this ${SITES[site].label} tab: opening another page here now can lose it. browser_wait with site "${site}" and look again until the upload is gone.`));
+    return ensureTab(a, site, url);
+  };
+  const inTab = (): Promise<Tab> => (prev ? serial(prev, go) : go());
+  const turn = (): Promise<Tab> => serialOn(`open|${keyOf(a.id, site)}`, inTab);
+  return site === 'youtube' && prev?.conn ? serialOn(`yt|${prev.conn.id}`, turn) : turn();
 }
 
 export function closeTab(accountId: string, site?: BrowserSite): void {
@@ -790,7 +831,7 @@ function humanCheckHold(a: IgAccount, site: BrowserSite): string | null {
 /** When this account last posted on the platform (a Post click not yet confirmed counts too). */
 function lastPostAt(a: IgAccount, site: Site): number {
   const d = store.get();
-  let last = postClicks.get(`${a.id}|${site}`) ?? 0;
+  let last = Math.max(postClicks.get(`${a.id}|${site}`) ?? 0, site === 'youtube' ? 0 : lastPostClickAt(d.sessions, a, site));
   for (const r of d.reels) {
     const at = linkOn(r, site)?.at;
     if (at && (!r.postedBy || sameHandle(r.postedBy, a.handle))) last = Math.max(last, Date.parse(at) || 0);
@@ -1256,13 +1297,36 @@ function classifyPin(t: Target): Verdict {
 const verdictOn = (site: BrowserSite, x: Target, a: IgAccount): Verdict =>
   site === 'youtube' ? classifyYt(x, a) : site === 'x' ? classifyX(x) : site === 'tiktok' ? classifyTt(x) : site === 'facebook' ? classifyFb(x) : site === 'threads' ? classifyTh(x) : site === 'pinterest' ? classifyPin(x) : classify(x);
 
-/** Enter in a filled text box submits it. */
-function classifyEnter(f: Focus): Verdict {
+/** Boxes where Enter only starts a new line: captions, descriptions, titles and new-post composers (X's "Post text" too: Enter never sends there). */
+const COMPOSER_BOX = /caption|post text|what.s happening|add another post|on your mind|start a thread|new thread|compose|description|describe|tell (everyone|viewers)|title|write something|create (a )?(post|pin|reel)/i;
+/** Pages and dialogs that are a new post being made, whatever the box is called there. */
+const composerPage = (site: BrowserSite, url: string, dialog: string): boolean =>
+  (site === 'facebook' && isFbComposer(url)) ||
+  (site === 'tiktok' && TT_STUDIO_PATH.test(pathOf(url))) ||
+  (site === 'pinterest' && PIN_CREATE_PATH.test(pathOf(url))) ||
+  (site === 'x' && /^\/compose\//i.test(pathOf(url))) ||
+  /create|new post|new reel|edit info|create pin/i.test(dialog);
+/** A chat page or window: a text box there sends a direct message. */
+const chatPlace = (url: string, dialog: string): boolean => /^\/(direct|messages?|inbox)(\/|$)/i.test(pathOf(url)) || /chat|messenger|conversation/i.test(dialog);
+
+/**
+ * Enter in a filled text box submits it. A box whose name says what it is goes by its name; on the social sites a
+ * multi-line box nothing names (another UI language, a renamed box) counts as a comment, or a message on a chat page:
+ * the limits, the per-thread cap and the text check apply to it rather than letting it through as free text.
+ */
+function classifyEnter(f: Focus, site: BrowserSite): Verdict {
   if (!f.editable || f.search || !f.value) return { kind: 'free' };
   const name = f.name ?? '';
+  const url = f.url ?? '';
+  const dialog = f.dialog ?? '';
   if (/comment|reply/i.test(name)) return { kind: 'comment', action: `Post this comment${f.creator ? ` on ${f.creator}'s post` : ''}`, text: f.value };
   if (/message/i.test(name)) return { kind: 'message', action: 'Send this as a direct message', text: f.value };
-  if (/caption/i.test(name) || f.multiline) return { kind: 'free' };
+  if (COMPOSER_BOX.test(name) || (f.multiline && composerPage(site, url, dialog))) return { kind: 'free' };
+  if (f.multiline && site !== 'youtube' && site !== 'rewards') {
+    if (chatPlace(url, dialog)) return { kind: 'message', action: `Send this as a direct message (a text box Marketo could not name${name ? `: "${name}"` : ''})`, text: f.value };
+    return { kind: 'comment', action: `Post this comment${f.creator ? ` on ${f.creator}'s post` : ''} (a text box Marketo could not name${name ? `: "${name}"` : ''})`, text: f.value };
+  }
+  if (f.multiline) return { kind: 'free' };
   return { kind: 'other', action: `Submit "${name || 'this text'}"`, text: f.value };
 }
 
@@ -1377,7 +1441,8 @@ function checkGap(a: IgAccount, site: Site): void {
     if (at && (!r.postedBy || sameHandle(r.postedBy, a.handle))) confirmed.push(Date.parse(at));
   }
   for (const p of d.posts) if (p.site === site && p.postedAt && sameHandle(p.handle, a.handle)) confirmed.push(Date.parse(p.postedAt));
-  const clicks = [postClicks.get(`${a.id}|${site}`) ?? 0, ...(site === 'youtube' ? (a.youtube?.uploads ?? []).map((u) => Date.parse(u)) : [])];
+  // Post clicks the hub recorded (kept in the sessions, so a restart does not forget them) count like posts.
+  const clicks = [postClicks.get(`${a.id}|${site}`) ?? 0, ...(site === 'youtube' ? (a.youtube?.uploads ?? []).map((u) => Date.parse(u)) : [lastPostClickAt(d.sessions, a, site)])];
   const lastConfirmed = Math.max(0, ...confirmed.filter((n) => Number.isFinite(n) && n <= Date.now() + 60_000));
   const lastClick = Math.max(0, ...clicks.filter(Number.isFinite));
   const mins = (t: number): number => Math.floor((Date.now() - t) / 60_000);
@@ -1386,11 +1451,12 @@ function checkGap(a: IgAccount, site: Site): void {
   const clock = (t: number): string => new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   if (lastConfirmed && mins(lastConfirmed) < gap)
     throw new Error(`${a.handle} posted on ${SITES[site].label} ${mins(lastConfirmed)} min ago (${clock(lastConfirmed)}). Posts there are spaced at least ${gap} min apart so they don't land back to back: the next one can go after ${clock(lastConfirmed + gap * 60_000)}. Close the composer without posting. ${userSets('The spacing')}`);
-  // A click that is not in the post log yet: wait before posting again, so a slow upload is not posted twice.
-  // With a short spacing of the user's own the wait shrinks with it (never under 2 minutes), and a click that has since been confirmed does not count.
-  const unconfirmed = Math.max(2, Math.min(UNCONFIRMED_GAP_MIN, gap));
+  // A click that is not in the post log yet: it holds the same spacing as a post (never under 2 minutes, so a slow upload
+  // is not posted twice), until post_failed gives the slot back because it never went live. A click that has since been
+  // confirmed does not count. YouTube has no post_failed (Studio says when it published), so there the wait stays short.
+  const unconfirmed = site === 'youtube' ? Math.max(2, Math.min(UNCONFIRMED_GAP_MIN, gap)) : Math.max(2, gap);
   if (lastClick && lastClick > lastConfirmed + 60_000 && mins(lastClick) < unconfirmed)
-    throw new Error(`A post was just published on ${SITES[site].label} for ${a.handle} (${mins(lastClick)} min ago). Check the profile: if it went up, mark_posted it; the next post there can go ${gap} min after it. If it really did not go up, post_failed with platform "${site}" gives the slot back and lets you try once more.`);
+    throw new Error(`A post was sent on ${SITES[site].label} for ${a.handle} ${mins(lastClick)} min ago (${clock(lastClick)}) and is not confirmed yet. Check the profile: if it went up, mark_posted it (or log_posts with its link); the next post there can go after ${clock(lastClick + unconfirmed * 60_000)}. If it really did not go up, post_failed with platform "${site}" gives the slot back and lets you try once more.`);
 }
 
 /** Throws with the reason when the account may not do this now. */
@@ -1679,8 +1745,7 @@ function kryptVisited(accountId: string, site: Site, k: KryptAccount): boolean {
   return true;
 }
 
-/** Account + platform + day -> the Krypt posts it acted on (liked, saved, reposted, commented). */
-const kryptPostsToday = new Map<string, Set<string>>();
+/** Krypt's posts acted on (liked, saved, reposted, commented) per account, platform and day: kept by the store, so a hub restart does not reset it. */
 const KRYPT_POSTS_A_DAY = 5;
 /**
  * Why this like / save / repost / comment on one of Krypt's posts is held back (null = go ahead): at most five of
@@ -1695,13 +1760,11 @@ function kryptPostLimit(a: IgAccount, site: Site, k: KryptAccount, kind: string,
     if (Date.now() - last < 3 * 86_400_000)
       return `${a.handle} commented on one of Krypt's posts on ${SITES[site].label} in the last 3 days (${dayClockOf(last)}): no comment on Krypt's posts there until 3 days after that. A like is fine.`;
   }
-  const key = `${a.id}|${site}|${localDate()}`;
-  const seen = kryptPostsToday.get(key) ?? new Set<string>();
+  const seen = new Set(store.kryptPostsActed(a.id, site));
   const id = (post || '').replace(/[?#].*$/, '').replace(/\/$/, '');
   if (!seen.has(id) && seen.size >= KRYPT_POSTS_A_DAY)
     return `Already ${seen.size} of Krypt's posts acted on today on ${SITES[site].label}: that is enough for one day (a fan, not a ring). Watch this one and move on; ${k.handle}'s posts can be liked again tomorrow.`;
-  seen.add(id);
-  kryptPostsToday.set(key, seen);
+  store.addKryptPostActed(a.id, site, id);
   return null;
 }
 
@@ -1755,7 +1818,7 @@ async function withTab(handle: string | undefined, site: BrowserSite, fn: (tab: 
   }
   if (open) {
     try {
-      tab = await ensureTab(a, site, open === true ? undefined : open);
+      tab = await openInTurn(a, site, open === true ? undefined : open);
     } catch (e) {
       return { ok: false, text: (e as Error).message };
     }
@@ -1763,7 +1826,9 @@ async function withTab(handle: string | undefined, site: BrowserSite, fn: (tab: 
   else if (!tab || !isOpen(tab)) return { ok: false, text: `${SITES[site].label} for ${a.handle} isn't open in Chrome. browser_open${site === 'instagram' ? '' : ` with site "${site}"`} first.` };
   const t = tab;
   if (t.conn) noteUse(t.conn, site);
+  t.lastUse = Date.now();
   const run = async (): Promise<Outcome> => {
+    t.lastUse = Date.now();
     try {
       // Time on Instagram and X counts toward each one's warm-up budget; uploading to YouTube does not, nor Content Rewards.
       if (site === 'rewards') return await fn(t, store.findAccount(a.id));
@@ -1780,6 +1845,7 @@ async function withTab(handle: string | undefined, site: BrowserSite, fn: (tab: 
     } catch (e) {
       return { ok: false, text: (e as Error).message };
     } finally {
+      t.lastUse = Date.now();
       // The time this call itself took (a watch, a paced click) is time on the app.
       if (site !== 'youtube' && site !== 'rewards') store.touchLive(a.handle, site, true);
     }
@@ -1897,8 +1963,37 @@ export async function listYtChannels(accountId: string): Promise<YtChannelOption
 
 // ── What a Chrome profile is signed in to (the setup wizard's Accounts step) ─
 const SCAN_SITES: Site[] = ['instagram', 'youtube', 'x', 'tiktok', 'facebook', 'threads', 'pinterest'];
+/** A platform tab an AI drove this recently is in use: a profile scan does not load pages in it. */
+const SCAN_LEAVE_MS = 5 * 60_000;
 /** Sites whose page names the signed-in user (Facebook goes by a Page, picked later). */
 const HANDLE_SITES = new Set<Site>(['instagram', 'x', 'tiktok', 'threads', 'pinterest']);
+/** Facebook's list of the Pages the signed-in user manages. */
+const FB_PAGES_URL = 'https://www.facebook.com/pages/?category=your_pages';
+
+/**
+ * Runs in the page: the names of the Pages listed in Facebook's "Pages you manage". Facebook's markup has no stable
+ * names, so this reads the main column's links to a Page (facebook.com/<name> or profile.php?id=) and takes each one's
+ * visible name. Best effort: the user can always type the Page instead.
+ */
+const FB_PAGES_JS = String.raw`(() => {
+  const main = document.querySelector('[role="main"]') || document.body;
+  const skip = /^\/(pages|groups|watch|marketplace|gaming|events|friends|notifications|messages|settings|help|policies|privacy|bookmarks|business|ads|login|reel|reels|stories|photo|photos|me|home\.php|latest|saved|memories|fundraisers|jobs|weather|coronavirus_info|search|hashtag|permalink\.php|story\.php|share|l\.php)(\/|$)/i;
+  const seen = new Set();
+  const out = [];
+  for (const a of Array.from(main.querySelectorAll('a[href]'))) {
+    let u;
+    try { u = new URL(a.href); } catch (e) { continue; }
+    if (!/(^|\.)facebook\.com$/.test(u.hostname)) continue;
+    const p = u.pathname;
+    const id = p === '/profile.php' ? u.searchParams.get('id') : /^\/[A-Za-z0-9.\-]{2,}\/?$/.test(p) && !skip.test(p) ? p.replace(/\/$/, '').toLowerCase() : null;
+    if (!id || seen.has(id)) continue;
+    const name = ((a.innerText || '').trim().split('\n')[0] || a.getAttribute('aria-label') || '').trim();
+    if (!name || name.length > 80 || /^(see all|create|log in|more)\b/i.test(name)) continue;
+    seen.add(id);
+    out.push(name);
+  }
+  return out.slice(0, 50);
+})()`;
 
 /**
  * Who the picked Chrome profile is signed in as on each platform: the cookies say signed in or not; the handle comes from
@@ -1912,9 +2007,13 @@ export async function scanChromeProfile(dir: string, forProfile?: string): Promi
   const signedIn = (s: Site): boolean => (s === 'instagram' ? conn.loggedIn : s === 'youtube' ? conn.ytLoggedIn : conn.net[s as Network].loggedIn);
   const known = (s: Site): string | undefined => (s === 'instagram' ? conn.me : s === 'youtube' ? undefined : conn.net[s as Network].me);
   const wasOpen = (s: Site): boolean => (s === 'instagram' ? conn.tabOpen : s === 'youtube' ? conn.ytTabOpen : conn.net[s as Network].tabOpen);
+  const started = Date.now();
+  // An AI is on that platform in this Chrome profile: its tab is open and was driven in the last few minutes (or is
+  // being driven since the scan started), or a post is still going up there.
+  const inUse = (s: Site, since: number): boolean =>
+    [...tabs.values()].some((t) => t.conn === conn && t.site === s && ((t.settleUntil ?? 0) > Date.now() || (isOpen(t) && (t.lastUse ?? 0) > since)));
   const busy = (s: Site): boolean => {
-    const used = [...tabs.values()].filter((t) => t.conn === conn && t.site === s);
-    if (used.some((t) => (t.settleUntil ?? 0) > Date.now())) return true;
+    if (inUse(s, started - SCAN_LEAVE_MS)) return true;
     const last = s === 'youtube' ? ytLast.get(conn.id) : undefined;
     return !!last && Date.now() - last.at < YT_HOLD_MS;
   };
@@ -1923,7 +2022,7 @@ export async function scanChromeProfile(dir: string, forProfile?: string): Promi
     const h = signedIn(s) ? known(s) : undefined;
     sites[s] = { signedIn: signedIn(s), ...(h ? { handle: h } : {}) };
   }
-  const todo = SCAN_SITES.filter((s) => sites[s]!.signedIn && conn.sites.includes(s) && !busy(s) && (s === 'youtube' || (HANDLE_SITES.has(s) && !sites[s]!.handle)));
+  const todo = SCAN_SITES.filter((s) => sites[s]!.signedIn && conn.sites.includes(s) && !busy(s) && (s === 'youtube' || s === 'facebook' || (HANDLE_SITES.has(s) && !sites[s]!.handle)));
   if (!todo.length) return { sites };
   // The Marketo profile's proxy first: nothing loads in Chrome before it is in place.
   await chromeProxyGate('This Chrome profile', conn, forProfile);
@@ -1940,19 +2039,38 @@ export async function scanChromeProfile(dir: string, forProfile?: string): Promi
           await serialOn(`yt|${conn.id}`, go);
           return;
         }
-        await surf.load(SITES[s].home);
-        for (const until = Date.now() + 12_000; Date.now() < until; await sleep(800)) {
-          const me = (await surf.evaluate<{ me?: string | null }>('window.__mk.snap(false)').catch(() => null))?.me;
-          if (!me) continue;
-          sites[s]!.handle = me;
-          if (s === 'instagram') conn.me = me;
-          else conn.net[s as Network].me = me;
-          break;
-        }
+        // In the turn of an account's tab there, if one is open: an action of a run that starts meanwhile waits for the scan.
+        const own = [...tabs.values()].find((t) => t.conn === conn && t.site === s && isOpen(t));
+        const work = async (): Promise<void> => {
+          if (inUse(s, started)) throw new Error('An AI run started using this platform here during the read: left alone.');
+          if (s === 'facebook') {
+            // The Pages it manages: the account posts as one of them. Facebook fills the list in after the page loads.
+            await surf.load(FB_PAGES_URL);
+            for (const until = Date.now() + 12_000; Date.now() < until; await sleep(1000)) {
+              const pages = await surf.evaluate<string[]>(FB_PAGES_JS).catch(() => []);
+              if (pages?.length) {
+                sites.facebook!.pages = pages;
+                break;
+              }
+            }
+            return;
+          }
+          await surf.load(SITES[s].home);
+          for (const until = Date.now() + 12_000; Date.now() < until; await sleep(800)) {
+            const me = (await surf.evaluate<{ me?: string | null }>('window.__mk.snap(false)').catch(() => null))?.me;
+            if (!me) continue;
+            sites[s]!.handle = me;
+            if (s === 'instagram') conn.me = me;
+            else conn.net[s as Network].me = me;
+            break;
+          }
+        };
+        await (own ? serial(own, work) : work());
       } catch (e) {
         sites[s]!.error = (e as Error).message;
       } finally {
-        if (opened) surf.close();
+        // Only a tab the scan opened, and not one an AI run took up meanwhile.
+        if (opened && !inUse(s, started)) surf.close();
       }
     }),
   );
@@ -2070,6 +2188,25 @@ async function pickInSwitcher(tab: Tab, a: IgAccount): Promise<boolean> {
 }
 
 // ── Tools ──────────────────────────────────────────────────────────────────
+/**
+ * Calls still running, by what they do. An AI app with a short tool timeout (Codex: 60s) tells the model a slow call
+ * failed while the hub is still typing or posting, and the model sends the same call again. That repeat waits for the
+ * one already running and gets its result, instead of queueing behind it and doing it all a second time (a caption
+ * typed twice, a second click on a button the first already pressed).
+ */
+const inFlight = new Map<string, Promise<Outcome>>();
+function once(key: string, run: () => Promise<Outcome>): Promise<Outcome> {
+  const running = inFlight.get(key);
+  if (running) {
+    deps.log('info', `[browser] the same call came again while it was still running: answered with its result (${key.split('|')[0]})`);
+    return running.then((o) => ({ ...o, text: `(The same call was still running from before, so it was done once; this is its result.)\n${o.text}` }));
+  }
+  const p = run().finally(() => inFlight.delete(key));
+  inFlight.set(key, p);
+  return p;
+}
+const callKey = (...parts: unknown[]): string => parts.map((x) => (typeof x === 'string' ? x : JSON.stringify(x) ?? '')).join('|');
+
 /** The account the AI opened a tab for last (closing tabs on an account switch, Setup > Performance). */
 let lastOpened: string | null = null;
 
@@ -2117,6 +2254,10 @@ function loadPace(key: string, url: string): string | null {
 }
 
 export function toolOpen(handle?: string, url?: string, site?: BrowserSite): Promise<Outcome> {
+  return once(callKey('open', handle ?? '', site ?? '', url?.trim() ?? ''), () => openNow(handle, url, site));
+}
+
+function openNow(handle?: string, url?: string, site?: BrowserSite): Promise<Outcome> {
   let acct: IgAccount | null = null;
   try {
     acct = account(handle);
@@ -2288,7 +2429,7 @@ async function approve(tab: Tab, a: IgAccount, v: Verdict, url: string, client: 
 }
 
 export function toolClick(handle: string | undefined, ref: number, client: string, site: BrowserSite = 'instagram'): Promise<Outcome> {
-  return withTab(handle, site, async (tab, a) => {
+  return once(callKey('click', handle ?? '', site, ref), () => withTab(handle, site, async (tab, a) => {
     let t = await inPage<Target>(tab, `window.__mk.target(${ref})`);
     if (t.gone) return { ok: false, text: `[${ref}] is no longer on the page. browser_snapshot for a fresh listing.` };
     const block = await inputBlock(tab, a, t.lang);
@@ -2481,17 +2622,53 @@ ${page.text}` };
       }
     }
     return { ok: true, text: `${note}Clicked [${ref}] "${before}".\n${(await read(tab, store.findAccount(a.id))).text}` };
-  });
+  }));
 }
 
+/** The page's language (the html lang), for the English-only gate in inputBlock ('' when it cannot be read). */
+const pageLang = (tab: Tab): Promise<string> => inPage<string>(tab, `document.documentElement.lang || ''`).catch(() => '');
+
+/**
+ * What has the keyboard focus when it is a control (a button, a link, a checkbox, a menu item) rather than a text box,
+ * a video or the page itself (null then). With blur, the control lets go of the focus. Unknown when the page could
+ * not be asked.
+ */
+function focusedControl(tab: Tab, blur = false): Promise<{ name: string; kind: string } | null> {
+  return inPage<{ name: string; kind: string } | null>(
+    tab,
+    `(() => {
+      let e = document.activeElement;
+      while (e && e.shadowRoot && e.shadowRoot.activeElement) e = e.shadowRoot.activeElement;
+      if (!e || e === document.body || e === document.documentElement) return null;
+      const tag = e.tagName.toLowerCase();
+      const type = String(e.type || '').toLowerCase();
+      const role = String(e.getAttribute('role') || '').toLowerCase();
+      if (e.isContentEditable || tag === 'textarea' || tag === 'video' || tag === 'audio' || /^(textbox|searchbox|combobox)$/.test(role)) return null;
+      if (tag === 'input' && !/^(button|submit|reset|checkbox|radio|image|file|color)$/.test(type)) return null;
+      const name = String(e.getAttribute('aria-label') || e.innerText || e.value || e.getAttribute('title') || '').replace(/\\s+/g, ' ').trim().slice(0, 60);
+      const kind = role || (tag === 'a' ? 'link' : tag === 'input' ? type : tag);
+      if (${blur ? 'true' : 'false'} && typeof e.blur === 'function') e.blur();
+      return { name, kind };
+    })()`,
+  ).catch(() => ({ name: '', kind: 'unknown' }));
+}
+
+/** Enter on a focused button or link presses it, which would skip every check a click goes through: refused. */
+const CONTROL_ENTER = (c: { name: string; kind: string }): string =>
+  c.kind === 'unknown'
+    ? 'Could not tell what has the keyboard focus, so Enter was not pressed. browser_snapshot, then browser_click what you want to press, or click into the text box and type there.'
+    : `The keyboard focus is on ${c.name ? `"${c.name}"` : 'a control'} (${c.kind}), not a text box: Enter would press it, outside the hub's checks. Nothing was pressed. To press it, browser_click it by its number from browser_snapshot.`;
+
 async function submitWithEnter(tab: Tab, a: IgAccount, client: string): Promise<Outcome | null> {
+  const ctl = await focusedControl(tab);
+  if (ctl) return { ok: false, text: CONTROL_ENTER(ctl) };
   // Content Rewards: Enter sends a link or a search, nothing that needs an approval.
   if (tab.site === 'rewards') {
     await pressKey(tab, 'Enter');
     return null;
   }
   const f = await inPage<Focus>(tab, 'window.__mk.focus()');
-  let v = classifyEnter(f);
+  let v = classifyEnter(f, tab.site);
   // YouTube Studio: Enter only adds a line or a tag, except in a reply box.
   if (tab.site === 'youtube') v = v.kind === 'comment' ? { kind: 'other', action: 'Post this reply on YouTube', text: v.text } : { kind: 'free' };
   if (v.kind === 'free') {
@@ -2513,10 +2690,10 @@ async function submitWithEnter(tab: Tab, a: IgAccount, client: string): Promise<
 }
 
 export function toolType(handle: string | undefined, ref: number, text: string, opts: { clear?: boolean; submit?: boolean }, client: string, site: BrowserSite = 'instagram'): Promise<Outcome> {
-  return withTab(handle, site, async (tab, a) => {
+  return once(callKey('type', handle ?? '', site, ref, text, !!opts.clear, !!opts.submit), () => withTab(handle, site, async (tab, a) => {
     const t = await inPage<Target>(tab, `window.__mk.target(${ref})`);
     if (t.gone) return { ok: false, text: `[${ref}] is no longer on the page. browser_snapshot for a fresh listing.` };
-    const block = await inputBlock(tab, a, '');
+    const block = await inputBlock(tab, a, t.lang);
     if (block) return { ok: false, text: block };
     if (!t.editable) return { ok: false, text: `[${ref}] "${t.name}" (${t.role}) is not a text field.` };
     if (t.type === 'password') return { ok: false, text: 'Passwords are typed by the user, never by an AI.' };
@@ -2539,7 +2716,20 @@ export function toolType(handle: string | undefined, ref: number, text: string, 
     // (the same check runs again when it is sent, on whatever the box then holds).
     // X names its reply box "Post text", like the composer: it is a reply box in a "Replying to" dialog, or inline on a post's page.
     const xReply = tab.site === 'x' && /post text|post your reply/i.test(t.name) && (t.dialog || t.dialogText ? /replying to/i.test(t.dialogText) : /\/status\/\d+/.test(pathOf(t.url)));
-    const box: TextKind | null = t.type === 'search' || /search/i.test(t.name) ? null : xReply || /comment|reply/i.test(t.name) ? 'comment' : /message/i.test(t.name) ? 'message' : null;
+    const search = t.type === 'search' || /search/i.test(t.name);
+    let box: TextKind | null = search ? null : xReply || /comment|reply/i.test(t.name) ? 'comment' : /message/i.test(t.name) ? 'message' : null;
+    // Sent with Enter from a box nothing names: judged the way Enter will judge it (classifyEnter), so a comment or
+    // message in another UI language is checked before typing too.
+    if (!box && !search && opts.submit) {
+      const v = classifyEnter({ editable: true, name: t.name, value: text, multiline: t.tag !== 'input', dialog: t.dialog, url: t.url }, tab.site);
+      if (v.kind === 'comment' || v.kind === 'message') box = v.kind;
+    }
+    // A retry of a call that already typed this (an AI app that gave up waiting on the first): typing it again would
+    // double it in the box.
+    const clear = opts.clear || (tab.site === 'youtube' && /add a title/i.test(t.name));
+    const squash = (s: string): string => s.replace(/\s+/g, ' ').trim();
+    if (!clear && t.value && squash(text).length >= 8 && squash(t.value).endsWith(squash(text)))
+      return { ok: false, text: `[${ref}] "${t.name}" already ends with exactly this text (an earlier call typed it), so it was not typed again. browser_snapshot to check the box; to replace what it holds, call browser_type with clear: true.` };
     if (box) {
       const whole = opts.clear || !t.value ? text : `${t.value}${text}`;
       const problems = unnatural(box, tab.site, whole);
@@ -2551,8 +2741,7 @@ export function toolType(handle: string | undefined, ref: number, text: string, 
     await mouseClick(tab, t.x, t.y);
     await sleep(rand(250, 500));
     // YouTube Studio's title box is pre-filled with the file name: what is typed there always replaces it (typing
-    // after it made "<file name><title>" titles over the 100-character limit).
-    const clear = opts.clear || (tab.site === 'youtube' && /add a title/i.test(t.name));
+    // after it made "<file name><title>" titles over the 100-character limit; `clear` above).
     if (clear && t.value) {
       // Ctrl/Cmd+A with the selectAll editing command: a synthetic key alone does not select in rich editors (TikTok, X).
       const mod = process.platform === 'darwin' ? 4 : 2;
@@ -2589,26 +2778,36 @@ export function toolType(handle: string | undefined, ref: number, text: string, 
       await sleep(rand(700, 1100));
     }
     return { ok: true, text: `${note}\n${(await read(tab, store.findAccount(a.id))).text}` };
-  });
+  }));
 }
 
 export function toolPress(handle: string | undefined, key: string, client: string, site: BrowserSite = 'instagram'): Promise<Outcome> {
-  return withTab(handle, site, async (tab, a) => {
+  return once(callKey('press', handle ?? '', site, key), () => withTab(handle, site, async (tab, a) => {
     if (!KEYS[key]) return { ok: false, text: `Unknown key "${key}". Keys: ${KEY_NAMES.join(', ')}.` };
+    // Enter and Space send and press things: the page's language counts for those (the checks read English labels).
+    const acts = key === 'Enter' || key === 'Space';
     if (key !== 'Escape') {
-      const block = await inputBlock(tab, a, '');
+      const block = await inputBlock(tab, a, acts ? await pageLang(tab) : '');
       if (block) return { ok: false, text: block };
     }
+    let note = '';
     if (key === 'Enter') {
       const stop = await submitWithEnter(tab, a, client);
       if (stop) return stop;
     } else {
+      if (key === 'Space') {
+        // Space on a focused button presses it (a Like clicked a moment ago would be taken back, a focused Follow or Post
+        // pressed outside every check). The button lets go of the focus first, so Space goes to the page (pause, scroll).
+        const ctl = await focusedControl(tab, true);
+        if (ctl?.kind === 'unknown') return { ok: false, text: 'Could not tell what has the keyboard focus, so Space was not pressed. browser_scroll scrolls; browser_click presses a button.' };
+        if (ctl) note = ` (the focus was on ${ctl.name ? `"${ctl.name}"` : 'a control'}; it was let go first, so Space went to the page and did not press it)`;
+      }
       await pressKey(tab, key);
       if (/^(PageUp|PageDown|ArrowUp|ArrowDown|Space|Home|End)$/.test(key)) tab.lastMove = Date.now();
     }
     await sleep(rand(500, 900));
-    return { ok: true, text: `Pressed ${key}.\n${(await read(tab, store.findAccount(a.id))).text}` };
-  });
+    return { ok: true, text: `Pressed ${key}${note}.\n${(await read(tab, store.findAccount(a.id))).text}` };
+  }));
 }
 
 export function toolScroll(handle: string | undefined, direction: 'up' | 'down', amount: 'small' | 'page' | 'big' = 'page', site: BrowserSite = 'instagram'): Promise<Outcome> {
@@ -2701,7 +2900,7 @@ const IMAGE_EXT = /\.(png|jpe?g|webp)$/i;
  * Only image files from Marketo's own folders: the render folder, the app's data and the app itself.
  */
 export function toolAttachImage(handle: string | undefined, file: string, site: Site = 'instagram', ref?: number): Promise<Outcome> {
-  return withTab(handle, site, async (tab, a) => {
+  return once(callKey('attachImage', handle ?? '', site, file, ref ?? 0), () => withTab(handle, site, async (tab, a) => {
     const full = path.resolve(file);
     const roots = [store.get().settings.outputDir, app.getPath('userData'), instance.ROOT, app.getAppPath()].filter(Boolean).map((r) => path.resolve(r).toLowerCase() + path.sep);
     if (!IMAGE_EXT.test(full)) return { ok: false, text: 'Only .png, .jpg or .webp images can be attached.' };
@@ -2713,7 +2912,7 @@ export function toolAttachImage(handle: string | undefined, file: string, site: 
       return { ok: false, text: `No file at ${full}.` };
     }
     if (!st.isFile() || st.size > 15 * 1024 * 1024) return { ok: false, text: 'That is not an image file under 15 MB.' };
-    const block = await inputBlock(tab, a, '');
+    const block = await inputBlock(tab, a, await pageLang(tab));
     if (block) return { ok: false, text: block };
     let found: number[] = [];
     if (ref !== undefined) {
@@ -2741,8 +2940,8 @@ export function toolAttachImage(handle: string | undefined, file: string, site: 
       throw e;
     }
     await sleep(rand(1500, 2500));
-    return { ok: true, text: `Attached ${path.basename(full)}. Crop or position it if the page asks, then press Save (profile changes always ask the user).\n${(await read(tab, a)).text}` };
-  });
+    return { ok: true, text: `Attached ${path.basename(full)}. Crop or position it if the page asks, then confirm it (Done / Save; profile changes always ask the user).\n${(await read(tab, a)).text}` };
+  }));
 }
 
 /** A file picker's accept list and whether it takes several files (read in the page; the last one matching, like the attach itself). */
@@ -2765,7 +2964,7 @@ const UPLOAD_BUTTON = /photo|image|picture|media|upload|attach|add file|select f
  * spaced like any other post. ref = the upload button to use when the page's own picker can't be told.
  */
 export function toolAttachSlides(handle: string | undefined, files: string[], label: string, site: Site, ref?: number): Promise<Outcome> {
-  return withTab(handle, site, async (tab, a) => {
+  return once(callKey('attachSlides', handle ?? '', site, files, label, ref ?? 0), () => withTab(handle, site, async (tab, a) => {
     const def = SLIDE_SITES[site];
     const L = SITES[site].label;
     if (!def) return { ok: false, text: `${L} takes no photo slideshow from the hub. Post the reel's video there instead (render_reel, then browser_attach_reel).` };
@@ -2775,7 +2974,7 @@ export function toolAttachSlides(handle: string | undefined, files: string[], la
       if (!IMAGE_EXT.test(f) || !roots.some((r) => f.toLowerCase().startsWith(r))) return { ok: false, text: `Only pictures inside Marketo's render folder can be attached (${f} is not). render_slides saves them there.` };
       if (!fs.existsSync(f)) return { ok: false, text: `A slide is missing on disk (${f}). render_slides again, then attach.` };
     }
-    let block = await inputBlock(tab, a, '');
+    let block = await inputBlock(tab, a, await pageLang(tab));
     if (block) return { ok: false, text: block };
     checkAllowed(a, 'posts', 'posting', site);
     const refused = (e: unknown): Outcome | null => (tab.s.kind === 'chrome' && /not allowed/i.test((e as Error).message) ? { ok: false, text: FILE_ACCESS.replace('the reel', 'the slides') } : null);
@@ -2851,7 +3050,7 @@ export function toolAttachSlides(handle: string | undefined, files: string[], la
       await wait(['[role=dialog] input[type=file]', 'input[type=file]'], 2);
     }
     await read(tab, a);
-    block = await inputBlock(tab, a, '');
+    block = await inputBlock(tab, a, await pageLang(tab));
     if (block) return { ok: false, text: block };
 
     if (!found.length && !chosen) {
@@ -2904,7 +3103,7 @@ export function toolAttachSlides(handle: string | undefined, files: string[], la
     if (site === 'facebook')
       return { ok: true, text: `Attached ${label} (${n} pictures) in Meta Business Suite. Check the Page named at the top is this account's Page (a wrong one: ask the user to switch; never switch it yourself) and that only Facebook is ticked under "Post to" unless the user wants it on Instagram too. Write the text (the hook line, 2-3 hashtags), then press Publish (it waits for the user only if they switched approvals on). ${after}\n${(await read(tab, a)).text}` };
     return { ok: true, text: `Attached ${label} (${n} pictures). Type the post text into the composer's "Post text" box (the hook, in your own words; never the same text twice), then press Post (it waits for the user only if they switched approvals on). ${after}\n${(await read(tab, a)).text}` };
-  });
+  }));
 }
 
 /** Chrome only lets an extension hand over a local file when the user allowed it file access. */
@@ -2912,9 +3111,9 @@ const FILE_ACCESS = 'Chrome refused to attach the file. The user turns on "Allow
 
 /** Put a rendered reel into Instagram's "create" file picker, or YouTube Studio's upload dialog (the final Share / Publish still needs the user's approval). */
 export function toolAttach(handle: string | undefined, file: string, label: string, site: Site = 'instagram', long?: { id: string; title: string }): Promise<Outcome> {
-  return withTab(handle, site, async (tab, a) => {
+  return once(callKey('attach', handle ?? '', site, file, label, long?.id ?? ''), () => withTab(handle, site, async (tab, a) => {
     const yt = tab.site === 'youtube';
-    let block = await inputBlock(tab, a, '');
+    let block = await inputBlock(tab, a, await pageLang(tab));
     if (block) return { ok: false, text: block };
     if (yt && long) longUploads.set(a.id, { ...long, at: Date.now() });
     else if (yt) checkYt(a);
@@ -2932,7 +3131,7 @@ export function toolAttach(handle: string | undefined, file: string, label: stri
         if (!found.length) await sleep(1000);
       }
       await read(tab, a);
-      block = await inputBlock(tab, a, '');
+      block = await inputBlock(tab, a, await pageLang(tab));
       if (block) return { ok: false, text: block };
       if (!found.length) return { ok: false, text: `X's compose dialog did not open. Take a browser_snapshot (site "x"), open the composer (the "Post" button in the side bar), then call this again.` };
     } else if (tab.site === 'tiktok') {
@@ -2944,7 +3143,7 @@ export function toolAttach(handle: string | undefined, file: string, label: stri
         if (!found.length) await sleep(1200);
       }
       await read(tab, a);
-      block = await inputBlock(tab, a, '');
+      block = await inputBlock(tab, a, await pageLang(tab));
       if (block) return { ok: false, text: block };
       if (!found.length) return { ok: false, text: `TikTok Studio's uploader did not open. Take a browser_snapshot (site "tiktok"); browser_open with site "tiktok" and url "/tiktokstudio/upload" opens it; then call this again.` };
     } else if (tab.site === 'facebook' || tab.site === 'threads' || tab.site === 'pinterest') {
@@ -2962,7 +3161,7 @@ export function toolAttach(handle: string | undefined, file: string, label: stri
         if (!found.length) await sleep(1200);
       }
       await read(tab, a);
-      block = await inputBlock(tab, a, '');
+      block = await inputBlock(tab, a, await pageLang(tab));
       if (block) return { ok: false, text: block };
       if (!found.length && opener) {
         const ref = await inPage<number>(tab, opener).catch(() => 0);
@@ -2997,7 +3196,7 @@ export function toolAttach(handle: string | undefined, file: string, label: stri
           found = await filePickers(tab, picker).catch(() => []);
         }
         await read(tab, a);
-        block = await inputBlock(tab, a, '');
+        block = await inputBlock(tab, a, await pageLang(tab));
         if (block) return { ok: false, text: block };
       }
       if (!found.length) found = await filePickers(tab, 'input[type=file]');
@@ -3054,7 +3253,7 @@ export function toolAttach(handle: string | undefined, file: string, label: stri
           ? 'The hub picked Original in the crop menu but could not measure the picture: before Next, check the preview shows the full tall frame (not a square or 4:5 cut); if not, crop button at the bottom left of the picture ("Select crop") > Original.'
           : 'IMPORTANT: the crop must be Original (the full vertical 9:16 frame), never 1:1 or 4:5, or the reel goes out cut to a square. Before Next: press the crop button at the bottom left of the picture ("Select crop"), pick "Original", and check the preview shows the whole tall frame.';
     return { ok: true, text: `Attached ${label}. Instagram is processing it. ${cropNote} Then continue through its steps (cover, caption) and press the final Share (it waits for the user only if they switched approvals on).\n${(await read(tab, a)).text}` };
-  });
+  }));
 }
 
 /**

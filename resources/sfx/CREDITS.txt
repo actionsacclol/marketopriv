@@ -1,0 +1,62 @@
+Sound effects in this folder: all CC0 1.0 (public domain, no attribution required).
+https://creativecommons.org/publicdomain/zero/1.0/
+Trimmed, levelled, made mono and re-encoded as Ogg Vorbis; background loops cross-faded to loop.
+Collected via the stickman-video-director audio library (github.com/kaomei/stickman-video-director), each file checked against its catalog SHA-256.
+
+AntumDeluge - https://opengameart.org/content/fire-crackling
+  fire/01.ogg
+
+Kenney - https://kenney.nl/assets/digital-audio
+  laser/01.ogg, laser/02.ogg, laser/03.ogg, laser/04.ogg, laser/05.ogg, laser/06.ogg, laser/07.ogg, laser/08.ogg, laser/09.ogg, zap/01.ogg, zap/02.ogg, zap/03.ogg, zap/04.ogg, zap/05.ogg, zap/06.ogg, powerup/01.ogg, powerup/02.ogg, powerup/03.ogg, powerup/04.ogg, powerup/05.ogg, powerup/06.ogg, powerup/07.ogg, powerup/08.ogg, powerup/09.ogg, powerup/10.ogg, powerup/11.ogg, powerup/12.ogg, jump/01.ogg, jump/02.ogg, jump/03.ogg, jump/04.ogg, jump/05.ogg, blip/01.ogg, blip/02.ogg, blip/03.ogg, blip/04.ogg, blip/05.ogg, blip/06.ogg, blip/07.ogg, blip/08.ogg, blip/09.ogg, blip/10.ogg
+
+Kenney - https://kenney.nl/assets/impact-sounds
+  knock/01.ogg, knock/02.ogg, knock/03.ogg, knock/04.ogg, knock/05.ogg, knock/06.ogg, knock/07.ogg, knock/08.ogg, knock/09.ogg, knock/10.ogg, step/01.ogg, step/02.ogg, step/03.ogg, step/04.ogg, step/05.ogg, step/06.ogg, step/07.ogg, step/08.ogg, step/09.ogg, step/10.ogg, step/11.ogg, step/12.ogg, step/13.ogg, stepgrass/01.ogg, stepgrass/02.ogg, stepgrass/03.ogg, stepgrass/04.ogg, stepgrass/05.ogg, stepgrass/06.ogg, stepgrass/07.ogg, stepgrass/08.ogg, stepgrass/09.ogg, stepgrass/10.ogg, punch/01.ogg, punch/02.ogg, punch/03.ogg, punch/04.ogg, punch/05.ogg, punch/06.ogg, punch/07.ogg, punch/08.ogg, punch/09.ogg, punch/10.ogg, thud/01.ogg, thud/02.ogg, thud/03.ogg, thud/04.ogg, thud/05.ogg, thud/06.ogg, thud/07.ogg, thud/08.ogg, thud/09.ogg, thud/10.ogg, thud/11.ogg, thud/12.ogg, thud/13.ogg, thud/14.ogg, thud/15.ogg, thud/16.ogg, thud/17.ogg, thud/18.ogg, thud/19.ogg, thud/20.ogg, clang/01.ogg, clang/02.ogg, clang/03.ogg, clang/04.ogg, clang/05.ogg, clang/06.ogg, clang/07.ogg, clang/08.ogg, clang/09.ogg, clang/10.ogg, clang/11.ogg, clang/12.ogg, clang/13.ogg, clang/14.ogg, clang/15.ogg, clang/16.ogg, clang/17.ogg, clang/18.ogg, clang/19.ogg, clang/20.ogg, bell/01.ogg, bell/02.ogg, bell/03.ogg, bell/04.ogg, bell/05.ogg, glass/01.ogg, glass/02.ogg, glass/03.ogg, glass/04.ogg, glass/05.ogg, glass/06.ogg, glass/07.ogg, glass/08.ogg, glass/09.ogg, glass/10.ogg
+
+Kenney - https://kenney.nl/assets/interface-sounds
+  uiclick/01.ogg, uiclick/02.ogg, uiclick/03.ogg, uiclick/04.ogg, uiclick/05.ogg, uiclick/06.ogg, uiclick/07.ogg, uiclick/08.ogg, uiclick/09.ogg, uiclick/10.ogg, uiclick/11.ogg, uiclick/12.ogg, uiclick/13.ogg, uiclick/14.ogg, uiclick/15.ogg, uiok/01.ogg, uiok/02.ogg, uiok/03.ogg, uiok/04.ogg, uierror/01.ogg, uierror/02.ogg, uierror/03.ogg, uierror/04.ogg, uierror/05.ogg, uierror/06.ogg, uierror/07.ogg, uierror/08.ogg, uiopen/01.ogg, uiopen/02.ogg, uiopen/03.ogg, uiopen/04.ogg, uiopen/05.ogg, uiopen/06.ogg, uiopen/07.ogg, uiopen/08.ogg, uiopen/09.ogg, uiopen/10.ogg, uiopen/11.ogg, uiopen/12.ogg, uiopen/13.ogg, uiclose/01.ogg, uiclose/02.ogg, uiclose/03.ogg, uiclose/04.ogg, uiclose/05.ogg, uiclose/06.ogg, uiclose/07.ogg, uiclose/08.ogg, uiclose/09.ogg, uiclose/10.ogg, uiclose/11.ogg, uiclose/12.ogg, uiclose/13.ogg
+
+Kenney - https://kenney.nl/assets/music-jingles
+  nes/01.ogg, nes/02.ogg, nes/03.ogg, nes/04.ogg, nes/05.ogg, nes/06.ogg, nes/07.ogg, nes/08.ogg, nes/09.ogg, nes/10.ogg, nes/11.ogg, nes/12.ogg, nes/13.ogg, nes/14.ogg, nes/15.ogg, nes/16.ogg, nes/17.ogg, pizzi/01.ogg, pizzi/02.ogg, pizzi/03.ogg, pizzi/04.ogg, pizzi/05.ogg, pizzi/06.ogg, pizzi/07.ogg, pizzi/08.ogg, pizzi/09.ogg, pizzi/10.ogg, pizzi/11.ogg, pizzi/12.ogg, pizzi/13.ogg, pizzi/14.ogg, pizzi/15.ogg, pizzi/16.ogg, pizzi/17.ogg, sax/01.ogg, sax/02.ogg, sax/03.ogg, sax/04.ogg, sax/05.ogg, sax/06.ogg, sax/07.ogg, sax/08.ogg, sax/09.ogg, sax/10.ogg, sax/11.ogg, sax/12.ogg, sax/13.ogg, sax/14.ogg, sax/15.ogg, sax/16.ogg, sax/17.ogg, stinger/01.ogg, stinger/02.ogg, stinger/03.ogg, stinger/04.ogg, stinger/05.ogg, stinger/06.ogg, stinger/07.ogg, stinger/08.ogg, stinger/09.ogg, stinger/10.ogg, stinger/11.ogg, stinger/12.ogg, stinger/13.ogg, stinger/14.ogg, stinger/15.ogg, stinger/16.ogg, stinger/17.ogg, steel/01.ogg, steel/02.ogg, steel/03.ogg, steel/04.ogg, steel/05.ogg, steel/06.ogg, steel/07.ogg, steel/08.ogg, steel/09.ogg, steel/10.ogg, steel/11.ogg, steel/12.ogg, steel/13.ogg, steel/14.ogg, steel/15.ogg, steel/16.ogg, steel/17.ogg
+
+Kenney - https://kenney.nl/assets/rpg-audio
+  coin/01.ogg, coin/02.ogg, paper/35.ogg, paper/36.ogg, paper/37.ogg, book/01.ogg, book/02.ogg, book/03.ogg, book/04.ogg, book/05.ogg, door/01.ogg, door/02.ogg, door/03.ogg, door/04.ogg, door/05.ogg, door/06.ogg, creak/01.ogg, creak/02.ogg, creak/03.ogg, keys/02.ogg, keys/03.ogg, clang/21.ogg, clang/22.ogg, clang/23.ogg, cloth/08.ogg, cloth/09.ogg, cloth/10.ogg, cloth/11.ogg, cloth/12.ogg, cloth/13.ogg, chop/01.ogg, chop/02.ogg, chop/03.ogg, chop/04.ogg, chop/05.ogg, chop/06.ogg
+
+Kerzoven - https://opengameart.org/content/cat-purr-meow
+  cat/01.ogg, cat/02.ogg, cat/03.ogg, cat/04.ogg
+
+Kresiek The Furry - https://opengameart.org/content/amb-outside-1
+  amb_outdoor/01.ogg
+
+OwlishMedia - https://opengameart.org/content/202-more-sound-effects
+  coin/03.ogg, coin/04.ogg, coin/05.ogg, coin/06.ogg, coin/07.ogg, coin/08.ogg, coin/09.ogg, coin/10.ogg, coin/11.ogg, coin/12.ogg, coin/13.ogg, coin/14.ogg, cash/01.ogg, cash/02.ogg, cash/03.ogg, cash/04.ogg, cash/05.ogg, cash/06.ogg, cash/07.ogg, cash/08.ogg, cash/09.ogg, cash/10.ogg, cash/11.ogg, cash/12.ogg, paper/01.ogg, paper/02.ogg, paper/03.ogg, paper/04.ogg, paper/05.ogg, paper/06.ogg, paper/07.ogg, paper/08.ogg, paper/09.ogg, paper/10.ogg, paper/11.ogg, paper/12.ogg, paper/13.ogg, paper/14.ogg, paper/15.ogg, paper/16.ogg, paper/17.ogg, paper/18.ogg, paper/19.ogg, paper/20.ogg, paper/21.ogg, paper/22.ogg, paper/23.ogg, paper/24.ogg, paper/25.ogg, paper/26.ogg, paper/27.ogg, paper/28.ogg, paper/29.ogg, paper/30.ogg, paper/31.ogg, paper/32.ogg, paper/33.ogg, paper/34.ogg, keys/04.ogg, keys/05.ogg, keys/06.ogg, keys/07.ogg, keys/08.ogg, keys/09.ogg, keys/10.ogg, keys/11.ogg, keys/12.ogg, keys/13.ogg, keys/14.ogg, keys/15.ogg, keys/16.ogg, keys/17.ogg, keys/18.ogg, drink/01.ogg, drink/02.ogg, drink/03.ogg, drink/04.ogg, drink/05.ogg, drink/06.ogg, cloth/01.ogg, cloth/02.ogg, cloth/03.ogg, cloth/04.ogg, cloth/05.ogg, cloth/06.ogg, cloth/07.ogg, phone/01.ogg, phone/02.ogg, ring/01.ogg, camera/01.ogg, camera/02.ogg, camera/03.ogg
+
+Ylmir - https://opengameart.org/content/rain-loopable
+  amb_rain/01.ogg, amb_rain/02.ogg
+
+artisticdude - https://opengameart.org/content/swishes-sound-pack
+  swish/01.ogg, swish/02.ogg, swish/03.ogg, swish/04.ogg, swish/05.ogg, swish/06.ogg, swish/07.ogg, swish/08.ogg, swish/09.ogg, swish/10.ogg, swish/11.ogg, swish/12.ogg, swish/13.ogg
+
+bart - https://opengameart.org/content/squeak-toy-sounds
+  squeak/01.ogg, squeak/02.ogg, squeak/03.ogg, squeak/04.ogg
+
+eXpl0it3r - https://opengameart.org/content/applause-in-a-large-hall-or-church
+  applause/01.ogg
+
+isaiah658 - https://opengameart.org/content/ambient-bird-sounds
+  amb_birds/01.ogg
+
+looneybits - https://opengameart.org/content/car-engine-start-01
+  engine/01.ogg, engine/02.ogg
+
+looneybits - https://opengameart.org/content/cardoorsfx
+  cardoor/01.ogg, cardoor/02.ogg
+
+pauliuw - https://opengameart.org/content/dog-sounds
+  dog/01.ogg, dog/02.ogg, dog/03.ogg, dog/04.ogg, dog/05.ogg, dog/06.ogg, dog/07.ogg, dog/08.ogg, dog/09.ogg
+
+rubberduck - https://opengameart.org/content/100-cc0-sfx-2
+  door/07.ogg, door/08.ogg, door/09.ogg, door/10.ogg, door/11.ogg, keys/01.ogg, knock/11.ogg, knock/12.ogg, knock/13.ogg, step/14.ogg, step/15.ogg, step/16.ogg, step/17.ogg, glass/11.ogg, glass/12.ogg, glass/13.ogg, glass/14.ogg, glass/15.ogg, glass/16.ogg, stone/01.ogg, stone/02.ogg, stone/03.ogg, thunder/01.ogg, amb_traffic/01.ogg, amb_construction/01.ogg, amb_machine/01.ogg, amb_water/01.ogg, amb_water/02.ogg
+
+rubberduck - https://opengameart.org/content/40-cc0-water-splash-slime-sfx
+  splash/01.ogg, splash/02.ogg, splash/03.ogg, splash/04.ogg, splash/05.ogg, splash/06.ogg, splash/07.ogg, splash/08.ogg, splash/09.ogg, splash/10.ogg, splash/11.ogg, splash/12.ogg, splash/13.ogg, splash/14.ogg, splash/15.ogg, bubble/01.ogg, bubble/02.ogg, bubble/03.ogg, squish/01.ogg, squish/02.ogg, squish/03.ogg, squish/04.ogg, squish/05.ogg, squish/06.ogg, squish/07.ogg, squish/08.ogg, squish/09.ogg, squish/10.ogg, squish/11.ogg, squish/12.ogg, squish/13.ogg, squish/14.ogg, squish/15.ogg, squish/16.ogg
+

@@ -10,16 +10,19 @@ import * as store from './store';
 // The user fills them (Styles page > Open folder); the AI lists them with list_media.
 
 //   Images/       pictures for photo slideshows: saved from a Pinterest search (find_images) or dropped in by the user
-export type MediaKind = 'backgrounds' | 'memes' | 'campaigns' | 'images';
-const FOLDER: Record<MediaKind, string> = { backgrounds: 'Backgrounds', memes: 'Memes', campaigns: 'Campaigns', images: 'Images' };
+//   Footage/      public-domain films saved from the Internet Archive (save_archive) or the user's own b-roll
+//   Music/        public-domain records saved from the Internet Archive, or the user's own music files
+export type MediaKind = 'backgrounds' | 'memes' | 'campaigns' | 'images' | 'footage' | 'music';
+const FOLDER: Record<MediaKind, string> = { backgrounds: 'Backgrounds', memes: 'Memes', campaigns: 'Campaigns', images: 'Images', footage: 'Footage', music: 'Music' };
 const VIDEO = new Set(['.mp4', '.mov', '.webm', '.mkv', '.m4v']);
 const IMAGE = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp']);
+const AUDIO = new Set(['.mp3', '.m4a', '.wav', '.ogg', '.flac', '.aac']);
 const MAX = 400;
 
 export interface MediaFile {
   path: string;
   name: string;
-  type: 'video' | 'image';
+  type: 'video' | 'image' | 'audio';
   mb: number;
 }
 
@@ -65,8 +68,8 @@ export function list(kind: MediaKind, query = ''): MediaFile[] {
         continue;
       }
       const ext = path.extname(e.name).toLowerCase();
-      const type = VIDEO.has(ext) ? 'video' : IMAGE.has(ext) ? 'image' : null;
-      if (!type || (kind === 'backgrounds' && type !== 'video')) continue;
+      const type = VIDEO.has(ext) ? 'video' : IMAGE.has(ext) ? 'image' : AUDIO.has(ext) ? 'audio' : null;
+      if (!type || ((kind === 'backgrounds' || kind === 'footage') && type !== 'video') || (kind === 'music') !== (type === 'audio')) continue;
       const rel = path.relative(root, p).toLowerCase();
       if (words.some((w) => !rel.includes(w))) continue;
       try {

@@ -79,13 +79,15 @@ const STYLE = {
 } as const;
 
 /** Render the bed on its own (stereo), levelled to a fixed loudness. */
-export async function renderBed(style: BedStyle, seconds: number, seed: number, rate: number): Promise<AudioBuffer> {
+/** bpm = a set tempo (a reel cut to the beat, like the UI motion reels at 120), else the style picks one in its range. */
+export async function renderBed(style: BedStyle, seconds: number, seed: number, rate: number, bpmWanted = 0): Promise<AudioBuffer> {
   const len = Math.max(1, Math.ceil((seconds + 0.5) * rate));
   const ctx = new OfflineAudioContext(2, len, rate);
   const r = rng(seed);
   const transpose = Math.floor(r() * 6) - 3; // -3..+2 semitones
   const [lo, hi] = STYLE[style].bpm;
-  const bpm = lo + Math.round(r() * (hi - lo));
+  const picked = lo + Math.round(r() * (hi - lo));
+  const bpm = bpmWanted >= 50 && bpmWanted <= 200 ? bpmWanted : picked;
   const beat = 60 / bpm;
   const bar = beat * 4;
   const swing = STYLE[style].swing;

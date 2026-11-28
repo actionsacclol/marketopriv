@@ -1,10 +1,12 @@
 import { num, screenZoom, storyBeats, str, type StoryBeat } from '@shared/presets';
 import { LABEL_AT } from '@shared/sfx';
-import { STICK_GEAR, stickPoses, stickProps, type StickPose, type StickProp } from '@shared/stickman';
+import { STICK_GEAR, STICK_SHIRTS, hudAt, stickLast, stickPoses, stickProps, type StickPose, type StickProp } from '@shared/stickman';
+import { BUSY, INTERIOR, drawSet, mixHex, nightSky, palOf, weatherFx, whipLines, type Pal } from './stickSets';
 import { FONT, H, W, clamp01, easeBack, easeInOut, easeOut, fit, font, lerp, markLightFrame, prog, registerPreset, rrect, scaled, withAlpha, type Ctx, type Env } from '../engine';
 import { mouthAt } from '../char3d';
 import { captions } from './narrated';
 import { applyView, fxPost, fxView } from './fx';
+import { PX, renderStick3d, type Stick3dLook } from '../stick3d';
 
 // Stickman: a hand-drawn stick figure (or two, side by side for versus clips)
 // acting a story out. Every frame is computed from t: each beat names a pose per
@@ -186,6 +188,9 @@ interface Look {
   hi: string;
   light: boolean;
   lw: number;
+  /** Words drawn straight on the background (title captions, names): the ink, except on dusk's dark sky. */
+  text: string;
+  dusk?: boolean;
 }
 const HIGHLIGHT: Record<string, string> = { orange: '#FF6B1A', yellow: '#FFC400', red: '#FF3B30', green: '#22C55E', cyan: '#06B6D4' };
 
@@ -194,10 +199,12 @@ function lookOf(env: Env): Look {
   const h = str(env.fields, 'highlight') || 'orange';
   const hi = h === 'accent' ? env.accent[1] : (HIGHLIGHT[h] ?? HIGHLIGHT.orange);
   const lw = Math.min(28, Math.max(8, num(env.fields, 'line', 16)));
-  if (bg === 'dark') return { bg: '#0B0B0E', ink: '#F4F4F2', hi, light: false, lw };
-  if (bg === 'chalk') return { bg: '#21392E', ink: '#F0F0E8', hi, light: false, lw };
-  if (bg === 'white') return { bg: '#FFFFFF', ink: '#111111', hi, light: true, lw };
-  return { bg: '#F3EFE6', ink: '#161514', hi, light: true, lw };
+  if (bg === 'dark') return { bg: '#0B0B0E', ink: '#F4F4F2', hi, light: false, lw, text: '#F4F4F2' };
+  if (bg === 'chalk') return { bg: '#21392E', ink: '#F0F0E8', hi, light: false, lw, text: '#F0F0E8' };
+  if (bg === 'white') return { bg: '#FFFFFF', ink: '#111111', hi, light: true, lw, text: '#111111' };
+  // Dusk: dark figures against a sunset, the "what if" cartoon look.
+  if (bg === 'dusk') return { bg: '#E9825F', ink: '#1A1020', hi, light: false, lw, text: '#FFF4E8', dusk: true };
+  return { bg: '#F3EFE6', ink: '#161514', hi, light: true, lw, text: '#161514' };
 }
 
 interface Slot {
@@ -208,10 +215,10 @@ interface Slot {
 const FRONT: StickProp['kind'][] = ['desk', 'laptop', 'monitor', 'chart', 'robot', 'fire', 'coffee'];
 
 /** The props of a beat, with the ones its poses bring (a desk for typing, a phone for the phone pose...). */
-function propsOf(b: StoryBeat, duo: boolean): StickProp[] {
+function propsOf(b: StoryBeat, n: number): StickProp[] {
   const list = stickProps(b.b);
   const poses = stickPoses(b.visual);
-  for (const k of duo ? ([0, 1] as const) : ([0] as const)) {
+  for (const k of ([0, 1, 2] as const).slice(0, n)) {
     const mine = list.filter((p) => p.who === k);
     const has = (kind: string): boolean => mine.some((p) => p.kind === kind);
     if (poses[k] === 'type' && !has('desk') && !has('laptop') && !has('monitor')) list.push({ kind: 'laptop', who: k, value: '' });
@@ -221,11 +228,13 @@ function propsOf(b: StoryBeat, duo: boolean): StickProp[] {
     const now = list.filter((p) => p.who === k);
     if (now.some((p) => p.kind === 'laptop' || p.kind === 'monitor') && !now.some((p) => p.kind === 'desk')) list.push({ kind: 'desk', who: k, value: '' });
   }
-  return list.filter((p) => duo || p.who === 0);
+  return list.filter((p) => p.who < n);
 }
 
-function slotsOf(props: StickProp[], duo: boolean): Slot[] {
+function slotsOf(props: StickProp[], n: number): Slot[] {
   const big = props.some((p) => p.kind === 'screen');
+  const duo = n > 1;
+  if (n > 2) return big ? [{ x: 130, s: 0.46 }, { x: 540, s: 0.46 }, { x: 950, s: 0.46 }] : [{ x: 190, s: 0.76 }, { x: 540, s: 0.78 }, { x: 890, s: 0.76 }];
   if (duo) return big ? [{ x: 170, s: 0.55 }, { x: 900, s: 0.55 }] : [{ x: 250, s: 0.86 }, { x: 740, s: 0.86 }];
   if (big) return [{ x: 190, s: 0.6 }];
   const front = props.some((p) => FRONT.includes(p.kind));
@@ -327,9 +336,103 @@ interface FigDraw {
   color: string;
   gear: string[];
   seed: number;
+  /** The cartoon figure's T-shirt colour (cartoon look), or none for plain ink lines. */
+  shirt?: string;
+  /** Tears running (the tear prop, or a sad cartoon face). */
+  tear?: boolean;
+  /** Where the eyes glance (head units, changes every half second or so) and a quick brow raise. */
+  dart?: P;
+  browUp?: number;
+}
+
+/** The cartoon figure's head: bigger, sitting on the neck (moves the joints the props read too). */
+function cartoonHead(j: Joints): Joints {
+  const dx = j.head.x - j.neck.x;
+  const dy = j.head.y - j.neck.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const r = HEAD * 1.32 * j.s;
+  return { ...j, r, head: { x: j.neck.x + (dx / len) * r * 0.95, y: j.neck.y + (dy / len) * r * 0.95 } };
+}
+
+const CLOTH_LINE = '#141414';
+
+/** The cartoon figure: trousers and shoes, a T-shirt with sleeves, thin arms with round white hands, a big white head. */
+function drawCartoon(ctx: Ctx, L: Look, f: FigDraw): void {
+  const { j } = f;
+  const s = j.s;
+  const w = L.lw * Math.max(0.55, s);
+  const amp = 2 * s;
+  const ow = Math.max(3, w * 0.38);
+  const shirt = f.shirt ?? '#2F6FD6';
+  const pants = '#3A3F47';
+  const thick = (pts: P[], width: number, color: string, seed: number): void => {
+    inkStyle(ctx, CLOTH_LINE, width + ow * 2);
+    inkPath(ctx, pts, seed, amp);
+    inkStyle(ctx, color, width);
+    inkPath(ctx, pts, seed, amp);
+  };
+  const hand = (h: P, e: P): void => {
+    const d = Math.hypot(h.x - e.x, h.y - e.y) || 1;
+    const c = { x: h.x + ((h.x - e.x) / d) * 6 * s, y: h.y + ((h.y - e.y) / d) * 6 * s };
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 17 * s, 0, Math.PI * 2);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fill();
+    ctx.lineWidth = ow;
+    ctx.strokeStyle = CLOTH_LINE;
+    ctx.stroke();
+  };
+  const arm = (sh: P, e: P, h: P, seed: number): void => {
+    inkStyle(ctx, L.light || L.dusk ? CLOTH_LINE : f.color, w * 0.8);
+    inkPath(ctx, [sh, e, h], seed, amp);
+    hand(h, e);
+    const mid = { x: lerp(sh.x, e.x, 0.55), y: lerp(sh.y, e.y, 0.55) };
+    thick([sh, mid], 48 * s, shirt, seed + 30);
+  };
+  const leg = (k: P, ft: P, seed: number): void => {
+    thick([j.hip, k, ft], 32 * s, pants, seed);
+    ctx.beginPath();
+    ctx.ellipse(ft.x + 16 * s, ft.y + 2 * s, 30 * s, 14 * s, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#1E1E24';
+    ctx.fill();
+    ctx.lineWidth = Math.max(2, ow * 0.6);
+    ctx.strokeStyle = L.light || L.dusk ? CLOTH_LINE : '#55555F';
+    ctx.stroke();
+  };
+  // Far arm, legs, the shirt over the hips, then the near arm and the head.
+  arm(j.shoulder, j.e2, j.h2, f.seed + 1);
+  leg(j.k2, j.f2, f.seed + 2);
+  leg(j.k1, j.f1, f.seed + 4);
+  const ux = (j.neck.x - j.hip.x) / (SPINE * s);
+  const uy = (j.neck.y - j.hip.y) / (SPINE * s);
+  const top = { x: j.shoulder.x - ux * 22 * s, y: j.shoulder.y - uy * 22 * s };
+  const bottom = { x: j.hip.x + ux * 26 * s, y: j.hip.y + uy * 26 * s };
+  thick([bottom, top], 106 * s, shirt, f.seed + 3);
+  if (f.gear.includes('tie')) {
+    const tip = { x: lerp(top.x, bottom.x, 0.75), y: lerp(top.y, bottom.y, 0.75) };
+    ctx.fillStyle = L.hi === shirt ? '#C0392B' : L.hi;
+    ctx.beginPath();
+    ctx.moveTo(top.x - 9 * s, top.y - 20 * s);
+    ctx.lineTo(top.x + 9 * s, top.y - 20 * s);
+    ctx.lineTo(tip.x + 13 * s, tip.y);
+    ctx.lineTo(tip.x, tip.y + 16 * s);
+    ctx.lineTo(tip.x - 13 * s, tip.y);
+    ctx.closePath();
+    ctx.fill();
+  }
+  arm(j.shoulder, j.e1, j.h1, f.seed + 5);
+  if (f.pose === 'thumbsup') {
+    inkStyle(ctx, CLOTH_LINE, ow);
+    inkPath(ctx, [{ x: j.h1.x, y: j.h1.y - 10 * s }, { x: j.h1.x - 2 * s, y: j.h1.y - 38 * s }], f.seed + 6, 0);
+  }
+  drawHead(ctx, L, f, w);
 }
 
 function drawFigure(ctx: Ctx, L: Look, f: FigDraw): void {
+  if (f.shirt) {
+    drawCartoon(ctx, L, f);
+    return;
+  }
   const { j } = f;
   const w = L.lw * Math.max(0.55, j.s);
   const amp = 2.2 * j.s;
@@ -366,13 +469,28 @@ function drawHead(ctx: Ctx, L: Look, f: FigDraw, w: number): void {
   ctx.save();
   ctx.translate(j.head.x, j.head.y);
   ctx.rotate(rad(j.ang));
+  const toon = !!f.shirt;
+  // The cartoon head is white with dark features on every look; its outline lights up for the winner.
+  const feat = toon ? CLOTH_LINE : f.color;
   ctx.beginPath();
   ctx.arc(0, 0, r, 0, Math.PI * 2);
-  ctx.fillStyle = L.bg;
+  ctx.fillStyle = toon ? '#FFFFFF' : L.bg;
   ctx.fill();
-  inkStyle(ctx, f.color, w);
+  inkStyle(ctx, toon ? (f.color === L.hi ? L.hi : CLOTH_LINE) : f.color, toon ? Math.max(4, w * 0.62) : w);
   ctx.stroke();
   const u = r / HEAD;
+  if (f.gear.includes('bun')) {
+    // Hair over the top of the head and a bun at the back.
+    ctx.fillStyle = toon ? '#5A3A26' : f.color;
+    ctx.beginPath();
+    ctx.arc(-r * 0.62, -r * 0.78, r * 0.36, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.02, Math.PI * 0.95, Math.PI * 1.85);
+    ctx.quadraticCurveTo(r * 0.1, -r * 0.45, -r * 0.6, -r * 0.1);
+    ctx.closePath();
+    ctx.fill();
+  }
   // Gear behind the face.
   if (f.gear.includes('hair')) {
     for (let i = 0; i < 4; i++) {
@@ -384,8 +502,9 @@ function drawHead(ctx: Ctx, L: Look, f: FigDraw, w: number): void {
   const ex1 = 8 * u;
   const ex2 = 32 * u;
   const ey = -8 * u;
-  ctx.fillStyle = f.color;
-  ctx.lineWidth = Math.max(3, w * 0.42);
+  ctx.fillStyle = feat;
+  ctx.strokeStyle = feat;
+  ctx.lineWidth = Math.max(3, w * (toon ? 0.34 : 0.42));
   const closed = f.blink || f.face === 'sleep' || f.face === 'laugh';
   if (closed) {
     for (const x of [ex1, ex2]) {
@@ -397,6 +516,28 @@ function drawHead(ctx: Ctx, L: Look, f: FigDraw, w: number): void {
       }
       ctx.stroke();
     }
+  } else if (toon) {
+    // Eye whites with pupils looking the way the figure faces (tiny pupils when shocked).
+    const shock = f.face === 'shock';
+    const pr = (shock ? 3.6 : 5.6) * u;
+    for (const x of [ex1 - 2 * u, ex2 + 1 * u]) {
+      ctx.beginPath();
+      ctx.ellipse(x, ey, (shock ? 12.5 : 11) * u, (shock ? 14.5 : 12.5) * u, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      const dx = shock ? 0 : (f.dart?.x ?? 0) * u;
+      const dy = shock ? 0 : (f.dart?.y ?? 0) * u;
+      ctx.arc(x + (shock ? 0 : 3.5 * u) + dx, ey + (f.face === 'sad' ? 3 * u : 1 * u) + dy, pr, 0, Math.PI * 2);
+      ctx.fillStyle = feat;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x + (shock ? 1 : 5) * u + dx, ey - 1.5 * u + dy, pr * 0.35, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fill();
+    }
+    ctx.fillStyle = feat;
   } else {
     const er = (f.face === 'shock' ? 9.5 : 6.8) * u;
     for (const x of [ex1, ex2]) {
@@ -417,10 +558,14 @@ function drawHead(ctx: Ctx, L: Look, f: FigDraw, w: number): void {
       ctx.stroke();
     }
   };
-  if (f.face === 'angry') brow(-4, 6, 16);
-  else if (f.face === 'sad') brow(6, -3, 16);
-  else if (f.face === 'shock') brow(0, 0, 26);
-  else if (f.face === 'focus') brow(0, 0, 14);
+  if (toon) ctx.lineWidth = Math.max(3.5, w * 0.42);
+  const lift = (toon ? 8 : 0) + (f.browUp ?? 0) * 6;
+  if (f.face === 'angry') brow(-4, 6, 16 + lift);
+  else if (f.face === 'sad') brow(6, -3, 16 + lift);
+  else if (f.face === 'shock') brow(0, 0, 26 + lift);
+  else if (f.face === 'focus') brow(0, 0, 14 + lift);
+  else if (toon && !closed) brow(1, 0, 18 + lift);
+  if (toon) ctx.lineWidth = Math.max(3, w * 0.34);
   // Mouth.
   const mx = 22 * u;
   const my = 26 * u;
@@ -441,11 +586,42 @@ function drawHead(ctx: Ctx, L: Look, f: FigDraw, w: number): void {
     ctx.stroke();
   } else if (f.face === 'shock') {
     ctx.ellipse(mx, my + 2 * u, 8 * u, 11 * u, 0, 0, Math.PI * 2);
+    if (toon) ctx.fill();
+    else ctx.stroke();
+  } else if (toon && f.face === 'angry') {
+    // Gritted teeth.
+    rrect(ctx, mx - 16 * u, my - 7 * u, 32 * u, 15 * u, 4 * u);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(mx - 16 * u, my + 0.5 * u);
+    ctx.lineTo(mx + 16 * u, my + 0.5 * u);
+    for (const x of [-8, 0, 8]) {
+      ctx.moveTo(mx + x * u, my - 7 * u);
+      ctx.lineTo(mx + x * u, my + 8 * u);
+    }
     ctx.stroke();
   } else {
     ctx.moveTo(mx - 9 * u, my);
     ctx.lineTo(mx + 9 * u, my);
     ctx.stroke();
+  }
+  // Tears running down from the eyes.
+  if (f.tear) {
+    for (let i = 0; i < 2; i++) {
+      const k = ((boil / 8) * 0.9 + i * 0.5) % 1;
+      const x = (i ? ex2 + 6 : ex1 - 10) * u;
+      const y = ey + (14 + k * 46) * u;
+      ctx.globalAlpha = 1 - k * 0.6;
+      ctx.fillStyle = '#4FB3FF';
+      ctx.beginPath();
+      ctx.moveTo(x, y - 9 * u);
+      ctx.quadraticCurveTo(x + 7 * u, y + 3 * u, x, y + 6 * u);
+      ctx.quadraticCurveTo(x - 7 * u, y + 3 * u, x, y - 9 * u);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
   }
   // Gear on top.
   if (f.gear.includes('glasses')) {
@@ -632,6 +808,27 @@ function drawBackProps(ctx: Ctx, st: Stage, props: StickProp[], poses: StickPose
       inkPath(ctx, [{ x: seat.x + 52 * sl.s, y: seat.y }, at(sl, 56, 0)], 52 + k, 1.5);
       inkPath(ctx, [{ x: seat.x - 70 * sl.s, y: seat.y }, at(sl, -80, 330)], 53 + k, 1.5);
     }
+    // A backpack behind the body.
+    const jb = st.joints[k];
+    if (has('bag') && jb) {
+      const ux = (jb.neck.x - jb.hip.x) / SPINE / sl.s;
+      const uy = (jb.neck.y - jb.hip.y) / SPINE / sl.s;
+      const c = { x: lerp(jb.hip.x, jb.neck.x, 0.55) - 62 * sl.s - uy * 0, y: lerp(jb.hip.y, jb.neck.y, 0.55) };
+      ctx.save();
+      ctx.translate(c.x, c.y);
+      ctx.rotate(Math.atan2(ux, -uy));
+      rrect(ctx, -52 * sl.s, -95 * sl.s, 92 * sl.s, 190 * sl.s, 26 * sl.s);
+      ctx.fillStyle = '#7A5230';
+      ctx.fill();
+      ctx.lineWidth = Math.max(3, lw * 0.6 * sl.s);
+      ctx.strokeStyle = CLOTH_LINE;
+      ctx.stroke();
+      rrect(ctx, -44 * sl.s, 10 * sl.s, 76 * sl.s, 60 * sl.s, 12 * sl.s);
+      ctx.fillStyle = '#5E3E22';
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
     const chart = has('chart');
     if (chart) {
       const x0 = sl.x + 150 * sl.s;
@@ -760,6 +957,107 @@ function drawFrontProps(ctx: Ctx, st: Stage, props: StickProp[]): void {
       const phh = 96 * sl.s;
       screenBox(ctx, st, c.x - pw / 2, c.y - phh * 0.8, pw, phh, ph.value, 120 + k);
     }
+    const s = sl.s;
+    const torch = has('torch');
+    if (torch) {
+      // A flashlight along the forearm, its beam flickering ahead.
+      const a = Math.atan2(j.h1.y - j.e1.y, j.h1.x - j.e1.x);
+      const dir = { x: Math.cos(a), y: Math.sin(a) };
+      const tip = add(j.h1, dir, 34 * s);
+      const flick = 0.75 + 0.25 * Math.sin(t * 31) * (Math.sin(t * 1.7) > 0.8 ? 1 : 0);
+      const reach = 620 * s;
+      const n = { x: -dir.y, y: dir.x };
+      const g = ctx.createLinearGradient(tip.x, tip.y, tip.x + dir.x * reach, tip.y + dir.y * reach);
+      g.addColorStop(0, `rgba(255,236,150,${(L.light ? 0.85 : 0.55) * flick})`);
+      g.addColorStop(1, 'rgba(255,240,170,0)');
+      ctx.save();
+      if (!L.light) ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(tip.x + n.x * 14 * s, tip.y + n.y * 14 * s);
+      ctx.lineTo(tip.x + dir.x * reach + n.x * 170 * s, tip.y + dir.y * reach + n.y * 170 * s);
+      ctx.lineTo(tip.x + dir.x * reach - n.x * 170 * s, tip.y + dir.y * reach - n.y * 170 * s);
+      ctx.lineTo(tip.x - n.x * 14 * s, tip.y - n.y * 14 * s);
+      ctx.fill();
+      ctx.restore();
+      inkStyle(ctx, CLOTH_LINE, 30 * s);
+      inkPath(ctx, [add(j.h1, dir, -18 * s), tip], 160 + k, 0);
+      inkStyle(ctx, '#FFE68A', 14 * s);
+      inkPath(ctx, [add(tip, dir, -4 * s), tip], 161 + k, 0);
+    }
+    const held = (c: P, draw: () => void): void => {
+      ctx.save();
+      ctx.translate(c.x, c.y);
+      ctx.scale(s, s);
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = CLOTH_LINE;
+      draw();
+      ctx.restore();
+    };
+    if (has('bottle'))
+      held(j.h2, () => {
+        rrect(ctx, -16, -72, 32, 84, 10);
+        ctx.fillStyle = 'rgba(120,200,255,0.85)';
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#2F6FD6';
+        ctx.fillRect(-10, -88, 20, 16);
+        ctx.strokeRect(-10, -88, 20, 16);
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.fillRect(-9, -60, 6, 50);
+      });
+    if (has('food'))
+      held(j.h2, () => {
+        rrect(ctx, -26, -60, 52, 66, 8);
+        ctx.fillStyle = '#C8CDD4';
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = L.hi;
+        ctx.fillRect(-26, -46, 52, 32);
+        ctx.strokeRect(-26, -46, 52, 32);
+      });
+    if (has('key'))
+      held(j.h1, () => {
+        ctx.translate(0, -24);
+        ctx.rotate(-0.6 + Math.sin(t * 3) * 0.08);
+        ctx.fillStyle = '#F2C230';
+        ctx.beginPath();
+        ctx.arc(0, -26, 18, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillRect(-5, -10, 10, 52);
+        ctx.strokeRect(-5, -10, 10, 52);
+        ctx.fillRect(5, 24, 14, 8);
+        ctx.fillRect(5, 36, 10, 6);
+        // A glint.
+        const gk = (t * 0.8) % 1;
+        if (gk < 0.2) {
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.moveTo(-14, -40);
+          ctx.lineTo(-14 + 16, -40 + 16);
+          ctx.moveTo(2, -40);
+          ctx.lineTo(-14, -24);
+          ctx.stroke();
+        }
+      });
+    if (has('money'))
+      held(j.h1, () => {
+        for (let i = 0; i < 4; i++) {
+          ctx.save();
+          ctx.rotate(-0.5 + i * 0.22);
+          rrect(ctx, -6, -86, 46, 82, 5);
+          ctx.fillStyle = '#5FB26A';
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = '#2E7D3B';
+          ctx.font = '900 30px Inter, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('$', 17, -36);
+          ctx.restore();
+        }
+      });
     const sign = has('sign');
     if (sign) {
       const c = { x: j.h1.x + 10 * sl.s, y: j.h1.y - 120 * sl.s };
@@ -881,7 +1179,54 @@ function texture(L: Look): HTMLCanvasElement {
   return c;
 }
 
-function background(ctx: Ctx, L: Look, chalk: boolean): void {
+/** The dusk sky: a sunset over a dark field, a low sun, a few early stars, drifting slowly. */
+function dusk(ctx: Ctx, t: number): void {
+  const sky = ctx.createLinearGradient(0, -H, 0, GROUND);
+  sky.addColorStop(0, '#160E2E');
+  sky.addColorStop(0.45, '#3A1F55');
+  sky.addColorStop(0.75, '#B14E6A');
+  sky.addColorStop(0.93, '#F08A5D');
+  sky.addColorStop(1, '#FFC27A');
+  ctx.fillStyle = sky;
+  ctx.fillRect(-W, -H, W * 3, GROUND + H);
+  const sx = W * 0.72;
+  const sy = GROUND - 150;
+  const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, 520);
+  glow.addColorStop(0, 'rgba(255,214,150,0.85)');
+  glow.addColorStop(0.25, 'rgba(255,170,110,0.35)');
+  glow.addColorStop(1, 'rgba(255,150,100,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(-W, -H, W * 3, GROUND + H);
+  ctx.fillStyle = '#FFE3B0';
+  ctx.beginPath();
+  ctx.arc(sx, sy, 120, 0, Math.PI * 2);
+  ctx.fill();
+  for (let i = 0; i < 40; i++) {
+    const x = ((nz(i, 11) + 1) / 2) * W;
+    const y = ((nz(i, 12) + 1) / 2) * GROUND * 0.55;
+    ctx.fillStyle = `rgba(255,240,220,${0.25 + 0.35 * Math.abs(Math.sin(t * 1.3 + i))})`;
+    ctx.fillRect(x, y, 3, 3);
+  }
+  // Far hills, then the dark field the figures stand on.
+  ctx.fillStyle = '#4A2440';
+  ctx.beginPath();
+  ctx.moveTo(-W, GROUND);
+  for (let x = -W; x <= W * 2; x += 60) ctx.lineTo(x, GROUND - 70 - 40 * Math.sin(x * 0.006) - 25 * Math.sin(x * 0.017));
+  ctx.lineTo(W * 2, GROUND);
+  ctx.closePath();
+  ctx.fill();
+  const field = ctx.createLinearGradient(0, GROUND, 0, H);
+  field.addColorStop(0, '#2A1530');
+  field.addColorStop(1, '#120A18');
+  ctx.fillStyle = field;
+  ctx.fillRect(-W, GROUND, W * 3, H * 2);
+}
+
+function background(ctx: Ctx, L: Look, chalk: boolean, t = 0): void {
+  if (L.dusk) {
+    dusk(ctx, t);
+    return;
+  }
   ctx.fillStyle = ctx.createPattern(texture(L), 'repeat')!;
   ctx.fillRect(-W, -H, W * 3, H * 3);
   if (chalk) {
@@ -942,7 +1287,7 @@ function bigWord(ctx: Ctx, L: Look, text: string, local: number, y: number): voi
 }
 
 /** Title captions: the line as plain text at the top, *word* in the highlight colour (wordless versus clips). */
-function titleCaption(ctx: Ctx, L: Look, text: string, alpha: number): void {
+function titleCaption(ctx: Ctx, L: Look, text: string, alpha: number, top = 300): void {
   const raw = text.trim();
   if (!raw) return;
   const plain = raw.replace(/\*/g, '');
@@ -964,14 +1309,40 @@ function titleCaption(ctx: Ctx, L: Look, text: string, alpha: number): void {
       const words = line.split(' ');
       const widths = words.map((w) => ctx.measureText(w).width);
       let x = W / 2 - (widths.reduce((a, b) => a + b, 0) + space * (words.length - 1)) / 2;
-      const y = 300 + c.lh * (i + 0.8);
+      const y = top + c.lh * (i + 0.8);
       words.forEach((w, k) => {
-        ctx.fillStyle = hot[n++] ? L.hi : L.ink;
+        ctx.fillStyle = hot[n++] ? L.hi : L.text;
         ctx.fillText(w, x, y);
         x += widths[k] + space;
       });
     });
   });
+}
+
+/** Box captions: the line in a white rounded box at the top, dark text, *word* in the highlight colour. */
+function boxCaption(ctx: Ctx, L: Look, text: string, alpha: number, top: number): void {
+  const plain = text.trim().replace(/\*/g, '');
+  if (!plain) return;
+  const c = fit(ctx, plain, { maxW: 920, maxH: 300, max: 78, min: 40, maxLines: 3, weight: 800, family: FONT.meme, lh: 1.14 });
+  font(ctx, c.size, 800, FONT.meme);
+  const tw = Math.max(...c.lines.map((l) => ctx.measureText(l).width));
+  const bw = Math.min(W - 80, tw + 80);
+  const bh = c.lines.length * c.lh + 44;
+  withAlpha(ctx, alpha, () => {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.28)';
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetY = 6;
+    rrect(ctx, W / 2 - bw / 2, top - 22, bw, bh, 26);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fill();
+    ctx.restore();
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#141414';
+    rrect(ctx, W / 2 - bw / 2, top - 22, bw, bh, 26);
+    ctx.stroke();
+  });
+  titleCaption(ctx, { ...L, text: '#141414' }, text, alpha, top - 4);
 }
 
 function labels(ctx: Ctx, L: Look, env: Env, slots: Slot[], win: number): void {
@@ -982,9 +1353,209 @@ function labels(ctx: Ctx, L: Look, env: Env, slots: Slot[], win: number): void {
     const c = fit(ctx, n.toUpperCase(), { maxW: 440, maxH: 120, max: 54, min: 30, maxLines: 2, weight: 900, family: FONT.meme });
     font(ctx, c.size, 900, FONT.meme);
     ctx.textAlign = 'center';
-    ctx.fillStyle = win === k ? L.hi : L.ink;
+    ctx.fillStyle = win === k ? L.hi : L.text;
     const y0 = GROUND - FIG_H * sl.s - 60 - (c.lines.length - 1) * c.lh;
     c.lines.forEach((l, i) => ctx.fillText(l, sl.x, y0 + i * c.lh));
+  });
+}
+
+// ── Survival series: the HUD, rule / fact cards, the vote ─────────────────────
+const HUD_Y = 268;
+
+/** Day, time and a phone battery across the top, the way the survival stickman pages show them. */
+function hud(ctx: Ctx, L: Look, h: { day: string; clock: string; battery: number }, changed: boolean, local: number): void {
+  const bump = changed ? 1 + 0.12 * Math.sin(Math.PI * clamp01(local / 0.35)) : 1;
+  const panel = 'rgba(10,10,14,0.82)';
+  // The day, big, on the left.
+  scaled(ctx, bump, 190, HUD_Y, () => {
+    font(ctx, 54, 900, FONT.meme);
+    const label = `DAY ${h.day}`;
+    const w = ctx.measureText(label).width + 56;
+    rrect(ctx, 80, HUD_Y - 42, w, 84, 20);
+    ctx.fillStyle = L.hi;
+    ctx.fill();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#111111';
+    ctx.fillText(label, 108, HUD_Y + 3);
+  });
+  // The clock.
+  if (h.clock) {
+    font(ctx, 46, 700, FONT.mono);
+    const w = ctx.measureText(h.clock).width + 48;
+    rrect(ctx, W / 2 - w / 2 + 40, HUD_Y - 36, w, 72, 18);
+    ctx.fillStyle = panel;
+    ctx.fill();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(h.clock, W / 2 + 40, HUD_Y + 2);
+  }
+  // A phone battery: red and blinking when it is nearly gone.
+  if (h.battery >= 0) {
+    const x = 830;
+    const low = h.battery <= 20;
+    rrect(ctx, x - 20, HUD_Y - 36, 190, 72, 18);
+    ctx.fillStyle = panel;
+    ctx.fill();
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 5;
+    rrect(ctx, x, HUD_Y - 18, 70, 36, 8);
+    ctx.stroke();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(x + 72, HUD_Y - 8, 7, 16);
+    const on = !low || Math.floor(local * 3) % 2 === 0;
+    if (on) {
+      ctx.fillStyle = low ? '#FF3B30' : h.battery <= 50 ? '#FFC400' : '#34C759';
+      rrect(ctx, x + 6, HUD_Y - 12, Math.max(4, 58 * (h.battery / 100)), 24, 4);
+      ctx.fill();
+    }
+    font(ctx, 34, 700, FONT.mono);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = low ? '#FF6B60' : '#FFFFFF';
+    ctx.fillText(`${h.battery}%`, x + 92, HUD_Y + 2);
+  }
+  ctx.textBaseline = 'alphabetic';
+}
+
+/** The rule card or fact card: a label tab and the line, sliding down under the HUD. */
+function infoCard(ctx: Ctx, L: Look, kind: 'rule' | 'fact', text: string, n: number, local: number, top: number): void {
+  const p = easeBack(prog(local, 0.05, 0.35));
+  if (p <= 0) return;
+  const label = kind === 'rule' ? (n > 0 ? `RULE #${n}` : 'RULE') : 'FACT';
+  const c = fit(ctx, text, { maxW: 820, maxH: 220, max: 58, min: 34, maxLines: 4, weight: 800, family: FONT.meme, lh: 1.15 });
+  const h = c.lines.length * c.lh + 110;
+  ctx.save();
+  ctx.translate(0, (1 - clamp01(p)) * -60);
+  withAlpha(ctx, clamp01(p * 1.6), () => {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 24;
+    ctx.shadowOffsetY = 8;
+    rrect(ctx, 80, top, W - 160, h, 26);
+    ctx.fillStyle = kind === 'rule' ? '#FFF7E6' : '#ECF6FF';
+    ctx.fill();
+    ctx.restore();
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = kind === 'rule' ? '#111111' : '#0B4A86';
+    rrect(ctx, 80, top, W - 160, h, 26);
+    ctx.stroke();
+    font(ctx, 34, 900, FONT.meme);
+    const lw = ctx.measureText(label).width + 40;
+    rrect(ctx, 110, top - 26, lw, 52, 14);
+    ctx.fillStyle = kind === 'rule' ? L.hi : '#2F80ED';
+    ctx.fill();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = kind === 'rule' ? '#111111' : '#FFFFFF';
+    ctx.fillText(label, 130, top + 1);
+    font(ctx, c.size, 800, FONT.meme);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#111111';
+    c.lines.forEach((l, i) => ctx.fillText(l, W / 2, top + 62 + c.lh * (i + 0.8)));
+  });
+  ctx.restore();
+}
+
+/** The vote: two options at the top, A and B, and the line that asks for it. */
+function voteCards(ctx: Ctx, L: Look, value: string, local: number, top: number): void {
+  const [a, b] = value.split('/').map((x) => x.trim());
+  const opts = [a || 'Option A', b || 'Option B'];
+  opts.forEach((text, k) => {
+    const p = easeBack(prog(local, 0.15 + k * 0.25, 0.35));
+    if (p <= 0) return;
+    const y = top + k * 170;
+    const c = fit(ctx, text, { maxW: 700, maxH: 110, max: 52, min: 30, maxLines: 2, weight: 800, family: FONT.meme, lh: 1.1 });
+    scaled(ctx, lerp(0.8, 1, clamp01(p)), W / 2, y + 70, () =>
+      withAlpha(ctx, clamp01(p * 1.6), () => {
+        rrect(ctx, 80, y, W - 160, 140, 28);
+        ctx.fillStyle = 'rgba(12,12,16,0.88)';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(160, y + 70, 46, 0, Math.PI * 2);
+        ctx.fillStyle = k ? '#2F80ED' : L.hi;
+        ctx.fill();
+        font(ctx, 56, 900, FONT.meme);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = k ? '#FFFFFF' : '#111111';
+        ctx.fillText(k ? 'B' : 'A', 160, y + 72);
+        font(ctx, c.size, 800, FONT.meme);
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#FFFFFF';
+        const h = c.lines.length * c.lh;
+        c.lines.forEach((l, i) => ctx.fillText(l, 236, y + 70 - h / 2 + c.lh * (i + 0.5)));
+      }),
+    );
+  });
+  const q = easeOut(prog(local, 0.75, 0.3));
+  withAlpha(ctx, q, () => {
+    font(ctx, 46, 900, FONT.meme);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 10;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+    ctx.strokeText('COMMENT A OR B', W / 2, top + 380);
+    ctx.fillStyle = L.hi;
+    ctx.fillText('COMMENT A OR B', W / 2, top + 380);
+  });
+  ctx.textBaseline = 'alphabetic';
+}
+
+// ── Life in the scene ─────────────────────────────────────────────────────
+/** Small people walking by on the back line of a street, city or park (muted, so they stay background). */
+function passersBy(ctx: Ctx, L: Look, pal: Pal, t: number, seed: number, cartoon: boolean, place: string): void {
+  const back = place === 'park' ? 110 : 150;
+  const colours = ['#2F6FD6', '#D94A3A', '#3F9B5A', '#F2C230'];
+  for (let e = 0; e < 3; e++) {
+    const s = 0.4 + 0.05 * e;
+    const speed = 95 + 35 * e;
+    const dir = e % 2 ? -1 : 1;
+    const span = W + 500;
+    const u = ((t * speed + e * 611 + seed * 7) % span) - 250;
+    const x = dir > 0 ? u : W - u;
+    const tw = Math.floor((t + e * 0.37) * 15) / 15;
+    let j = jointsOf(moving('walk', tw + e, false), { x, s });
+    if (cartoon) j = cartoonHead(j);
+    const f: FigDraw = { j, pose: 'walk', face: 'neutral', mouth: 0, blink: false, color: pal.line, gear: e === 1 ? ['bun'] : [], seed: 700 + e * 13, shirt: cartoon ? mixHex(colours[(e + seed) % 4], L.bg, 0.4) : undefined };
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.translate(0, -back);
+    if (dir < 0) {
+      ctx.translate(x * 2, 0);
+      ctx.scale(-1, 1);
+    }
+    drawFigure(ctx, { ...L, lw: L.lw * 0.8 }, f);
+    ctx.restore();
+  }
+}
+
+/** Dust kicked up behind running feet, and a puff where a fall lands. */
+function dust(ctx: Ctx, L: Look, figs: FigDraw[], poses: StickPose[], lc: number, t: number): void {
+  const col = L.light ? '150,130,100' : L.dusk ? '255,200,170' : '220,220,220';
+  const puff = (x: number, y: number, r: number, a: number): void => {
+    ctx.fillStyle = `rgba(${col},${a})`;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  figs.forEach((f, k) => {
+    const s = f.j.s;
+    if (poses[k] === 'run')
+      for (let i = 0; i < 4; i++) {
+        const u = (t * 2.4 + i / 4) % 1;
+        puff(Math.min(f.j.f1.x, f.j.f2.x) - u * 150 * s, GROUND - 12 * s - u * 40 * s, (12 + 30 * u) * s, 0.45 * (1 - u));
+      }
+    if (poses[k] === 'fall' && lc > 0.28 && lc < 1) {
+      const u = (lc - 0.28) / 0.72;
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI + (i / 5) * Math.PI;
+        puff(f.j.hip.x + Math.cos(a) * (60 + 160 * u) * s, GROUND - 10 + Math.sin(a) * 50 * u * s, (18 + 26 * u) * s, 0.5 * (1 - u));
+      }
+    }
   });
 }
 
@@ -997,15 +1568,53 @@ function seedOf(s: string): number {
   return (h >>> 0) % 997;
 }
 
-function gearOf(env: Env): [string[], string[]] {
-  const out: [string[], string[]] = [[], []];
+function gearOf(env: Env): [string[], string[], string[]] {
+  const out: [string[], string[], string[]] = [[], [], []];
   for (const part of str(env.fields, 'gear').split(/[;,]/)) {
-    const m = /^\s*(?:([ab])\s*:\s*)?([a-z]+)\s*$/i.exec(part);
+    const m = /^\s*(?:([abc])\s*:\s*)?([a-z]+)\s*$/i.exec(part);
     if (!m) continue;
     const g = m[2].toLowerCase();
-    if ((STICK_GEAR as readonly string[]).includes(g)) out[m[1]?.toLowerCase() === 'b' ? 1 : 0].push(g);
+    if ((STICK_GEAR as readonly string[]).includes(g)) out[Math.max(0, 'abc'.indexOf(m[1]?.toLowerCase() ?? 'a'))].push(g);
   }
   return out;
+}
+
+/** A steady 0..1 value from a number (glances, brow pops). */
+function h01(x: number): number {
+  const v = Math.sin(x * 127.1 + 311.7) * 43758.5453;
+  return v - Math.floor(v);
+}
+
+/** Behind a 3D place: the sky (outside it shows; inside the walls cover it). */
+function sky3d(ctx: Ctx, look: Stick3dLook, pal: Pal, t: number): void {
+  if (look === 'dusk') {
+    ctx.save();
+    dusk(ctx, t);
+    ctx.restore();
+    return;
+  }
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  if (look === 'night') {
+    g.addColorStop(0, '#0E1230');
+    g.addColorStop(1, '#2A3466');
+  } else {
+    g.addColorStop(0, '#8FCBEF');
+    g.addColorStop(0.6, '#CFEAF6');
+    g.addColorStop(1, '#F6EEDC');
+  }
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  if (look === 'night') nightSky(ctx, pal, t);
+}
+
+/** Soft shadows under the figures standing in a 3D place. */
+function shadows(ctx: Ctx, slots: Slot[]): void {
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  for (const sl of slots) {
+    ctx.beginPath();
+    ctx.ellipse(sl.x, GROUND + 4, 120 * sl.s, 20 * sl.s, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 function draw(ctx: Ctx, env: Env): void {
@@ -1021,23 +1630,47 @@ function draw(ctx: Ctx, env: Env): void {
   const tc = Math.floor(t * 15) / 15;
   const lc = tc - b.start;
   boil = Math.floor(t * 8);
-  const duo = str(env.fields, 'labels').includes(';') || beats.some((x) => x.visual.includes('/'));
-  const n = duo ? 2 : 1;
-  const props = propsOf(b, duo);
-  const slots = slotsOf(props, duo).slice(0, n);
+  // One, two (versus) or three figures: by the poses ("a/b/c") and the names in labels.
+  const names = str(env.fields, 'labels').split(';').filter((x) => x.trim()).length;
+  const n = beats.some((x) => x.visual.split('/').length > 2) || names > 2 ? 3 : beats.some((x) => x.visual.includes('/')) || names > 1 ? 2 : 1;
+  const duo = n > 1;
+  const props = propsOf(b, n);
+  const slots = slotsOf(props, n).slice(0, n);
   const prev = i > 0 ? beats[i - 1] : null;
-  const cut = !prev || !sameSlots(slots, slotsOf(propsOf(prev, duo), duo).slice(0, n));
+  const cut = !prev || !sameSlots(slots, slotsOf(propsOf(prev, n), n).slice(0, n));
   const seed = seedOf(str(env.fields, 'beats').slice(0, 60));
-  const who = b.tags.includes('who=b') && duo ? 1 : 0;
+  const whoOf = (bk: StoryBeat): number => Math.min(n - 1, bk.tags.includes('who=c') ? 2 : bk.tags.includes('who=b') ? 1 : 0);
+  const who = whoOf(b);
   const winTag = b.tags.find((x) => x === 'win' || x.startsWith('win='));
-  const win = winTag ? (winTag === 'win=b' && duo ? 1 : 0) : -1;
+  const win = winTag ? Math.min(n - 1, winTag === 'win=c' ? 2 : winTag === 'win=b' ? 1 : 0) : -1;
   const lit = win >= 0 && local >= 0.15;
   const gear = gearOf(env);
   const poses = stickPoses(b.visual);
   const talking = !!b.say && b.voDur > 0 && local >= b.voStart && local <= b.voStart + b.voDur;
 
+  // The place, the weather, the cartoon look.
+  const tagsSoFar = beats.slice(0, i + 1).map((x) => x.tags);
+  const place = stickLast(tagsSoFar, 'set');
+  const placeBefore = i > 0 ? stickLast(tagsSoFar.slice(0, -1), 'set') : place;
+  const weather = stickLast(tagsSoFar, 'weather');
+  const pal = palOf(L, weather === 'night');
+  const whip = place !== placeBefore ? 1 - easeOut(prog(local, 0, 0.34)) : 0;
+  const cartoon = (str(env.fields, 'figure') || 'cartoon') !== 'stick';
+  const shirts = (str(env.fields, 'shirts') || 'blue;orange').split(';').map((x) => {
+    const v = x.trim().toLowerCase();
+    return /^#[0-9a-f]{6}$/.test(v) ? v : (STICK_SHIRTS[v] ?? '');
+  });
+  const shirtOf = (k: number): string => shirts[k] || [STICK_SHIRTS.blue, STICK_SHIRTS.orange, STICK_SHIRTS.green][k] || STICK_SHIRTS.blue;
+
+  // Walking in or out: the speaker walks from / to the side of the frame.
+  const enterTo = b.tags.find((x) => x.startsWith('enter='))?.slice(6);
+  const exitTo = b.tags.find((x) => x.startsWith('exit='))?.slice(5);
+  const walkT = Math.min(1.0, b.dur * 0.45);
+
   // Each figure's pose: moving into this beat's pose from the last one's.
   const figs: FigDraw[] = [];
+  const flips: Array<number | undefined> = [];
+  const moved: boolean[] = [];
   for (let k = 0; k < n; k++) {
     const name = poses[k];
     const speaking = talking && k === who;
@@ -1050,44 +1683,146 @@ function draw(ctx: Ctx, env: Env): void {
         p = mix(old, cur, antic(prog(lc, 0, 0.3)), antic(prog(lc, 0.05, 0.3)), antic(prog(lc, 0.08, 0.28)));
       }
     }
-    const j = jointsOf(p, slots[k]);
+    let slot = slots[k];
+    let flip: number | undefined;
+    let walking = false;
+    if (k === who && (enterTo || exitTo)) {
+      const walkPose = moving('walk', tc, false);
+      if (enterTo && lc < walkT + 0.3) {
+        const u = prog(lc, 0, walkT);
+        const side = enterTo === 'left' ? -1 : 1;
+        const dist = side < 0 ? slot.x + 260 * slot.s : W - slot.x + 260 * slot.s;
+        slot = { ...slot, x: slot.x + side * dist * (1 - easeOut(u) * 0.15 - u * 0.85) };
+        walking = u < 1;
+        p = mix(walkPose, cur, antic(prog(lc, walkT - 0.08, 0.3)), antic(prog(lc, walkT - 0.04, 0.3)), antic(prog(lc, walkT, 0.28)));
+        if (walking && side > 0) flip = slot.x;
+      }
+      if (exitTo && lc > b.dur - walkT - 0.25) {
+        const u = prog(lc, b.dur - walkT, walkT);
+        const side = exitTo === 'left' ? -1 : 1;
+        const dist = side < 0 ? slot.x + 260 * slot.s : W - slot.x + 260 * slot.s;
+        slot = { ...slot, x: slot.x + side * dist * u * u * 0.4 + side * dist * u * 0.6 };
+        walking = u > 0;
+        p = mix(cur, walkPose, antic(prog(lc, b.dur - walkT - 0.25, 0.25)), antic(prog(lc, b.dur - walkT - 0.22, 0.25)), antic(prog(lc, b.dur - walkT - 0.2, 0.25)));
+        if (walking && side < 0) flip = slot.x;
+      }
+    }
+    // Held things are held up where they can be seen: a torch aimed ahead, a key or cash shown, food or water at the chest.
+    if (!walking && !SEATED.includes(name) && name !== 'fall') {
+      const mine = props.filter((x) => x.who === k).map((x) => x.kind);
+      const hold = (cur2: [number, number], to: [number, number]): [number, number] => [lerp(cur2[0], to[0], 0.85), lerp(cur2[1], to[1], 0.85)];
+      if (mine.includes('torch')) p = { ...p, a1: hold(p.a1, [78, 86]) };
+      else if (mine.includes('key') || mine.includes('money')) p = { ...p, a1: hold(p.a1, [38, 128]) };
+      if (mine.includes('bottle') || mine.includes('food')) p = { ...p, a2: hold(p.a2, [28, 118]) };
+    }
+    let j = jointsOf(p, slot);
+    if (cartoon) j = cartoonHead(j);
     const per = 3.3 + k * 0.7;
     const blink = ((tc + (seed % 7) + k * 1.3) % per) < 0.13;
     const mouth = speaking ? mouthAt(b.say, lc, b.voStart, b.voDur) : 0;
-    figs.push({ j, pose: name, face: p.face, mouth, blink, color: lit && win === k ? L.hi : L.ink, gear: gear[k], seed: seed + k * 50 });
+    const tear = props.some((x) => x.kind === 'tear' && x.who === k) || (cartoon && p.face === 'sad' && name === 'sad');
+    // Faces never sit still: the eyes glance somewhere new every 0.3-0.8 s, the brows pop up now and then,
+    // and a talker's (or a listener's) easy expression shifts between neutral, a smile and focus.
+    const ph = tc + k * 0.37;
+    const segF = ph / 0.55 + 0.35 * Math.sin(ph * 1.7 + seed + k);
+    const segN = Math.floor(segF);
+    const segU = segF - segN;
+    const dart = { x: (h01(segN * 3.1 + k * 7 + seed) - 0.4) * 7, y: (h01(segN * 5.7 + k * 3 + seed) - 0.5) * 4 };
+    const browUp = h01(segN * 9.3 + k + seed) > 0.7 ? Math.sin(Math.PI * Math.min(1, segU * 2.2)) : 0;
+    let face = p.face;
+    if (cartoon && !walking && (face === 'neutral' || face === 'happy')) {
+      const r = h01(segN * 2.3 + k * 5 + seed);
+      if (speaking) face = r > 0.6 ? 'happy' : r > 0.45 ? 'focus' : face;
+      else if (k !== who) face = r > 0.8 ? 'happy' : face;
+    }
+    figs.push({ j, pose: walking ? 'walk' : name, face, mouth, blink, color: lit && win === k ? L.hi : L.ink, gear: gear[k], seed: seed + k * 50, shirt: cartoon ? (lit && win === k ? L.hi : shirtOf(k)) : undefined, tear, dart: cartoon ? dart : undefined, browUp: cartoon ? browUp : 0 });
+    flips.push(flip);
+    moved.push(walking);
   }
 
   // Camera: wide, close on the speaker, or on one figure; push = a slow push-in; plus the beat's zoom / shake effects.
-  const cam = b.tags.find((x) => x.startsWith('cam='))?.slice(4) ?? 'wide';
-  const target = cam === 'b' && duo ? 1 : cam === 'a' ? 0 : cam === 'close' ? who : -1;
-  let z = 1;
-  let fx = W / 2;
-  let fy = H / 2;
-  if (target >= 0 && figs[target]) {
-    z = duo ? 1.35 : 1.5;
-    fx = slots[target].x;
-    // Frame it so the head lands just under the captions and the big word, feet still in shot.
-    const j = figs[target].j;
-    fy = j.head.y - j.r + (H / 2 - 770) / z;
+  // It glides from the last beat's framing to this one's instead of cutting, and never sits dead still.
+  const camOf = (bk: StoryBeat, atEnd: boolean): { z: number; fx: number; fy: number; target: number } => {
+    const sl = slotsOf(propsOf(bk, n), n).slice(0, n);
+    const c = bk.tags.find((x) => x.startsWith('cam='))?.slice(4) ?? 'wide';
+    const tg = c === 'c' && n > 2 ? 2 : c === 'b' && duo ? 1 : c === 'a' ? 0 : c === 'close' ? whoOf(bk) : -1;
+    let zz = 1;
+    let x = W / 2;
+    let y = H / 2;
+    if (tg >= 0 && sl[tg]) {
+      zz = n > 2 ? 1.55 : duo ? 1.35 : 1.5;
+      x = sl[tg].x;
+      // Frame it so the head lands just under the captions and the big word, feet still in shot.
+      let jj = jointsOf(moving(stickPoses(bk.visual)[tg], 0, false), sl[tg]);
+      if (cartoon) jj = cartoonHead(jj);
+      y = jj.head.y - jj.r + (H / 2 - 770) / zz;
+    }
+    if (bk.tags.includes('push')) zz *= 1 + 0.1 * easeInOut(atEnd ? 1 : prog(local, 0, bk.dur));
+    return { z: zz, fx: x, fy: y, target: tg };
+  };
+  const now = camOf(b, false);
+  const target = now.target;
+  let z = now.z;
+  let fx = now.fx;
+  let fy = now.fy;
+  if (prev && !whip) {
+    const was = camOf(prev, true);
+    const e = easeInOut(prog(local, 0, 0.6));
+    z = lerp(was.z, z, e);
+    fx = lerp(was.fx, fx, e);
+    fy = lerp(was.fy, fy, e);
   }
-  if (b.tags.includes('push')) z *= 1 + 0.1 * easeInOut(prog(local, 0, b.dur));
-  const settle = cut && i > 0 ? lerp(1.045, 1, easeOut(prog(local, 0, 0.18))) : 1;
+  z *= 1.04 + 0.025 * Math.sin(t * 0.31 + seed);
+  fx += 26 * Math.sin(t * 0.23 + seed);
+  fy += 10 * Math.sin(t * 0.17);
+  const settle = cut && i > 0 && !whip ? lerp(1.045, 1, easeOut(prog(local, 0, 0.18))) : 1;
   const v = fxView(b, local);
 
-  ctx.save();
-  background(ctx, L, str(env.fields, 'bg') === 'chalk');
-  ctx.restore();
-  ctx.save();
-  ctx.translate(W / 2, H / 2);
-  ctx.scale(z * settle, z * settle);
-  // Keep the zoomed view on the target without showing past the frame edges.
-  const cx = Math.min(W - W / (2 * z), Math.max(W / (2 * z), fx));
-  const cy = Math.min(H - H / (2 * z), Math.max(H / (2 * z), fy));
-  ctx.translate(-cx, -cy);
-  applyView(ctx, v);
-  const walking = poses.slice(0, n).some((p) => p === 'walk' || p === 'run');
-  ground(ctx, L, slots, walking, t);
-  const wasSeated = [0, 1].map((k) => !!prev && !cut && SEATED.includes(stickPoses(prev.visual)[k]));
+  // 2.5D: a place is a real 3D set the flat figures stand in, filmed by a camera that slowly orbits (the parallax).
+  const world3d = !!place && (str(env.fields, 'world') || '3d') === '3d' && str(env.fields, 'bg') !== 'chalk';
+  const walking = poses.slice(0, n).some((p, k) => (p === 'walk' || p === 'run') && !moved[k]);
+  if (world3d) {
+    const look: Stick3dLook = weather === 'night' ? 'night' : L.dusk ? 'dusk' : 'day';
+    const out = renderStick3d({
+      place,
+      look,
+      t,
+      local,
+      knock: b.tags.includes('knock'),
+      cam: { x: (fx - W / 2) / PX, y: (GROUND - fy) / PX, zoom: z * settle, yaw: 6 * Math.sin(t * 0.19 + seed) + 2.5 * Math.sin(t * 0.47), pitch: 3 + 1.5 * Math.sin(t * 0.29) },
+    });
+    ctx.save();
+    sky3d(ctx, look, pal, t);
+    applyView(ctx, v);
+    // A new place whips in from the right.
+    if (whip > 0) ctx.translate(whip * W * 0.95, 0);
+    ctx.drawImage(out.canvas, 0, 0, W, H);
+    ctx.translate(out.ox, out.oy);
+    ctx.scale(out.k, out.k);
+    ctx.translate(-W / 2, -GROUND);
+    if (b.tags.includes('crowd')) passersBy(ctx, L, pal, t, seed, cartoon, BUSY.includes(place) ? place : 'street');
+    shadows(ctx, slots);
+  } else {
+    ctx.save();
+    background(ctx, L, str(env.fields, 'bg') === 'chalk', t);
+    if (weather === 'night' && !INTERIOR.includes(place)) nightSky(ctx, pal, t);
+    ctx.restore();
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    ctx.scale(z * settle, z * settle);
+    // Keep the zoomed view on the target without showing past the frame edges.
+    const cx = Math.min(W - W / (2 * z), Math.max(W / (2 * z), fx));
+    const cy = Math.min(H - H / (2 * z), Math.max(H / (2 * z), fy));
+    ctx.translate(-cx, -cy);
+    applyView(ctx, v);
+    // A new place whips in from the right.
+    if (whip > 0) ctx.translate(whip * W * 0.95, 0);
+    if (place) drawSet(ctx, place, pal, { t, boil, pan: cx - W / 2, local, knock: b.tags.includes('knock') });
+    if (b.tags.includes('crowd')) passersBy(ctx, L, pal, t, seed, cartoon, BUSY.includes(place) ? place : 'street');
+    ground(ctx, L, slots, walking, t);
+  }
+  dust(ctx, L, figs, poses.slice(0, n), lc, t);
+  const wasSeated = [0, 1, 2].map((k) => !!prev && !cut && SEATED.includes(stickPoses(prev.visual)[k]));
   drawBackProps(ctx, { env, L, b, local, t, slots, joints: figs.map((f) => f.j), wasSeated }, props, poses.slice(0, n));
   // The winner gets a burst of lines when it lights up.
   if (lit) {
@@ -1105,18 +1840,42 @@ function draw(ctx: Ctx, env: Env): void {
         }
       });
   }
-  for (const f of figs) drawFigure(ctx, L, f);
+  figs.forEach((f, k) => {
+    const fl = flips[k];
+    if (fl === undefined) drawFigure(ctx, L, f);
+    else {
+      // Walking toward the left: the figure is drawn mirrored.
+      ctx.save();
+      ctx.translate(fl * 2, 0);
+      ctx.scale(-1, 1);
+      drawFigure(ctx, L, f);
+      ctx.restore();
+    }
+  });
   drawFrontProps(ctx, { env, L, b, local, t, slots, joints: figs.map((f) => f.j), wasSeated }, props);
   if (duo) labels(ctx, L, env, slots, lit ? win : -1);
   ctx.restore();
+  if (weather && weather !== 'night') weatherFx(ctx, weather, pal, t, local, b.tags.includes('weather=storm'));
+  whipLines(ctx, pal, whip);
 
-  // Words on top, outside the camera.
+  // Words on top, outside the camera. The survival HUD across the top; a rule, fact or vote card takes the captions' place.
   const mode = str(env.fields, 'captions') || 'words';
   const big = props.some((p) => p.kind === 'screen');
-  if (mode === 'title') {
+  const h = hudAt(str(env.fields, 'hud'), beats.slice(0, i + 1).map((x) => x.tags));
+  if (h) hud(ctx, L, h, b.tags.some((x) => /^(day|clock|battery)=/.test(x)) && i > 0, local);
+  const cardTop = h ? 380 : 300;
+  const card = props.find((p) => p.kind === 'rule' || p.kind === 'fact');
+  const vote = props.find((p) => p.kind === 'vote');
+  if (vote) voteCards(ctx, L, vote.value, local, cardTop);
+  else if (card) {
+    const n = card.kind === 'rule' ? beats.slice(0, i + 1).filter((x) => stickProps(x.b).some((p) => p.kind === 'rule')).length : 0;
+    infoCard(ctx, L, card.kind as 'rule' | 'fact', card.value.replace(/\*/g, ''), n, local, cardTop + 20);
+  } else if (mode === 'title' || mode === 'box') {
     const same = prev && prev.headline.trim() === b.headline.trim();
-    titleCaption(ctx, L, b.headline, same || i === 0 ? 1 : easeOut(prog(local, 0, 0.2)));
-  } else if (mode !== 'off') captions(ctx, env, b, local, big ? 400 : 430, L.hi);
+    const a = same || i === 0 ? 1 : easeOut(prog(local, 0, 0.2));
+    if (mode === 'box') boxCaption(ctx, L, b.headline, a, h ? 390 : 300);
+    else titleCaption(ctx, L, b.headline, a, h ? 370 : 300);
+  } else if (mode !== 'off') captions(ctx, env, b, local, big ? 400 : h ? 470 : 430, L.hi);
   bigWord(ctx, L, b.a, local, big ? 1250 : duo ? 590 : target >= 0 ? 650 : 620);
   fxPost(ctx, b, local);
 }

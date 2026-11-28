@@ -196,7 +196,7 @@ const RAW = String.raw`
 
   const onFb = () => /(^|\.)facebook\.com$/i.test(location.hostname);
   const onTh = () => /(^|\.)threads\.(com|net)$/i.test(location.hostname);
-  const onPin = () => /(^|\.)pinterest\.(com|co\.uk|ca|com\.au|de|fr)$/i.test(location.hostname);
+  const onPin = () => /(^|\.)pinterest\.(com|co\.uk|ca|com\.au|de|fr|es|it|jp|com\.mx|pt|at|ch|ie|nz|se|dk|cl|co\.kr|ph)$/i.test(location.hostname);
   const onYt = () => /(^|\.)youtube\.com$/i.test(location.hostname) && !/^studio\./i.test(location.hostname);
 
   /** youtube.com: a Short's channel is the /@handle link in the channel bar nearest the element (none when unclear). */

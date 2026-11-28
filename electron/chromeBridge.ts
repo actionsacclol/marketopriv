@@ -107,7 +107,11 @@ const hostName = (): string => `${CHROME_HOST_NAME}${deps?.dev ? '.dev' : ''}`;
 
 function pipePath(userData: string, dev: boolean, suffix = ''): string {
   if (process.platform === 'win32') {
-    const user = (os.userInfo().username || 'user').replace(/[^A-Za-z0-9_.-]/g, '_');
+    const raw = os.userInfo().username || 'user';
+    let user = raw.replace(/[^A-Za-z0-9_.-]/g, '_');
+    // Pipe names are machine-wide: two users whose names only differ in letters that were replaced ("李明", "王伟")
+    // would share one. Their home folders differ, so a short hash of it tells them apart (plain names keep theirs).
+    if (user !== raw) user += `-${crypto.createHash('sha256').update(os.homedir().toLowerCase()).digest('hex').slice(0, 8)}`;
     return `\\\\.\\pipe\\krypt-marketo-chrome-${user}${dev ? '-dev' : ''}${suffix}`;
   }
   return path.join(userData, 'chrome.sock');
@@ -223,6 +227,16 @@ export function openFor(a: IgAccount): boolean {
     deps?.log('warn', `Chrome: could not open the Chrome profile ${p.dir}: ${(e as Error).message}`);
     return false;
   }
+}
+
+/**
+ * The account's picked Chrome profile is on its way without being opened again: the hub opened it under two minutes
+ * ago, or the hub itself only just started (Chrome's helper connects a little after). Worth waiting for.
+ */
+export function comingUp(a: IgAccount): boolean {
+  const p = a.chromeDir ? source().list().find((x) => x.dir === a.chromeDir) : undefined;
+  if (!p || !p.hasExtension) return false;
+  return process.uptime() < 20 || Date.now() - chromeProfiles.lastLaunch(p.dir) < 120_000;
 }
 
 type Live = ChromeConn & { onLine(m: Record<string, unknown>): void; onClose(): void };

@@ -84,6 +84,8 @@ export interface Reel {
   hookStyle?: string;
   /** The reference video whose editing style it follows (RefVideo id). */
   like?: string;
+  /** Its cover for the platforms (Create > Thumbnails, render_cover): a frame plus a few words; path once saved. */
+  cover?: ReelCover;
   /** The channel style it was made in (shared/styles.ts; missing = main). */
   style?: string;
   /** A part of a comment vote story. */
@@ -96,6 +98,25 @@ export interface Reel {
   feedback?: ReelFeedback;
   createdAt: string;
   updatedAt: string;
+}
+
+export type CoverLook = 'bold' | 'box' | 'bar' | 'frame';
+export type CoverPlace = 'top' | 'middle' | 'bottom';
+/** A reel's cover (shared/covers.ts): its frame at t (or a picture, bg) with the words drawn over it. */
+export interface ReelCover {
+  /** 2-5 words; one in *stars* gets the accent colour. Empty with look "frame". */
+  text: string;
+  /** The second of the reel the frame is taken from. */
+  t: number;
+  look: CoverLook;
+  place: CoverPlace;
+  /** The accent colour (#RRGGBB). */
+  color: string;
+  /** A picture to use instead of the reel's frame (absolute path). */
+  bg?: string;
+  /** The saved 1080x1920 PNG. Cleared when the reel's content changes (the settings stay, save it again). */
+  path?: string;
+  at?: string;
 }
 
 /** The user's own verdict on a reel (Training page): their taste, next to what the numbers say. */
@@ -421,7 +442,7 @@ export interface IgAccount {
   clipping?: ClipSettings;
   /** How rough its meme-style videos may be (reddit, greentext, meme, dumb): clean, edgy or raw (Styles page). Missing = clean. */
   tone?: 'clean' | 'edgy' | 'raw';
-  /** The share of reels each of its styles gets, in percent (Styles page). Missing = the main style half, the others the rest. */
+  /** The share of reels each of its styles gets, in percent (Styles page). Missing = the default mix, from the style ranking (rankWeight). */
   styleMix?: Record<string, number>;
   status: AccountStatus;
   /** Local date (YYYY-MM-DD) the account was made. */
@@ -606,6 +627,8 @@ export interface Settings {
   firstRunAt?: string;
   /** What this profile promotes (Setup and the wizard). Missing on older data: worked out from the brand and the accounts' styles. */
   promoting?: PromoteMode;
+  /** Set on a profile made from Multi run / the profile menu: its first open lands on the setup wizard even when it came prefilled (with a Skip button then). Cleared once the wizard is finished, skipped or closed. */
+  firstOpen?: boolean;
   /** Each mode's own copy, kept when switching away so switching back restores it: the brand form, and every account's styles. */
   brandModes?: Partial<Record<PromoteMode, PromoteModeSave>>;
   /** The long-form channel's plan (long-form mode). Not set = the defaults (shared/longform.ts). */
@@ -616,6 +639,8 @@ export interface Settings {
   eleven?: ElevenSettings;
   /** The user's "say it like this" list for the narrator (Voices page). */
   sayAs?: SayAs[];
+  /** Custom covers on posts (Create > Thumbnails): the AI makes one per reel and sets it on Instagram, TikTok, Facebook and YouTube Shorts. Missing = on. */
+  covers?: boolean;
   /** Ask the user before an AI posts, comments, messages, unfollows or reposts (Accounts page). Off by default: those go through at once, still inside the daily limits. Deletes, blocks, reports and account settings always ask. */
   askApproval?: boolean;
   /** The most comments, replies and messages an account sends into one thread (a post's comments, an X or Threads conversation, a DM chat). The user's number (Accounts page); missing = 2, the recommended one. Keeps the AI out of long back-and-forths, which on X turn into AI accounts replying to each other. */
@@ -1146,7 +1171,7 @@ export interface UiFocus {
   reelId?: string;
 }
 
-export type PageId = 'dashboard' | 'styles' | 'warming' | 'accounts' | 'next-run' | 'long' | 'studio' | 'examples' | 'library' | 'results' | 'research' | 'train-rank' | 'train-hooks' | 'train-topics' | 'train-notes' | 'voices' | 'krypt' | 'chat' | 'agents' | 'autopilot' | 'usage' | 'kip' | 'multi-run' | 'resources' | 'campaigns' | 'setup';
+export type PageId = 'dashboard' | 'styles' | 'warming' | 'accounts' | 'next-run' | 'long' | 'thumbnails' | 'studio' | 'examples' | 'library' | 'results' | 'research' | 'train-rank' | 'train-hooks' | 'train-topics' | 'train-notes' | 'voices' | 'krypt' | 'chat' | 'agents' | 'autopilot' | 'usage' | 'kip' | 'multi-run' | 'resources' | 'campaigns' | 'setup';
 
 // ── Instagram browser ───────────────────────────────────────────────────────
 /** One account's Instagram session, in the hub's browser or in the user's Chrome. */
@@ -1164,7 +1189,8 @@ export interface YtChannelOption {
 
 /** What a Chrome profile is signed in to, per platform (the setup wizard reads it when a profile is picked). */
 export interface ProfileScan {
-  sites: Partial<Record<Site, { signedIn: boolean; handle?: string; channels?: YtChannelOption[]; error?: string }>>;
+  /** pages: Facebook only, the names of the Pages the signed-in user manages (read best effort from Facebook's own list). */
+  sites: Partial<Record<Site, { signedIn: boolean; handle?: string; channels?: YtChannelOption[]; pages?: string[]; error?: string }>>;
 }
 
 export interface BrowserStatus {
@@ -1357,6 +1383,8 @@ export interface MarketoApi {
     restart(): Promise<void>;
     /** Where the shipped example videos are, and which ones exist. */
     examples(): Promise<{ dir: string; have: string[]; slides?: Record<string, number> }>;
+    /** The folder of the recorded sound effects (resources/sfx). */
+    sfxDir(): Promise<string>;
     openExternal(url: string): Promise<void>;
     showItemInFolder(p: string): Promise<void>;
     /** Open the Backgrounds or Memes folder (made when missing) for the meme styles. */
@@ -1592,6 +1620,10 @@ export interface MarketoApi {
     saveImage(reelId: string, png: string, t: number, shape?: StillShape): Promise<ActionResult<string>>;
     /** Write a reel's slides (base64 JPEGs, in order) into its slides folder and keep their paths on the reel; returns the paths. */
     saveSlides(reelId: string, images: string[], shape: StillShape): Promise<ActionResult<string[]>>;
+    /** A reel's cover: the picture (base64 PNG) and the settings it was drawn with. */
+    saveCover(reelId: string, png: string, cover: ReelCover): Promise<ActionResult<string>>;
+    /** A long video's thumbnail words (then render it again). */
+    setLongThumbText(id: string, text: string): Promise<ActionResult<void>>;
     /** A long video's thumbnail (1280x720 PNG) into its folder; saved on the video. */
     saveLongThumb(id: string, png: string): Promise<ActionResult<string>>;
     /** A file of a long video (a Kip clip) into its folder; with section, saved on that section as its Kip clip. */

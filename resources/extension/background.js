@@ -48,7 +48,8 @@ const SITES = {
   },
   pinterest: {
     home: 'https://www.pinterest.com/',
-    host: /(^|\.)pinterest\.(com|co\.uk|ca|com\.au|de|fr)$/i,
+    // Pinterest's country domains too (it sends some countries there); each one is also in the manifest (1.1.2).
+    host: /(^|\.)pinterest\.(com|co\.uk|ca|com\.au|de|fr|es|it|jp|com\.mx|pt|at|ch|ie|nz|se|dk|cl|co\.kr|ph)$/i,
     cookieUrl: 'https://www.pinterest.com/',
   },
   // Content Rewards: where post links are submitted to the campaigns the user joined (0.10).
@@ -174,21 +175,24 @@ async function ttState() {
 async function netsState() {
   const get = (url, name) => chrome.cookies.get({ url, name }).catch(() => null);
   const id = (c) => (c && /^\d+$/.test(c.value) ? c.value : undefined);
-  const [xs, cUser, thSid, thSidOld, thUid, pinAuth] = await Promise.all([
+  const [xs, cUser, thSid, thSidOld, thUid, pinAuth, pinAll] = await Promise.all([
     get('https://www.facebook.com/', 'xs'),
     get('https://www.facebook.com/', 'c_user'),
     get('https://www.threads.com/', 'sessionid'),
     get('https://www.threads.net/', 'sessionid'),
     get('https://www.threads.com/', 'ds_user_id'),
     get('https://www.pinterest.com/', '_auth'),
+    // Signed in on a country domain only (pinterest.es, pinterest.jp…).
+    chrome.cookies.getAll({ name: '_auth' }).catch(() => []),
   ]);
   const fb = !!(xs && xs.value);
   const th = !!((thSid && thSid.value) || (thSidOld && thSidOld.value));
+  const pin = !!(pinAuth && pinAuth.value === '1') || (pinAll || []).some((c) => c && c.value === '1' && SITES.pinterest.host.test(String(c.domain || '').replace(/^\./, '')));
   return {
     nets: {
       facebook: { loggedIn: fb, userId: fb ? id(cUser) : undefined },
       threads: { loggedIn: th, userId: th ? id(thUid) : undefined },
-      pinterest: { loggedIn: !!(pinAuth && pinAuth.value === '1') },
+      pinterest: { loggedIn: pin },
     },
   };
 }
@@ -210,29 +214,86 @@ async function profileKey() {
 }
 
 // ── The tabs ───────────────────────────────────────────────────────────────
-async function loadTabs() {
-  if (tabsLoaded) return;
-  tabsLoaded = true;
+// Kept in session storage (gone when Chrome closes, so a tab id of an old Chrome session is never taken for ours).
+// Chrome also empties it when this extension reloads (after a Marketo update), so since 1.1.2 a copy with each tab's
+// window is kept in local storage too: after a reload the tabs are found again, each only if it is still in the same
+// window and on its own site. A Chrome start clears that copy.
+const LOCAL_TABS = 'tabsKept';
+/** The window each of our tabs was in when last seen (for finding them again after a reload). */
+const tabWins = {};
+
+let loading = null;
+function loadTabs() {
+  if (tabsLoaded) return Promise.resolve();
+  if (!loading) loading = loadTabsNow().finally(() => (loading = null));
+  return loading;
+}
+
+async function loadTabsNow() {
+  let found = false;
   try {
     const s = await chrome.storage.session.get(['tabs', 'tabId']);
-    if (s.tabs && typeof s.tabs === 'object') for (const k of Object.keys(tabIds)) tabIds[k] = typeof s.tabs[k] === 'number' ? s.tabs[k] : null;
-    else if (typeof s.tabId === 'number') tabIds.instagram = s.tabId; // from version 0.1
+    if (s.tabs && typeof s.tabs === 'object') {
+      for (const k of Object.keys(tabIds)) tabIds[k] = typeof s.tabs[k] === 'number' ? s.tabs[k] : null;
+      found = true;
+    } else if (typeof s.tabId === 'number') {
+      tabIds.instagram = s.tabId; // from version 0.1
+      found = true;
+    }
   } catch {
     /* no session storage: start without tabs */
   }
+  if (found) {
+    for (const k of Object.keys(tabIds)) {
+      if (tabIds[k] == null) continue;
+      const t = await chrome.tabs.get(tabIds[k]).catch(() => null);
+      if (t) tabWins[k] = t.windowId;
+    }
+  } else {
+    try {
+      const kept = (await chrome.storage.local.get(LOCAL_TABS))[LOCAL_TABS];
+      if (kept && typeof kept === 'object') {
+        for (const k of Object.keys(tabIds)) {
+          const e = kept[k];
+          if (!e || typeof e.id !== 'number' || typeof e.win !== 'number') continue;
+          const t = await chrome.tabs.get(e.id).catch(() => null);
+          if (t && t.windowId === e.win && onSite(k, urlOf(t))) {
+            tabIds[k] = t.id;
+            tabWins[k] = t.windowId;
+          }
+        }
+        await chrome.storage.session.set({ tabs: { ...tabIds } }).catch(() => {});
+      }
+    } catch {
+      /* nothing kept */
+    }
+  }
+  tabsLoaded = true;
 }
 
-async function setTab(site, id) {
+async function setTab(site, id, win) {
+  await loadTabs();
   const old = tabIds[site];
   tabIds[site] = id;
-  tabsLoaded = true;
+  if (id == null) delete tabWins[site];
+  else if (typeof win === 'number') tabWins[site] = win;
   if (id == null && old != null) attached.delete(old);
   try {
     await chrome.storage.session.set({ tabs: { ...tabIds } });
   } catch {
     /* best effort */
   }
+  try {
+    const kept = {};
+    for (const k of Object.keys(tabIds)) if (tabIds[k] != null && typeof tabWins[k] === 'number') kept[k] = { id: tabIds[k], win: tabWins[k] };
+    await chrome.storage.local.set({ [LOCAL_TABS]: kept });
+  } catch {
+    /* best effort */
+  }
 }
+
+// A new Chrome session: its tab ids start over, so the kept copy means nothing any more.
+chrome.runtime.onStartup.addListener(() => void chrome.storage.local.remove(LOCAL_TABS).catch(() => {}));
 
 async function getTab(site) {
   await loadTabs();
@@ -271,6 +332,37 @@ async function info(site) {
     /* the window is closing */
   }
   return { open: true, url: urlOf(t), minimized, attached: attached.has(t.id) };
+}
+
+/**
+ * Before a command acts on one of our tabs: it is the one showing. A minimized window does not draw (clicks are
+ * dropped, videos pause, screenshots never come), so it is restored. Behind another of our tabs, ours comes to the
+ * front. Behind one of the user's own tabs (they opened one in our window, or dragged ours into theirs), ours moves
+ * into a window of its own instead, so their tab is left as it is.
+ */
+async function showing(t) {
+  let w = null;
+  try {
+    w = await chrome.windows.get(t.windowId);
+  } catch {
+    return t;
+  }
+  if (!t.active) {
+    try {
+      const [shown] = await chrome.tabs.query({ windowId: t.windowId, active: true });
+      if (!shown || siteOfTab(shown.id)) await chrome.tabs.update(t.id, { active: true });
+      else {
+        const win = await chrome.windows.create({ tabId: t.id, type: 'normal', focused: false, width: 1320, height: 920 });
+        const site = siteOfTab(t.id);
+        if (site && win) await setTab(site, t.id, win.id);
+        return (await chrome.tabs.get(t.id).catch(() => null)) || t;
+      }
+    } catch {
+      /* the window is closing */
+    }
+  }
+  if (w && w.state === 'minimized') await chrome.windows.update(t.windowId, { state: 'normal' }).catch(() => {});
+  return t;
 }
 
 // ── Debugger ───────────────────────────────────────────────────────────────
@@ -348,6 +440,72 @@ async function applyMute() {
   for (const id of Object.values(tabIds)) if (id != null) await chrome.tabs.update(id, { muted }).catch(() => {});
 }
 
+/** The open command running for each site (one at a time per site). */
+const openLocks = {};
+/** When this worker last pointed each site's tab at a page (a redirect away right after is the site's, not the user's). */
+const navAt = {};
+
+async function openNow({ url, focus, site: name, width, height, oneWindow }) {
+  const site = siteOf(name);
+  const home = SITES[site].home;
+  if (url && !onSite(site, url)) throw new Error(`Only ${DOMAIN[site]} pages open here.`);
+  let t = await getTab(site);
+  // Our tab is somewhere else now and no AI session holds it: the user took it over for their own browsing (1.1.2).
+  // It is theirs from here on; ours opens fresh, and their page is never navigated away.
+  if (t && !onSite(site, urlOf(t)) && !attached.has(t.id) && Date.now() - (navAt[site] || 0) > 120000) {
+    await setTab(site, null);
+    t = null;
+  }
+  if (!t && oneWindow) {
+    // A tab in the window one of our other tabs is in (the user's own windows are never used).
+    for (const other of Object.keys(tabIds)) {
+      if (other === site) continue;
+      const o = await getTab(other);
+      if (!o) continue;
+      try {
+        t = await chrome.tabs.create({ windowId: o.windowId, url: url || home, active: true });
+      } catch {
+        t = null;
+      }
+      if (t) break;
+    }
+    if (t) {
+      navAt[site] = Date.now();
+      await setTab(site, t.id, t.windowId);
+      if (muted) await chrome.tabs.update(t.id, { muted: true }).catch(() => {});
+      // That window may be minimized, and a minimized window does not draw: nothing in it loads or plays.
+      const w = await chrome.windows.get(t.windowId).catch(() => null);
+      if (w && w.state === 'minimized') await chrome.windows.update(t.windowId, { state: 'normal' }).catch(() => {});
+      if (focus) await chrome.windows.update(t.windowId, { focused: true }).catch(() => {});
+      await waitLoaded(t.id, 20000);
+      return info(site);
+    }
+  }
+  if (!t) {
+    const w = Math.round(Number(width)) >= 800 && Math.round(Number(width)) <= 3840 ? Math.round(Number(width)) : 1320;
+    const h = Math.round(Number(height)) >= 600 && Math.round(Number(height)) <= 2160 ? Math.round(Number(height)) : 920;
+    const win = await chrome.windows.create({ url: url || home, type: 'normal', focused: !!focus, width: w, height: h });
+    t = win.tabs && win.tabs[0];
+    if (!t) throw new Error('Chrome did not open a window.');
+    navAt[site] = Date.now();
+    await setTab(site, t.id, win.id);
+    if (muted) await chrome.tabs.update(t.id, { muted: true }).catch(() => {});
+    await waitLoaded(t.id, 20000);
+  } else {
+    if (url || !onSite(site, urlOf(t))) {
+      navAt[site] = Date.now();
+      await chrome.tabs.update(t.id, { url: url || home });
+      await waitLoaded(t.id, 20000);
+    }
+    if (!t.active) await chrome.tabs.update(t.id, { active: true });
+    const w = await chrome.windows.get(t.windowId);
+    // A minimized window does not draw, so nothing in it loads or plays.
+    if (w.state === 'minimized') await chrome.windows.update(t.windowId, { state: 'normal' });
+    if (focus) await chrome.windows.update(t.windowId, { focused: true });
+  }
+  return info(site);
+}
+
 const COMMANDS = {
   state: () => state(),
 
@@ -370,56 +528,13 @@ const COMMANDS = {
    * Open the site's tab (its own window the first time), or point it at another page of that site. Since 1.1 the app
    * may say how big a new window is, and (oneWindow) to open the tab in the window of one of our other tabs.
    */
-  async open({ url, focus, site: name, width, height, oneWindow }) {
-    const site = siteOf(name);
-    const home = SITES[site].home;
-    if (url && !onSite(site, url)) throw new Error(`Only ${DOMAIN[site]} pages open here.`);
-    let t = await getTab(site);
-    if (!t && oneWindow) {
-      // A tab in the window one of our other tabs is in (the user's own windows are never used).
-      for (const other of Object.keys(tabIds)) {
-        if (other === site) continue;
-        const o = await getTab(other);
-        if (!o) continue;
-        try {
-          t = await chrome.tabs.create({ windowId: o.windowId, url: url || home, active: true });
-        } catch {
-          t = null;
-        }
-        if (t) break;
-      }
-      if (t) {
-        await setTab(site, t.id);
-        if (muted) await chrome.tabs.update(t.id, { muted: true }).catch(() => {});
-        // That window may be minimized, and a minimized window does not draw: nothing in it loads or plays.
-        const w = await chrome.windows.get(t.windowId).catch(() => null);
-        if (w && w.state === 'minimized') await chrome.windows.update(t.windowId, { state: 'normal' }).catch(() => {});
-        if (focus) await chrome.windows.update(t.windowId, { focused: true }).catch(() => {});
-        await waitLoaded(t.id, 20000);
-        return info(site);
-      }
-    }
-    if (!t) {
-      const w = Math.round(Number(width)) >= 800 && Math.round(Number(width)) <= 3840 ? Math.round(Number(width)) : 1320;
-      const h = Math.round(Number(height)) >= 600 && Math.round(Number(height)) <= 2160 ? Math.round(Number(height)) : 920;
-      const win = await chrome.windows.create({ url: url || home, type: 'normal', focused: !!focus, width: w, height: h });
-      t = win.tabs && win.tabs[0];
-      if (!t) throw new Error('Chrome did not open a window.');
-      await setTab(site, t.id);
-      if (muted) await chrome.tabs.update(t.id, { muted: true }).catch(() => {});
-      await waitLoaded(t.id, 20000);
-    } else {
-      if (url || !onSite(site, urlOf(t))) {
-        await chrome.tabs.update(t.id, { url: url || home });
-        await waitLoaded(t.id, 20000);
-      }
-      if (!t.active) await chrome.tabs.update(t.id, { active: true });
-      const w = await chrome.windows.get(t.windowId);
-      // A minimized window does not draw, so nothing in it loads or plays.
-      if (w.state === 'minimized') await chrome.windows.update(t.windowId, { state: 'normal' });
-      if (focus) await chrome.windows.update(t.windowId, { focused: true });
-    }
-    return info(site);
+  open(args) {
+    // One open per site at a time (1.1.2): two at once both saw no tab and each made a window, and one was then lost.
+    const site = siteOf(args && args.site);
+    const prev = openLocks[site] || Promise.resolve();
+    const run = prev.then(() => openNow(args), () => openNow(args));
+    openLocks[site] = run.catch(() => {});
+    return run;
   },
 
   async show({ site }) {
@@ -444,16 +559,9 @@ const COMMANDS = {
     const t = await getTab(site);
     if (!t) throw new Error('NO_TAB');
     if (!onSite(site, urlOf(t))) throw new Error(`NOT_${site.toUpperCase()}`);
-    // Our tabs sharing one window: the one being driven must be the one showing (a background tab is hidden, and
-    // a hidden page pauses its videos and drops clicks). Only ever switches between our own tabs.
-    if (!t.active) {
-      try {
-        const [shown] = await chrome.tabs.query({ windowId: t.windowId, active: true });
-        if (shown && siteOfTab(shown.id)) await chrome.tabs.update(t.id, { active: true });
-      } catch {
-        /* the window is closing */
-      }
-    }
+    // The tab being driven must be the one showing, in a window that is not minimized (a hidden page pauses its
+    // videos and drops clicks). The user's own tabs are never switched away from (see showing).
+    await showing(t);
     await attach(t.id);
     touchIdle(t.id);
     try {
@@ -483,6 +591,7 @@ const COMMANDS = {
       return { attached: false };
     }
     if (!onSite(site, urlOf(t))) throw new Error(`NOT_${site.toUpperCase()}`);
+    await showing(t);
     await attach(t.id);
     touchIdle(t.id);
     if (op === 'arm') {
@@ -693,6 +802,12 @@ chrome.tabs.onRemoved.addListener((id) => {
   attached.delete(id);
   void setTab(site, null);
   post({ ev: 'tab', site, open: false, url: '' });
+});
+
+// One of our tabs moved to another window (dragged, or moved out by showing): kept with its new window.
+chrome.tabs.onAttached.addListener((id, info) => {
+  const site = siteOfTab(id);
+  if (site && info && typeof info.newWindowId === 'number') void setTab(site, id, info.newWindowId);
 });
 
 chrome.tabs.onUpdated.addListener((id, change, tab) => {

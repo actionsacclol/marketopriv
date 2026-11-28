@@ -1,4 +1,5 @@
 import type { SfxEvent } from '@shared/sfx';
+import { isSampleKind } from '@shared/sfxLib';
 
 // Synthesized sound effects (no samples, nothing licensed): short UI ticks,
 // pops, mouse clicks, noise whooshes, accelerating-tick risers, low hits and
@@ -259,6 +260,8 @@ export function scheduleSfx(ctx: BaseAudioContext, out: AudioNode, events: SfxEv
   };
 
   for (const e of events) {
+
+    if (isSampleKind(e.kind) || e.kind === 'roomtone') continue; // recordings and room tone: samples.ts
     const g = (e.gain ?? 1) * volume;
     const t = Math.max(0, e.t);
     switch (e.kind) {

@@ -100,8 +100,8 @@ function MultiSettings() {
     <div className="space-y-4">
       <Card padded={false} className="divide-y divide-white/5">
         <Row
-          title="Run them all at once"
-          text="Every profile runs in its own Marketo window at the same time, each with its own AI connection and proxy, and the autopilot runs them all together (that uses your AI plan that many times faster). Off: one window, one profile at a time, one after the other. Takes effect after a restart."
+          title="Each profile in its own window"
+          text="On by default: opening a profile pops up its own Marketo window next to this one, each with its own AI connection and proxy. With Claude Code the autopilot runs them all at the same time (that uses your AI plan that many times faster); other AI apps go through them one after the other. Off: one window, and opening a profile replaces the one you are in. Takes effect after a restart."
         >
           {multi && multi.saved !== multi.running && (
             <GhostButton small onClick={() => void window.marketo.app.restart()}>

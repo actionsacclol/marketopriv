@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { AutopilotSettings, ProfileInfo } from '../shared/types';
 import * as instance from './instance';
+import { errCode, isHeld, readText, stripBom, writeAtomic } from './safeFile';
 
 // Profiles: complete, separate sets of everything the hub keeps. Each has its own accounts and their socials, brand,
 // reels, post log, sessions and limits, Training, learnings, playbook notes, reference videos, saved voices and
@@ -40,13 +41,23 @@ let switcher: ((id: string) => Promise<void>) | null = null;
 /** In multi-instance mode: the one profile this process works on (it never switches). */
 let own: string | null = null;
 let readAt = 0;
+/** profiles.json was held by another program at this start: the list in memory is a stand-in until it reads. */
+let unread = false;
 
 const file = (): string => path.join(root, 'profiles.json');
 
 function parse(raw: Partial<State>): State {
   const list = (raw.list ?? []).filter((p): p is Entry => !!p && typeof p.id === 'string' && typeof p.name === 'string' && /^[a-z0-9_]+$/.test(p.id));
   if (!list.some((p) => p.id === MAIN)) list.unshift({ id: MAIN, name: 'Main', createdAt: new Date().toISOString(), autopilot: true });
-  return { active: list.some((p) => p.id === raw.active) ? raw.active! : MAIN, list, autopilot: raw.autopilot, ...(raw.multiInstance ? { multiInstance: true } : {}) };
+  return { active: list.some((p) => p.id === raw.active) ? raw.active! : MAIN, list, autopilot: raw.autopilot, ...(raw.multiInstance === false ? { multiInstance: false } : {}) };
+}
+
+/** The list as saved in that file (through a BOM and a short hold by another program). Throws when it cannot be read. */
+function readState(f: string, wait = true): State {
+  // Only a start waits out a hold: the frequent re-reads (fresh) keep the list they have and look again next time.
+  const raw = JSON.parse(wait ? readText(f) : stripBom(fs.readFileSync(f, 'utf8'))) as unknown;
+  if (!raw || typeof raw !== 'object' || !Array.isArray((raw as Partial<State>).list)) throw new Error('not a profile list');
+  return parse(raw as Partial<State>);
 }
 
 /** Take up changes another instance wrote (several processes share the list in multi-instance mode). */
@@ -55,18 +66,28 @@ function fresh(): void {
   try {
     const m = fs.statSync(file()).mtimeMs;
     if (m === readAt) return;
-    state = parse(JSON.parse(fs.readFileSync(file(), 'utf8')) as Partial<State>);
+    state = readState(file(), false);
     readAt = m;
+    unread = false;
   } catch {
     /* mid-write: the last copy read stays */
   }
 }
 
+/** profiles.json did not read at this start: the .bak is not replaced with it (set back once a save goes in). */
+let holdBak = false;
+
 function save(): void {
   fs.mkdirSync(root, { recursive: true });
-  const tmp = `${file()}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
-  fs.renameSync(tmp, file());
+  // The list as it was, for a start that finds profiles.json unreadable.
+  if (!holdBak)
+    try {
+      if (fs.existsSync(file())) fs.copyFileSync(file(), `${file()}.bak`);
+    } catch {
+      /* best effort */
+    }
+  writeAtomic(file(), `${JSON.stringify(state, null, 2)}\n`);
+  holdBak = false;
   try {
     readAt = fs.statSync(file()).mtimeMs;
   } catch {
@@ -77,6 +98,7 @@ function save(): void {
 /** Every change re-reads the file first, so one instance never writes over another's. */
 function change(fn: () => void): void {
   fresh();
+  if (unread) throw new Error('The profile list is held by another program right now. Try again in a moment.');
   fn();
   save();
 }
@@ -85,31 +107,69 @@ function change(fn: () => void): void {
 export function init(userData: string, ownProfile: string | null = null): void {
   root = userData;
   own = ownProfile;
+  unread = false;
+  holdBak = false;
+  let problem: unknown;
   try {
-    state = parse(JSON.parse(fs.readFileSync(file(), 'utf8')) as Partial<State>);
+    state = readState(file());
     readAt = fs.statSync(file()).mtimeMs;
     if (own && !state.list.some((p) => p.id === own)) own = MAIN;
     return;
-  } catch {
-    /* first start with profiles */
+  } catch (e) {
+    problem = e;
   }
+  if (errCode(problem) !== 'ENOENT') {
+    let bak: State | null = null;
+    try {
+      bak = readState(`${file()}.bak`);
+    } catch {
+      /* no usable copy */
+    }
+    if (isHeld(problem)) {
+      // Held by another program even after waiting (an instance renaming it as it starts, an antivirus): work from the
+      // copy for now and write nothing; the real list is taken up as soon as it reads (fresh), and changes wait for it.
+      state = bak ?? rebuilt();
+      readAt = 0;
+      unread = true;
+      return;
+    }
+    // Not a profile list (cut off by a power cut, a bad hand edit): keep it aside, then go on from the .bak.
+    try {
+      fs.copyFileSync(file(), `${file()}.corrupt-${Date.now()}`);
+    } catch {
+      /* nothing to keep */
+    }
+    holdBak = true;
+    if (bak) {
+      state = bak;
+      save();
+      return;
+    }
+  }
+  // First start with profiles, or a list that is lost.
+  state = rebuilt();
+  save();
+}
+
+/** A list from what is on disk: Main (with the schedule a hub from before profiles kept) and every profile folder found. */
+function rebuilt(): State {
   let autopilot: AutopilotSettings | undefined;
   try {
-    autopilot = (JSON.parse(fs.readFileSync(path.join(root, 'marketo-db.json'), 'utf8')) as { settings?: { autopilot?: AutopilotSettings } }).settings?.autopilot;
+    autopilot = (JSON.parse(readText(path.join(root, 'marketo-db.json'))) as { settings?: { autopilot?: AutopilotSettings } }).settings?.autopilot;
   } catch {
     /* a fresh install */
   }
-  state = { active: MAIN, list: [{ id: MAIN, name: 'Main', createdAt: new Date().toISOString(), autopilot: true }], autopilot };
+  const out: State = { active: MAIN, list: [{ id: MAIN, name: 'Main', createdAt: new Date().toISOString(), autopilot: true }], autopilot };
   // The list was lost or unreadable but profile folders are there: list them again rather than strand their data.
   try {
     for (const id of fs.readdirSync(path.join(root, 'profiles'))) {
       if (!/^p_[a-z0-9]+$/.test(id) || !fs.existsSync(path.join(root, 'profiles', id, 'marketo-db.json'))) continue;
-      state.list.push({ id, name: `Recovered ${state.list.length}`, createdAt: new Date().toISOString(), autopilot: false });
+      out.list.push({ id, name: `Recovered ${out.list.length}`, createdAt: new Date().toISOString(), autopilot: false });
     }
   } catch {
     /* no other profiles */
   }
-  save();
+  return out;
 }
 
 const entry = (key: string): Entry => {
@@ -144,15 +204,15 @@ export function list(): ProfileInfo[] {
   });
 }
 
-/** Multi-instance mode as saved (it takes effect at the next start). */
+/** Multi-instance mode as saved (it takes effect at the next start). On unless the user switched it off. */
 export function multiSaved(): boolean {
   fresh();
-  return !!state.multiInstance;
+  return state.multiInstance !== false;
 }
 export function setMulti(on: boolean): void {
   change(() => {
-    if (on) state.multiInstance = true;
-    else delete state.multiInstance;
+    if (on) delete state.multiInstance;
+    else state.multiInstance = false;
   });
 }
 /** The one profile this process works on, in multi-instance mode (null otherwise). */

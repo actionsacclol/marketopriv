@@ -226,3 +226,102 @@ export function defaultTimes(body: number, cta: number): number[] {
   if (cta > 0) ts.push(body + Math.min(cta - 0.05, 1));
   return ts.map((t) => Math.round(t * 100) / 100);
 }
+
+// ── Frozen picture check ─────────────────────────────────────────────────────
+// The main picture should never sit unchanged for more than about 3 s: captions changing, a slow zoom or a tiny
+// drift do not count as change. Frames every 0.25 s are shrunk to 54x96 grey with the caption band left out, and
+// each is compared with the one half a second earlier; a stretch where nothing moves past the threshold for 3 s
+// or more is reported with the lines it covers, so the AI can give that part an action, a prop or a new shot.
+const STILL_STEP = 0.25;
+const STILL_LIMIT = 3;
+const stillCache = new Map<string, Array<{ from: number; to: number }>>();
+
+export async function stillStretches(reel: Reel, threshold = 1.5): Promise<Array<{ from: number; to: number }>> {
+  const key = `${reel.preset}|${JSON.stringify(reel.fields)}`;
+  const hit = stillCache.get(key);
+  if (hit) return hit;
+  // Slideshows are still pictures on purpose; real footage moves by itself. This check is for drawn reels.
+  if (reel.preset === 'slides') return [];
+  const timing = timingFor(reel.preset, reel.fields);
+  const src = await frameSource(reel, false);
+  if (src) {
+    src.dispose();
+    return [];
+  }
+  await loadFonts();
+  await preloadImages(reel.fields);
+  const logo = await loadLogo(reel.fields.logo);
+  // A campaign banner never moves, so it is left out (and its load warning is not shown twice).
+  const banner = null;
+  const full = document.createElement('canvas');
+  full.width = W;
+  full.height = H;
+  const ctx = full.getContext('2d', { alpha: false })!;
+  const sw = 54;
+  const sh = 96;
+  const small = document.createElement('canvas');
+  small.width = sw;
+  small.height = sh;
+  const sctx = small.getContext('2d', { willReadFrequently: true })!;
+  // Rows left out: the caption band (most styles put words between 58% and 90% of the height).
+  const skip = (y: number): boolean => y >= sh * 0.58 && y < sh * 0.9;
+  const grey: Float32Array[] = [];
+  const times: number[] = [];
+  for (let t = 0; t < timing.body - 0.05; t += STILL_STEP) {
+    drawReel(ctx, { preset: reel.preset, fields: reel.fields, t, frame: Math.round(t * 30), logo, banner, video: null, videoSize: null });
+    sctx.imageSmoothingEnabled = true;
+    sctx.imageSmoothingQuality = 'high';
+    sctx.drawImage(full, 0, 0, sw, sh);
+    const d = sctx.getImageData(0, 0, sw, sh).data;
+    const g = new Float32Array(sw * sh);
+    for (let i = 0; i < sw * sh; i++) g[i] = d[i * 4] * 0.3 + d[i * 4 + 1] * 0.59 + d[i * 4 + 2] * 0.11;
+    grey.push(g);
+    times.push(t);
+  }
+  const lag = Math.round(0.5 / STILL_STEP);
+  const moving: boolean[] = times.map(() => true);
+  for (let i = lag; i < grey.length; i++) {
+    let sum = 0;
+    let n = 0;
+    for (let y = 0; y < sh; y++) {
+      if (skip(y)) continue;
+      for (let x = 0; x < sw; x++) {
+        sum += Math.abs(grey[i][y * sw + x] - grey[i - lag][y * sw + x]);
+        n++;
+      }
+    }
+    moving[i] = sum / n > threshold;
+  }
+  const out: Array<{ from: number; to: number }> = [];
+  let start = -1;
+  for (let i = 0; i <= moving.length; i++) {
+    const still = i < moving.length && !moving[i];
+    if (still && start < 0) start = i;
+    if (!still && start >= 0) {
+      // A still sample means the half second before it did not change either.
+      const from = Math.max(0, times[start] - 0.5);
+      const to = i < times.length ? times[i] : timing.body;
+      if (to - from >= STILL_LIMIT) out.push({ from: Math.round(from * 10) / 10, to: Math.round(to * 10) / 10 });
+      start = -1;
+    }
+  }
+  stillCache.set(key, out);
+  return out;
+}
+
+/** The frozen-picture stretches as a note for the AI ('' when there are none). */
+export async function stillNote(reel: Reel): Promise<string> {
+  const runs = await stillStretches(reel).catch(() => []);
+  if (!runs.length) return '';
+  const beats = isVoiced(reel.preset) ? storyBeats(reel.fields) : [];
+  const where = runs
+    .map((r) => {
+      const lines = beats
+        .map((b, i) => ({ b, i }))
+        .filter(({ b }) => b.start < r.to && b.start + b.dur > r.from)
+        .map(({ i }) => i + 1);
+      return `${r.from}-${r.to}s${lines.length ? ` (line${lines.length > 1 ? 's' : ''} ${lines.join(', ')})` : ''}`;
+    })
+    .join('; ');
+  return `\nStill picture: ${where} ${runs.length > 1 ? 'stay' : 'stays'} almost the same for 3 s or more (captions and slow zooms do not count). People scroll on a frozen picture: give that part an action, a prop coming in, a new shot or a reveal, or split the line.`;
+}
